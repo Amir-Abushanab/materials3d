@@ -865,6 +865,10 @@ export const BACKDROP_FRAG = /* glsl */ `
   uniform float uWallScale, uWallNormal, uWallGamma, uWallContrast, uWallPivot;
   uniform float uWallFloor, uWallHighlight, uWallAmbient, uWallAmbientLight;
   uniform float uWallShadow, uWallGrounding;
+  // The second, finer noise octave. Supplied by the renderer since the wall was written, but never
+  // DECLARED here — so the program failed to compile and the whole backdrop drew nothing. It went
+  // unnoticed behind the 'half' reserved-word error above it, which failed first.
+  uniform float uWallMicroFreq, uWallMicroNormal;
   uniform vec4  uGround[GROUND_SLOTS];        // (centre.xy, apothem, sides)
   uniform float uGroundPhase[GROUND_SLOTS];
   uniform int   uGroundCount;

@@ -29,6 +29,7 @@
     "render": "node scripts/render.mjs",
     "test": "pnpm -r test",
     "tsl:feasibility": "node scripts/tsl-feasibility.mjs",
+    "tsl:compare": "pnpm --filter @materials3d/core build && node scripts/tsl-compare.mjs",
     "tsl:parity": "pnpm --filter @materials3d/core build && node scripts/tsl-parity.mjs",
     "tsl:smoke": "pnpm --filter @materials3d/core build && node scripts/tsl-engine-smoke.mjs",
     "typecheck": "pnpm -r typecheck",

@@ -35,6 +35,19 @@ const height = Number(flag("height", 380));
 const probe = flag("probe", "");
 const crop = flag("crop", "");
 const outDir = flag("out", "/tmp");
+/**
+ * Pixels to print side by side, as `x,y;x,y`.
+ *
+ * Values are reported RAW — byte/255 — because neither engine applies a display transfer at
+ * output: the WebGL one writes `gl_FragColor` directly and the node one has its output colour
+ * management turned off to match. Decoding these as sRGB is the single most effective way to
+ * misread this tool, and it produced several confident wrong conclusions before it was noticed.
+ */
+const at = flag("at", "");
+/** Raw channel triple, as fractions of full scale. */
+const fmt = (v) => `(${v.map((n) => (n / 255).toFixed(3)).join(", ")})`;
+/** How many frames to render before capturing. Two by default, so a first-frame bake settles. */
+const frames = Number(flag("frames", 2));
 
 /** A short filesystem-safe name for a preset name or an inline JSON scene. */
 const gl_label = (s) => (s.trim().startsWith("{") ? "scene" : s.replace(/[^a-z0-9_-]/gi, ""));
@@ -75,7 +88,7 @@ page.on("console", (m) => {
 await page.goto(url);
 
 const result = await page.evaluate(
-  async ([base, sceneArg, w, h, probeName, cropSpec, label]) => {
+  async ([base, sceneArg, w, h, probeName, cropSpec, label, atSpec, frameCount]) => {
     const gl = await import(base + "bundle.js");
     const { NodeMaterialRenderer } = await import(base + "dist/renderer/NodeMaterialRenderer.js");
     const host = document.getElementById("host");
@@ -114,6 +127,8 @@ const result = await page.evaluate(
       "depthGuard",
       "plateA",
       "guardMargin",
+      "offset",
+      "alphaOut",
     ];
     globalThis["__glslProbe"] = Math.max(0, GLSL_PROBES.indexOf(probeName));
     const a = new gl.MaterialRenderer(host, cfg, {
@@ -131,7 +146,7 @@ const result = await page.evaluate(
     const b = new NodeMaterialRenderer(host, cfg, { respectReducedMotion: false });
     // Two frames. The first may bake the room and rebuild the item materials; the second is drawn
     // through the finished state, which is what a consumer actually sees.
-    await b.captureImage("image/png", 0.92, 0);
+    for (let i = 1; i < frameCount; i++) await b.captureImage("image/png", 0.92, 0);
     const tslCanvas = await grab(b);
     globalThis["__tslDebug"] = undefined;
     b.dispose();
@@ -176,6 +191,14 @@ const result = await page.evaluate(
     }
     diff.getContext("2d").putImageData(image, 0, 0);
 
+    const samples = {};
+    for (const p of (atSpec || "").split(";").filter(Boolean)) {
+      const [x, y] = p.split(",").map(Number);
+      const i = ((y - region[1]) * diff.width + (x - region[0])) * 4;
+      if (i < 0 || i >= A.length) continue;
+      samples[p] = { glsl: [A[i], A[i + 1], A[i + 2]], tsl: [B[i], B[i + 1], B[i + 2]] };
+    }
+
     return {
       stats:
         `  ${label} ${diff.width}x${diff.height}${probeName ? ` probe=${probeName}` : ""}\n` +
@@ -185,12 +208,24 @@ const result = await page.evaluate(
       glsl: glCanvas.toDataURL(),
       tsl: tslCanvas.toDataURL(),
       diff: diff.toDataURL(),
+      samples,
     };
   },
-  [url, scene, width, height, probe, crop, gl_label(scene)],
+  [url, scene, width, height, probe, crop, gl_label(scene), at, frames],
 );
 
 console.log(result.stats);
+if (at) {
+  console.log("    pixel          glsl                     tsl");
+  for (const p of at.split(";")) {
+    const [x, y] = p.split(",").map(Number);
+    const g = result.samples[p];
+    if (!g) continue;
+    console.log(
+      `    (${String(x).padStart(3)},${String(y).padStart(3)})  ${fmt(g.glsl).padEnd(24)} ${fmt(g.tsl)}`,
+    );
+  }
+}
 // A name from the scene, so an inline JSON scene does not become a filename.
 const label = flag("label", gl_label(scene));
 for (const key of ["glsl", "tsl", "diff"]) {

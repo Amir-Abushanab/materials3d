@@ -239,6 +239,7 @@ export class NodeMaterialRenderer implements Engine {
   private plateSource?: Vec;
   private debugBlit?: THREE.NodeMaterial;
   private debugEnv?: THREE.NodeMaterial;
+  private debugAlpha?: THREE.NodeMaterial;
   private backdrop?: THREE.Mesh;
   private beamMesh?: THREE.Mesh;
   private readonly beamReveal = uniform(1);
@@ -722,7 +723,16 @@ export class NodeMaterialRenderer implements Engine {
       // comes back with the opposite vertical orientation to the one screen uv walks. Sampling it
       // unflipped makes glass refract a mirrored copy of the frame, which reads as the shapes
       // being oddly dark rather than as anything obviously upside down.
-      const screenUv: Vec = TSL.vec2(TSL.screenUV.x, TSL.float(1).sub(TSL.screenUV.y));
+      // NO VERTICAL FLIP. `screenUV` is top-down on both backends, and that is already the
+      // orientation a render target stores, so this samples the plate and the depth target
+      // directly. The post pass DOES flip, and the two are not in conflict: it reads through a
+      // full-screen quad's `uv()`, which runs bottom-up, so it needs the opposite correction.
+      //
+      // Flipping here made every shape refract a vertically mirrored copy of the frame. On a tall
+      // rod that is nearly invisible — the mirror of a vertical cylinder is a vertical cylinder —
+      // which is why it survived: it only shows on a scene whose depth varies strongly up the
+      // frame. On `staircase` it was worth 28 of the 42 levels of difference from the WebGL engine.
+      const screenUv: Vec = TSL.vec2(TSL.screenUV.x, TSL.screenUV.y);
       const viewNormal: Vec = TSL.normalView;
       const lensOffset = TSL.vec2(viewNormal.x.div(this.aspect), viewNormal.y)
         .mul(u.lens)
@@ -883,11 +893,12 @@ export class NodeMaterialRenderer implements Engine {
         offset: vec3(offset.x.mul(5).add(0.5), offset.y.mul(5).add(0.5), 0.5),
         // Divided, not multiplied — the GLSL twin scales it the same way so the two are comparable.
         chord: vec3(chord.div(3)),
-        backZ: vec3(backZ.div(4)),
-        viewZ: vec3(TSL.positionView.z.negate().div(4)),
+        backZ: vec3(backZ.div(32)),
+        viewZ: vec3(TSL.positionView.z.negate().div(32)),
         depthGuard: vec3(select(behind, TSL.float(1), TSL.float(0))),
-        plateA: vec3(smp.a.mul(FAR).div(4)),
-        guardMargin: vec3(smp.a.mul(FAR).sub(TSL.positionView.z.negate()).add(4).div(8)),
+        plateA: vec3(smp.a.mul(FAR).div(32)),
+        guardMargin: vec3(smp.a.mul(FAR).sub(TSL.positionView.z.negate()).add(16).div(32)),
+        alphaOut: vec3(plateAlpha.mul(5)),
         amt: vec3(amt),
         base,
         lit,
@@ -1490,6 +1501,22 @@ export class NodeMaterialRenderer implements Engine {
         vec4(TSL.texture(this.envTexture(), uv()).level(TSL.float(level)).rgb, 1),
       );
       await this.quad.blit(this.renderer, this.debugEnv, null);
+      return;
+    }
+    if (dump === "platealpha") {
+      // The plate's ALPHA, shown as luminance: it stores linear depth, and the main pass validates
+      // every refracted sample against it, so what is in it is worth being able to look at.
+      this.debugAlpha ??= passMaterial(
+        vec4(
+          vec3(
+            TSL.texture(t.plate.texture, TSL.vec2(TSL.screenUV.x, TSL.float(1).sub(TSL.screenUV.y)))
+              .a.mul(FAR)
+              .div(19),
+          ),
+          1,
+        ),
+      );
+      await this.quad.blit(this.renderer, this.debugAlpha, null);
       return;
     }
     if (dump === "plate" || dump === "back" || dump?.startsWith("plate:")) {

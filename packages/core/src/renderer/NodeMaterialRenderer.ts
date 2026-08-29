@@ -49,6 +49,8 @@ import { FAR, MATERIAL_KINDS, MAX_LAMPS, resolveMaterial } from "../config/model
 import type { ItemConfig } from "../config/model";
 import { buildShape, defaultPath } from "./shapes";
 import { resolveItems } from "./MaterialRenderer";
+import { applyMotions } from "./motions";
+import type { MaterialItem } from "./item";
 import {
   aimBeam,
   aimBeamAtAngle,
@@ -246,6 +248,13 @@ export class NodeMaterialRenderer implements Engine {
     /** World-space `(normal, offset)` per bounding face; zeroed until `applyPrismPlanes` fills it. */
     planes: THREE.Vector4[];
     config?: ItemConfig;
+    motion: ItemConfig["motion"];
+    phase: number;
+    /** The AUTHORED pose. Motions read from here rather than accumulating onto the live transform,
+     *  so pausing, scrubbing and capturing a fixed frame all land in the same place. */
+    home: THREE.Vector3;
+    homeRotation: THREE.Euler;
+    homeScale: THREE.Vector3;
   }[] = [];
   private readonly normalScratch = new THREE.Matrix3();
   /** The back-glass material and the scene it is drawn through; built on first use. */
@@ -738,6 +747,9 @@ export class NodeMaterialRenderer implements Engine {
       // DEPTH VALIDATION. The plate pass stored linear depth in alpha; reject any sample NEARER
       // than this fragment, or a shape picks up the silhouette of whatever stands in front of it
       // and the whole cluster gains a ghost outline. This is what buys the high blend weight.
+      // 0.30 is safe against the 8-bit plate, which was worth checking: alpha holds linear depth,
+      // one code is FAR/255 = 0.37 world units, and rounding can therefore be wrong by half of
+      // that — 0.19, comfortably inside the tolerance. So a quantisation step cannot flip this.
       const behind = smp.a.mul(FAR).greaterThanEqual(TSL.positionView.z.negate().sub(0.3));
       const sampled: Vec = smp.rgb;
       const weight = this.passIndex.mul(0.94).mul(select(behind, TSL.float(1), TSL.float(0)));
@@ -1007,7 +1019,17 @@ export class NodeMaterialRenderer implements Engine {
       // AFTER the pose, not before: the planes are world-space and are read off the mesh's world
       // matrix, so computing them first traces a solid sitting at the origin while the mesh you
       // can see is somewhere else — which draws as refraction that lags the shape.
-      const entry = { mesh, uniforms, planes, config: item };
+      const entry = {
+        mesh,
+        uniforms,
+        planes,
+        config: item,
+        motion: item.motion,
+        phase: item.phase ?? 0,
+        home: mesh.position.clone(),
+        homeRotation: mesh.rotation.clone(),
+        homeScale: mesh.scale.clone(),
+      };
       this.applyPrismPlanes(entry);
       return entry;
     });
@@ -1383,6 +1405,14 @@ export class NodeMaterialRenderer implements Engine {
       return;
     }
     this.timeUniform.value = this.time;
+    // Per-item motion, from the SAME module the WebGL engine drives. It reads and writes only the
+    // mesh and the authored pose, so the two engines animate identically rather than by two
+    // implementations that agree until they do not. Every item carries a `phase`, so even a frame
+    // at time zero is posed — leaving this out gave the node engine a visibly different LAYOUT,
+    // not just a different animation.
+    applyMotions(this.items as unknown as MaterialItem[], this.time, this.config.loopSeconds);
+    // The traced planes are world-space, so they follow the pose and have to be recomputed after it.
+    for (const entry of this.items) this.applyPrismPlanes(entry);
     // The room, baked before anything samples it. Cheap after the first call — it returns on an
     // unchanged key — but a fresh target invalidates every graph that captured the texture, which
     // is why the rebuild is driven from its return rather than from the config change.

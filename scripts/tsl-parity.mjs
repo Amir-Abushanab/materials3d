@@ -898,8 +898,8 @@ const results = await page.evaluate(
         return f0 + (1.0 - f0) * m2 * m2 * m;
       }
       vec3 room(vec3 rd){
-        float t = rd.y * 0.5 + 0.5;
-        return mix(vec3(0.05, 0.055, 0.07), vec3(0.9, 0.93, 1.0), smoothstep(0.0, 1.0, t));
+        float t = clamp(rd.y * 0.5 + 0.5, 0.0, 1.0);
+        return mix(vec3(0.55), vec3(1.02), smoothstep(0.20, 0.88, t));
       }
       void main(){
         vec3 wp = vec3(vUvIn * 0.34 - 0.17, 0.05);
@@ -1084,8 +1084,8 @@ const results = await page.evaluate(
       return vec4(mix(vec3(0.2, 0.3, 0.55), vec3(0.95, 0.9, 0.8), t), 0.6);
     }
     vec3 roomStub(vec3 rd){
-      float t = rd.y * 0.5 + 0.5;
-      return mix(vec3(0.05, 0.055, 0.07), vec3(0.9, 0.93, 1.0), smoothstep(0.0, 1.0, t));
+      float t = clamp(rd.y * 0.5 + 0.5, 0.0, 1.0);
+      return mix(vec3(0.55), vec3(1.02), smoothstep(0.20, 0.88, t));
     }`;
     const plateStubTsl = (rd) => {
       const t = rd.y.mul(0.5).add(0.5).clamp(0, 1);

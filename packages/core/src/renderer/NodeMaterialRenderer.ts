@@ -886,6 +886,8 @@ export class NodeMaterialRenderer implements Engine {
         backZ: vec3(backZ.div(4)),
         viewZ: vec3(TSL.positionView.z.negate().div(4)),
         depthGuard: vec3(select(behind, TSL.float(1), TSL.float(0))),
+        plateA: vec3(smp.a.mul(FAR).div(4)),
+        guardMargin: vec3(smp.a.mul(FAR).sub(TSL.positionView.z.negate()).add(4).div(8)),
         amt: vec3(amt),
         base,
         lit,

@@ -111,6 +111,9 @@ const result = await page.evaluate(
       "gradR",
       "backZ",
       "viewZ",
+      "depthGuard",
+      "plateA",
+      "guardMargin",
     ];
     globalThis["__glslProbe"] = Math.max(0, GLSL_PROBES.indexOf(probeName));
     const a = new gl.MaterialRenderer(host, cfg, {

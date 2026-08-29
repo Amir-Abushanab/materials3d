@@ -705,6 +705,10 @@ export const GLASS_FRAG = /* glsl */ `
     // edge. Uniform displacement reads as frosted; edge-loaded displacement reads as cut.
     vec3 base = uClearCol;
     float tracedPath = -1.0;
+    // Hoisted for the dev probe below; the guard and the plate's stored depth are the two values
+    // worth comparing against the node engine, and both are otherwise local to this block.
+    float dbgGuard = 0.0;
+    float dbgPlateA = 0.0;
     if (uPass > 0.5){
       vec2 suv = (vProj.xy / vProj.w) * 0.5 + 0.5;
       vec2 off = vec2(vVN.x / uAspect, vVN.y) * uLens * pow(1.0 - ndv, 1.35) * 3.4;
@@ -721,7 +725,9 @@ export const GLASS_FRAG = /* glsl */ `
       // Depth validation. The plate pass stored linear depth in alpha; reject any sample NEARER
       // than this fragment, or shapes pick up the silhouette of whatever is in front of them and
       // the whole cluster gains a ghost outline. This is what buys the high blend weight below.
-      base = mix(base, smp.rgb, 0.94 * step(vVZ - 0.30, smp.a * FAR));
+      dbgGuard = step(vVZ - 0.30, smp.a * FAR);
+      dbgPlateA = smp.a * FAR;
+      base = mix(base, smp.rgb, 0.94 * dbgGuard);
     }
 
     // Beer-Lambert. The optical path is either MEASURED from the back-face depth pass, or falls
@@ -855,6 +861,11 @@ export const GLASS_FRAG = /* glsl */ `
       else if (uProbe > 13.5 && uProbe < 14.5)
         dbg = vec3(dec(texture2D(tBack, clamp((vProj.xy / vProj.w) * 0.5 + 0.5, vec2(0.0), vec2(1.0))).rg) * FAR / 4.0);
       else if (uProbe > 14.5 && uProbe < 15.5) dbg = vec3(vVZ / 4.0);
+      else if (uProbe > 15.5 && uProbe < 16.5) dbg = vec3(dbgGuard);
+      else if (uProbe > 16.5 && uProbe < 17.5) dbg = vec3(dbgPlateA / 4.0);
+      // The guard's MARGIN, centred on 0.5 so its sign is readable and it does not saturate the
+      // way the raw depths do — those run to FAR on any backdrop pixel.
+      else if (uProbe > 17.5 && uProbe < 18.5) dbg = vec3((dbgPlateA - vVZ + 4.0) / 8.0);
       else dbg = vec3(0.5);   // a constant, for comparing the two output paths alone
       gl_FragColor = vec4(dbg, 1.0);
       return;

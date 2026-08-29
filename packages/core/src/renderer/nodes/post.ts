@@ -61,9 +61,18 @@ const saturation = (c: Vec): Vec => c.r.max(c.g).max(c.b).sub(c.r.min(c.g).min(c
 
 export const postPass = (u: PostUniforms) =>
   Fn(() => {
-    // Mirroring is a flip of the SOURCE lookup, so the haze ramp and the caustic pool below — both
-    // of which key off vertical position — flip with the picture rather than staying put.
+    // TWO coordinates, and the distinction is load-bearing.
+    //
+    // `vUv` is where to READ the source, corrected for how the frame is stored in its target.
+    // `screen` is where the output pixel IS. POST_FRAG uses one variable for both, because for it
+    // they coincide — nothing needs correcting there.
+    //
+    // Everything that keys off position on the SCREEN — the caustic pool, the haze ramp, the
+    // vignette, the grain — takes `screen`. Reading them from `vUv` puts the haze band at the top
+    // of the frame where the reference puts it at the bottom, which on `skewer` was worth 9 of the
+    // 22 levels of difference between the two engines.
     const vUv = mix(uv(), vec2(1).sub(uv()), u.mirror.step(0.5));
+    const screen = uv();
 
     const dC = decodeDepth(texture(u.depth, vUv)).mul(u.far);
     const r0 = dC.sub(u.focus).abs().div(u.range).clamp(0, 1).pow(1.2).mul(u.aperture).mul(u.scale);
@@ -126,21 +135,21 @@ export const postPass = (u: PostUniforms) =>
       const c = texture(u.color, vUv.add(vec2(Math.sin(o * 9) * 0.012, o * 0.2))).rgb;
       caus.addAssign(c.mul(saturation(c)).mul(1 - o));
     }
-    const pool = caus.div(u.causticTaps).mul(vUv.y.smoothstep(0.46, 0)).mul(u.caustics).mul(3.2);
+    const pool = caus.div(u.causticTaps).mul(screen.y.smoothstep(0.46, 0)).mul(u.caustics).mul(3.2);
     col.addAssign(pool);
     alpha.assign(alpha.add(pool.r.max(pool.g).max(pool.b)).min(1));
 
-    const haze = vUv.y.smoothstep(u.hazeTop, -0.02).mul(u.haze);
+    const haze = screen.y.smoothstep(u.hazeTop, -0.02).mul(u.haze);
     col.assign(mix(col, u.hazeColor, haze));
     // Over a backdrop haze is a veil painted on top. Over transparency there is nothing to paint
     // onto, and the right reading is the one the eye makes: shapes dissolve into what is behind
     // them, so haze takes coverage away rather than adding a band of colour.
     alpha.mulAssign(float(1).sub(haze.mul(u.transparent)));
 
-    const q = vUv.sub(0.5);
+    const q = screen.sub(0.5);
     col.mulAssign(float(1).sub(q.dot(q).mul(u.vignette)));
     col.addAssign(
-      vUv
+      screen
         .mul(u.res)
         .dot(vec2(12.9898, 78.233))
         .add(u.time)

@@ -27,6 +27,7 @@ import type { Engine } from "../engine";
 import { tonemapAces, tonemapNeutral } from "./nodes/common";
 import {
   blitPass,
+  particleDownPass,
   bloomBlurPass,
   bloomCompositePass,
   bloomDownPass,
@@ -58,7 +59,7 @@ import {
   crossSectionFor,
   prismCrossSection,
 } from "./lightSheet";
-import { beamPass } from "./nodes/beam";
+import { beamPass, dustPass, dustVertex, outsideSection } from "./nodes/beam";
 import {
   backGlassPass,
   backplate,
@@ -76,7 +77,14 @@ import {
   simpleTransmission,
   transmittedHue,
 } from "./nodes/transmissive";
-import { studioCone, studioGradient, studioRoom } from "./nodes/common";
+import {
+  linearToSrgb,
+  srgbToLinear,
+  studioCone,
+  studioGradient,
+  studioRoom,
+  tonemapAces as tonemapAcesNode,
+} from "./nodes/common";
 
 /** Mirrors {@link MaterialRendererOptions}; the shell hands the same object to either engine. */
 export interface NodeMaterialRendererOptions {
@@ -181,6 +189,8 @@ export class NodeMaterialRenderer implements Engine {
     blur: { h: THREE.NodeMaterial; v: THREE.NodeMaterial }[];
     composite: THREE.NodeMaterial;
     post: THREE.NodeMaterial;
+    /** The dust light field: an unthresholded downsample of the frame, blurred wide. */
+    particle: { down: THREE.NodeMaterial; blurH: THREE.NodeMaterial; blurV: THREE.NodeMaterial };
   };
 
   /** Backdrop uniforms, held so a config change is a write rather than a rebuild. */
@@ -245,6 +255,30 @@ export class NodeMaterialRenderer implements Engine {
   private debugEnv?: THREE.NodeMaterial;
   private debugAlpha?: THREE.NodeMaterial;
   private backdrop?: THREE.Mesh;
+  /**
+   * The dust field, drawn additively over the FINISHED frame.
+   *
+   * Its own scene, because nothing else may draw after it and it must not be swept up by the
+   * override material the depth passes install.
+   */
+  private dustMesh?: THREE.Mesh;
+  private dustMaterial?: THREE.NodeMaterial;
+  private readonly dustScene = new THREE.Scene();
+  /** `count:seed`; the geometry is rebuilt only when one of those changes. */
+  private dustKey = "";
+  private readonly dustTime = uniform(0);
+  private readonly dustSize = uniform(1);
+  private readonly dustDrift = uniform(0.25);
+  private readonly dustIntensity = uniform(1);
+  private readonly dustResponse = uniform(82);
+  private readonly dustFalloff = uniform(5.5);
+  private readonly dustExtent = uniform(vec3(0, 0, 0));
+  private readonly dustPlaneZ = uniform(0);
+  private readonly dustCamDist = uniform(1);
+  private readonly dustExposure = uniform(0.72);
+  private readonly dustSectionA = uniform(TSL.vec2(0, 0));
+  private readonly dustSectionB = uniform(TSL.vec2(0, 0));
+  private readonly dustSectionC = uniform(TSL.vec2(0, 0));
   private beamMesh?: THREE.Mesh;
   private readonly beamReveal = uniform(1);
   /** One entry per configured item; rebuilt when the shapes change, not per frame. */
@@ -487,6 +521,141 @@ export class NodeMaterialRenderer implements Engine {
     this.renderer.setRenderTarget(previous);
     this.envOn.value = 1;
     return fresh;
+  }
+
+  /**
+   * Build, update or tear down the dust field.
+   *
+   * The geometry is a plain soup of quads rather than instanced draws: two triangles per grain at
+   * a few thousand grains is a rounding error next to the scene passes, and it keeps the whole
+   * field to one draw call with no extension to feature-detect.
+   *
+   * Only an INDEX is uploaded per grain — position, size, class, shape, energy and lifetime are
+   * hashed from it in the vertex stage — so a respawn costs no buffer write.
+   */
+  private applyDust(t: PassTargets): void {
+    const dust = this.config.dust;
+    if (!dust || dust.count === 0) {
+      if (this.dustMesh) {
+        this.dustScene.remove(this.dustMesh);
+        this.dustMesh.geometry.dispose();
+        this.dustMesh = undefined;
+      }
+      this.dustKey = "";
+      return;
+    }
+
+    this.dustSize.value = dust.size;
+    this.dustDrift.value = dust.drift;
+    this.dustIntensity.value = dust.intensity;
+    this.dustResponse.value = dust.response;
+    this.dustFalloff.value = dust.falloffPower;
+    (this.dustExtent.value as THREE.Vector3).set(dust.extent.x, dust.extent.y, dust.extent.z);
+    // Grains cluster on the light sheet's plane, so they need to know where it is.
+    this.dustPlaneZ.value = this.config.beam?.z ?? 0;
+    this.dustCamDist.value = Math.abs(this.camera.position.z);
+    this.dustTime.value = this.time;
+
+    // The cross-section the grains must not draw over, projected into screen uv.
+    const beam = this.config.beam;
+    const section = beam ? prismCrossSection(beam.radius, beam.sides, beam.rotation) : [];
+    const planeZ = beam?.z ?? 0;
+    const slots = [this.dustSectionA, this.dustSectionB, this.dustSectionC];
+    for (const [i, slot] of slots.entries()) {
+      const c = section[i % Math.max(section.length, 1)];
+      const world = new THREE.Vector3(c?.x ?? 0, c?.y ?? 0, planeZ).project(this.camera);
+      (slot.value as THREE.Vector2).set(world.x * 0.5 + 0.5, 0.5 - world.y * 0.5);
+    }
+
+    this.dustMaterial ??= this.buildDustMaterial(t);
+
+    const key = `${dust.count}:${dust.seed}`;
+    if (key === this.dustKey && this.dustMesh) return;
+    this.dustKey = key;
+
+    const QUAD: [number, number][] = [
+      [-1, -1],
+      [1, -1],
+      [1, 1],
+      [-1, -1],
+      [1, 1],
+      [-1, 1],
+    ];
+    const corners: number[] = [];
+    const ids: number[] = [];
+    for (let i = 0; i < dust.count; i++) {
+      for (const [cx, cy] of QUAD) {
+        corners.push(cx, cy);
+        ids.push(i + dust.seed * 0.618);
+      }
+    }
+    const geometry = new THREE.BufferGeometry();
+    // Positions are unused — the vertex stage derives world position from the index — but three
+    // needs the attribute present to know how many vertices to draw.
+    geometry.setAttribute(
+      "position",
+      new THREE.Float32BufferAttribute(new Float32Array((corners.length / 2) * 3), 3),
+    );
+    geometry.setAttribute("aCorner", new THREE.Float32BufferAttribute(corners, 2));
+    geometry.setAttribute("aId", new THREE.Float32BufferAttribute(ids, 1));
+
+    if (this.dustMesh) {
+      this.dustMesh.geometry.dispose();
+      this.dustMesh.geometry = geometry;
+    } else {
+      this.dustMesh = new THREE.Mesh(geometry, this.dustMaterial);
+      this.dustMesh.frustumCulled = false;
+      this.dustScene.add(this.dustMesh);
+    }
+  }
+
+  private buildDustMaterial(t: PassTargets): THREE.NodeMaterial {
+    const vertex = dustVertex({
+      time: this.dustTime,
+      size: this.dustSize,
+      drift: this.dustDrift,
+      planeZ: this.dustPlaneZ,
+      camDist: this.dustCamDist,
+      extent: this.dustExtent,
+      res: this.resolution,
+    });
+    const material = new THREE.NodeMaterial();
+    material.vertexNode = vertex.position as never;
+    // Brightness from the sixteenth-res UNTHRESHOLDED field, hue from a mid bloom level. Two
+    // different textures on purpose: the field is broad enough to say whether light reaches a
+    // grain at all, and far too broad to say what colour it is.
+    const shade = dustPass({
+      light: (uvNode: Vec) => TSL.texture(t.bloom[3].a.texture, uvNode),
+      color: (uvNode: Vec) => TSL.texture(t.bloom[1].a.texture, uvNode),
+      response: this.dustResponse,
+      falloffPower: this.dustFalloff,
+      exposure: this.dustExposure,
+      intensity: this.dustIntensity,
+      srgbToLinear,
+      linearToSrgb,
+      tonemapAces: tonemapAcesNode,
+    });
+    const screen: Vec = TSL.vec2(TSL.screenUV.x, TSL.screenUV.y);
+    const outside = outsideSection(screen, this.dustSectionA, this.dustSectionB, this.dustSectionC);
+    material.fragmentNode = shade(
+      vertex.corner,
+      vertex.lightUv,
+      vertex.softness,
+      vertex.sparkle,
+      vertex.opacity,
+    ).mul(outside) as never;
+    // Additive in COLOUR only. Plain additive blending accumulates alpha too, and the post pass
+    // divides by that alpha — so the layer would darken what it is meant to brighten.
+    material.transparent = true;
+    material.blending = THREE.CustomBlending;
+    material.blendSrc = THREE.OneFactor;
+    material.blendDst = THREE.OneFactor;
+    material.blendSrcAlpha = THREE.ZeroFactor;
+    material.blendDstAlpha = THREE.OneFactor;
+    material.depthTest = false;
+    material.depthWrite = false;
+    material.side = THREE.DoubleSide;
+    return material;
   }
 
   private buildEnvPasses(): NonNullable<NodeMaterialRenderer["envPasses"]> {
@@ -1253,6 +1422,33 @@ export class NodeMaterialRenderer implements Engine {
           ),
         };
       }),
+      particle: {
+        down: passMaterial(
+          particleDownPass(
+            t.color.texture,
+            texel(t.color),
+            TSL.vec2(t.color.width / t.bloom[3].a.width, t.color.height / t.bloom[3].a.height),
+          ),
+        ),
+        blurH: passMaterial(
+          bloomBlurPass(
+            t.bloom[3].a.texture,
+            BLOOM_TAPS.at(-1)!,
+            TSL.float(BLOOM_TAPS.at(-1)! / 3),
+            TSL.vec2(1, 0),
+            texel(t.bloom[3].a),
+          ),
+        ),
+        blurV: passMaterial(
+          bloomBlurPass(
+            t.bloom[3].b.texture,
+            BLOOM_TAPS.at(-1)!,
+            TSL.float(BLOOM_TAPS.at(-1)! / 3),
+            TSL.vec2(0, 1),
+            texel(t.bloom[3].a),
+          ),
+        ),
+      },
       composite: passMaterial(
         bloomCompositePass(
           t.bloom[0].a.texture,
@@ -1311,6 +1507,23 @@ export class NodeMaterialRenderer implements Engine {
       await this.quad.blit(this.renderer, this.passes.blur[i].v, t.bloom[i].a);
     }
     await this.quad.blit(this.renderer, this.passes.composite, t.bloom[0].b);
+    if (this.config.dust && this.config.dust.count > 0) await this.renderParticleField(t);
+  }
+
+  /**
+   * The dust light field: the last pyramid level, rebuilt UNTHRESHOLDED and blurred wide.
+   *
+   * It overwrites what the pyramid put there, and that is the point. The composite only reads the
+   * top three levels, so the last one is free to answer a different question: not "what glows"
+   * but "does any light reach this point at all". A thresholded level cannot answer it — a grain
+   * sitting in dim light would be told there is none.
+   */
+  private async renderParticleField(t: PassTargets): Promise<void> {
+    if (!this.passes?.particle) return;
+    const light = t.bloom[3];
+    await this.quad.blit(this.renderer, this.passes.particle.down, light.a);
+    await this.quad.blit(this.renderer, this.passes.particle.blurH, light.b);
+    await this.quad.blit(this.renderer, this.passes.particle.blurV, light.a);
   }
 
   /**
@@ -1567,6 +1780,23 @@ export class NodeMaterialRenderer implements Engine {
     }
     // 4. Post — to the screen.
     await this.quad.blit(this.renderer, this.passes.post, null);
+
+    // 5. Dust — additively over the FINISHED frame, in display space.
+    //
+    // After the bloom for the obvious reason that the bloom is what tells each grain whether any
+    // light reaches it, and after the TONE MAP for a less obvious one: a mote is a point of light
+    // in its own right rather than part of the scene beneath it, so drawing it into the HDR target
+    // would compress it together with whatever it lands on. That crushes every mote sitting on the
+    // beam — exactly where they are brightest — and passes them through the depth of field
+    // besides, smearing specks that should be pixel-sharp. Each grain tone maps itself instead.
+    this.applyDust(t);
+    if (this.dustMesh) {
+      this.renderer.setRenderTarget(null);
+      const wasAutoClear = this.renderer.autoClear;
+      this.renderer.autoClear = false;
+      await this.renderer.renderAsync(this.dustScene, this.camera);
+      this.renderer.autoClear = wasAutoClear;
+    }
     this.renderPending();
   }
 

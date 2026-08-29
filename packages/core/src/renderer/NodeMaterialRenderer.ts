@@ -239,6 +239,7 @@ export class NodeMaterialRenderer implements Engine {
   private plateSource?: Vec;
   private debugBlit?: THREE.NodeMaterial;
   private debugEnv?: THREE.NodeMaterial;
+  private backdrop?: THREE.Mesh;
   private beamMesh?: THREE.Mesh;
   private readonly beamReveal = uniform(1);
   /** One entry per configured item; rebuilt when the shapes change, not per frame. */
@@ -351,11 +352,16 @@ export class NodeMaterialRenderer implements Engine {
     }
 
     const c = this.config.camera;
-    this.camera = new THREE.PerspectiveCamera(c.fov, 1, 0.1, 200);
+    // near 1 / far FAR, matching the WebGL engine exactly. This is not a detail: a 0.1 near plane
+    // spends almost the whole depth buffer between 0.1 and 1, leaving the few units the scenes
+    // actually occupy sharing what is left — so overlapping back faces stop resolving and the
+    // measured optical path goes wrong over large contiguous regions.
+    this.camera = new THREE.PerspectiveCamera(c.fov, 1, 1, FAR);
     this.camera.position.set(0, c.height, c.distance);
     this.camera.lookAt(c.lookAt.x, c.lookAt.y, c.lookAt.z);
 
-    this.scene.add(this.buildBackdrop());
+    this.backdrop = this.buildBackdrop();
+    this.scene.add(this.backdrop);
     // `init()` is async on this renderer — it negotiates a device before anything can draw — so
     // every entry point awaits this rather than assuming a ready renderer the way WebGL allows.
     this.ready = this.renderer.init().then(() => {
@@ -875,7 +881,10 @@ export class NodeMaterialRenderer implements Engine {
         ndv: vec3(ndv),
         normal: normal.mul(0.5).add(0.5),
         offset: vec3(offset.x.mul(5).add(0.5), offset.y.mul(5).add(0.5), 0.5),
-        chord: vec3(chord.mul(3)),
+        // Divided, not multiplied — the GLSL twin scales it the same way so the two are comparable.
+        chord: vec3(chord.div(3)),
+        backZ: vec3(backZ.div(4)),
+        viewZ: vec3(TSL.positionView.z.negate().div(4)),
         depthGuard: vec3(select(behind, TSL.float(1), TSL.float(0))),
         amt: vec3(amt),
         base,
@@ -1427,15 +1436,36 @@ export class NodeMaterialRenderer implements Engine {
     //    maximum defocus, which is a frame of blocks rather than a picture.
     this.depthMaterial ??= this.buildDepthMaterial();
     this.scene.overrideMaterial = this.depthMaterial;
+    // The backdrop and the beam are HIDDEN here, and both for the same reason: under an override
+    // material every mesh is drawn with it, and neither of these has a meaningful back face. The
+    // backdrop's would blanket the frame in false thickness; the beam is a sheet of quads lying
+    // across the scene, so it would hand every pixel it covers a near exit surface and make the
+    // glass behind it read as paper-thin.
+    const backdropWasVisible = this.backdrop?.visible ?? false;
+    const beamWasVisible = this.beamMesh?.visible ?? false;
+    if (this.backdrop) this.backdrop.visible = false;
+    if (this.beamMesh) this.beamMesh.visible = false;
+    // CLEARED TO BLACK, not to the scene background. A pixel with no back face must come out with
+    // no thickness, and zero minus the front depth clamps to exactly that; clearing to anything
+    // else gives empty space an optical path.
+    const previousClear = this.renderer.getClearColor(new THREE.Color());
+    const previousClearAlpha = this.renderer.getClearAlpha();
+    this.renderer.setClearColor(0x000000, 1);
     this.renderer.setRenderTarget(t.back);
     await this.renderer.renderAsync(this.scene, this.camera);
     this.scene.overrideMaterial = null;
+    this.renderer.setClearColor(previousClear, previousClearAlpha);
+    if (this.backdrop) this.backdrop.visible = backdropWasVisible;
 
     // 1. Plate — the backdrop and every shape, un-refracted. What the main pass refracts.
+    // The beam stays hidden for the plate too: the plate is what the glass REFRACTS, and the
+    // tracer has already computed the beam's true path through the glass. Carrying it here as well
+    // refracts it a second time and draws a bent ghost of the beam inside the solid.
     this.passIndex.value = 0;
     this.bindPlate(false);
     this.renderer.setRenderTarget(t.plate);
     await this.renderer.renderAsync(this.scene, this.camera);
+    if (this.beamMesh) this.beamMesh.visible = beamWasVisible;
 
     // 1b. The solids' INNER interfaces, added into the plate — light that bounced its way back out
     //     of a far face, so the near faces have something to show other than the backdrop.

@@ -852,6 +852,9 @@ export const GLASS_FRAG = /* glsl */ `
       else if (uProbe < 4.5) dbg = vec3(chord / 3.0);
       else if (uProbe < 5.5) dbg = base;
       else if (uProbe < 6.5) dbg = vec3(amt);
+      else if (uProbe > 13.5 && uProbe < 14.5)
+        dbg = vec3(dec(texture2D(tBack, clamp((vProj.xy / vProj.w) * 0.5 + 0.5, vec2(0.0), vec2(1.0))).rg) * FAR / 4.0);
+      else if (uProbe > 14.5 && uProbe < 15.5) dbg = vec3(vVZ / 4.0);
       else dbg = vec3(0.5);   // a constant, for comparing the two output paths alone
       gl_FragColor = vec4(dbg, 1.0);
       return;

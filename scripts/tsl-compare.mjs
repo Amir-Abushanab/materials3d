@@ -109,6 +109,8 @@ const result = await page.evaluate(
       "fill",
       "opaqueGrey",
       "gradR",
+      "backZ",
+      "viewZ",
     ];
     globalThis["__glslProbe"] = Math.max(0, GLSL_PROBES.indexOf(probeName));
     const a = new gl.MaterialRenderer(host, cfg, {

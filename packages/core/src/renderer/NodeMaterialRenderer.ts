@@ -1,0 +1,1127 @@
+/**
+ * The TSL engine: the same scenes, drawn through three's node renderer.
+ *
+ * Deliberately a SIBLING of {@link MaterialRenderer} rather than a replacement. The two are
+ * separate three builds sharing only `three.core`, so a bundler can keep the node renderer out of
+ * a default consumer's download entirely — which it cannot do if one engine imports the other.
+ * `core-loader-webgpu` is the seam; see `MaterialOptions.renderer`.
+ *
+ * It runs on a WebGL backend unless the browser offers WebGPU, so opting in selects the ENGINE and
+ * not the backend. That also means the visual target is exact parity with the GLSL renderer: every
+ * pass here has a twin in `shaders.ts`, and the way to trust a port is to render both and diff.
+ *
+ * MIGRATION STATUS: the pass pipeline is being ported incrementally. Anything not yet ported falls
+ * through to a documented gap rather than silently drawing nothing — see `renderPending`.
+ */
+import * as THREE from "three/webgpu";
+import { TSL } from "three/webgpu";
+
+import {
+  ensureSceneConfig,
+  type SceneConfig,
+  type PostConfig,
+  type LampConfig,
+} from "../config/model";
+import { parseHex } from "../util/color";
+import type { Engine } from "../engine";
+import { tonemapAces, tonemapNeutral } from "./nodes/common";
+import { bloomBlurPass, bloomCompositePass, bloomDownPass, bloomExtractPass } from "./nodes/passes";
+import { postPass } from "./nodes/post";
+import {
+  BLOOM_DIVISORS,
+  BLOOM_TAPS,
+  createTargets,
+  disposeTargets,
+  FullScreenQuad,
+  passMaterial,
+  resizeTargets,
+  type PassTargets,
+} from "./nodes/pipeline";
+import { FAR, MATERIAL_KINDS, MAX_LAMPS, resolveMaterial } from "../config/model";
+import type { ItemConfig } from "../config/model";
+import { buildShape, defaultPath } from "./shapes";
+import { resolveItems } from "./MaterialRenderer";
+import {
+  aimBeam,
+  aimBeamAtAngle,
+  buildLightSheet,
+  crossSectionFor,
+  prismCrossSection,
+} from "./lightSheet";
+import { beamPass } from "./nodes/beam";
+import {
+  backGlassPass,
+  backplate,
+  decodeDepth,
+  depthPass,
+  platePass,
+  prismExit,
+} from "./nodes/glass";
+import { shadeOpaque } from "./nodes/opaque";
+import { bendDir, coneTransmission, transmittedHue } from "./nodes/transmissive";
+import { studioGradient, studioSoftbox } from "./nodes/common";
+
+/** Mirrors {@link MaterialRendererOptions}; the shell hands the same object to either engine. */
+export interface NodeMaterialRendererOptions {
+  respectReducedMotion?: boolean;
+  canvas?: HTMLCanvasElement;
+  preserveDrawingBuffer?: boolean;
+}
+
+const { Fn, vec3, vec4, uniform, uv, mix } = TSL;
+
+/**
+ * Which intermediate a dev harness has asked to see instead of the composed frame.
+ *
+ * Read through one accessor rather than a global declaration so there is a single place to look for
+ * it, and via a string key because the name is deliberately unlikely to collide — never set in
+ * production, where this returns undefined and every probe compiles out.
+ */
+const devProbe = (): string | undefined =>
+  (globalThis as Record<string, unknown>)["__tslDebug"] as string | undefined;
+
+/** sRGB hex to the 0..1 triple the graphs want. */
+const rgb = (hex: string): [number, number, number] => parseHex(hex) as [number, number, number];
+
+/** One texel of a target, in uv — the step every separable blur walks by. */
+const texel = (target: THREE.RenderTarget) =>
+  TSL.vec2(1 / Math.max(target.width, 1), 1 / Math.max(target.height, 1));
+
+/** Plane slots per traced solid. Matches the GLSL `uPrismPlanes[6]` — see `buildItemMaterial`. */
+const PRISM_PLANES = 6;
+
+/** World-space `(normal, offset)` for a plane given in an item's local frame. */
+function writePlane(
+  out: THREE.Vector4,
+  localNormal: THREE.Vector3,
+  localPoint: THREE.Vector3,
+  normalMatrix: THREE.Matrix3,
+  world: THREE.Matrix4,
+): void {
+  const n = localNormal.clone().applyMatrix3(normalMatrix).normalize();
+  const p = localPoint.clone().applyMatrix4(world);
+  out.set(n.x, n.y, n.z, -n.dot(p));
+}
+/** How many total internal reflections the back-glass walk follows before giving up. */
+const BACK_GLASS_BOUNCES = 4;
+
+/** See `nodes/common` — three's TSL types resolve the wrong overload for a relaxed node. */
+type Vec = any;
+// CONDITION FIRST — see the note in `nodes/common`.
+const select = (cond: Vec, ifTrue: Vec, ifFalse: Vec): Vec => TSL.select(cond, ifTrue, ifFalse);
+const blend = (a: Vec, b: Vec, t: Vec): Vec => TSL.mix(a, b, t);
+
+export class NodeMaterialRenderer implements Engine {
+  readonly canvas: HTMLCanvasElement;
+  private readonly container: HTMLElement;
+  private readonly renderer: THREE.WebGPURenderer;
+  private readonly scene = new THREE.Scene();
+  private readonly camera: THREE.PerspectiveCamera;
+  private readonly ownsCanvas: boolean;
+  private config: SceneConfig;
+  private frame = 0;
+  private running = false;
+  private time = 0;
+  private ready: Promise<void>;
+  private targets?: PassTargets;
+  private readonly quad = new FullScreenQuad();
+  /** Built once the targets exist, because every one of them closes over a target's texture. */
+  private passes?: {
+    extract: THREE.NodeMaterial;
+    down: THREE.NodeMaterial[];
+    blur: { h: THREE.NodeMaterial; v: THREE.NodeMaterial }[];
+    composite: THREE.NodeMaterial;
+    post: THREE.NodeMaterial;
+  };
+
+  /** Backdrop uniforms, held so a config change is a write rather than a rebuild. */
+  private readonly top = uniform(vec3(0, 0, 0));
+  private readonly bottom = uniform(vec3(0, 0, 0));
+  private readonly toneMode = uniform(0);
+  private readonly bloomThreshold = uniform(0.5);
+  private readonly bloomRadius = uniform(0.5);
+  private readonly bloomAmount = uniform(0);
+  private readonly bloomMode = uniform(1);
+  private readonly focus = uniform(10);
+  private readonly range = uniform(6);
+  private readonly aperture = uniform(0);
+  private readonly caustics = uniform(0);
+  private readonly haze = uniform(0);
+  private readonly hazeTop = uniform(0);
+  private readonly hazeColor = uniform(vec3(0, 0, 0));
+  private readonly vignette = uniform(0);
+  private readonly grain = uniform(0);
+  private readonly timeUniform = uniform(0);
+  private readonly resolution = uniform(TSL.vec2(1, 1));
+  /**
+   * The post pass's source flip, which is NOT the scene's `mirror` feature even though it shares
+   * the uniform.
+   *
+   * The node renderer hands back a render-target texture with the opposite vertical orientation to
+   * the one a full-screen quad's uv walks, so a frame composed through a target arrives upside
+   * down. Correcting it here rather than inside `postPass` keeps the pass itself a faithful twin of
+   * the GLSL original — the parity harness feeds it plain textures, where no such flip exists, and
+   * a flip baked into the graph would make that comparison a lie.
+   */
+  private readonly sourceFlip = uniform(TSL.vec2(0, 1));
+  /**
+   * 0 while drawing the plate, 1 while drawing the main pass.
+   *
+   * One material serving both passes, toggled between them, rather than two materials per shape:
+   * the plate is the same frame with refraction disabled, so duplicating the program to express
+   * "the same thing minus one lookup" doubles the compile cost for nothing.
+   */
+  private readonly passIndex = uniform(0);
+  private readonly clearGlass = uniform(vec3(1, 1, 1));
+  private readonly aspect = uniform(1);
+  private placeholder?: THREE.DataTexture;
+  private readonly measuredThickness = uniform(0);
+  /**
+   * Back-face linear depth, as an override material.
+   *
+   * BACK faces, not front: what the main pass wants is the far side of each solid, because the
+   * distance between that and the fragment it is shading is the optical path light actually
+   * travelled. Rendering front faces here would measure the distance to the surface you can
+   * already see, which is zero.
+   */
+  private depthMaterial?: THREE.NodeMaterial;
+  private debugBlit?: THREE.NodeMaterial;
+  private beamMesh?: THREE.Mesh;
+  private readonly beamReveal = uniform(1);
+  /** One entry per configured item; rebuilt when the shapes change, not per frame. */
+  private items: {
+    mesh: THREE.Mesh;
+    uniforms: Record<string, ReturnType<typeof uniform>>;
+    /** World-space `(normal, offset)` per bounding face; zeroed until `applyPrismPlanes` fills it. */
+    planes: THREE.Vector4[];
+    config?: ItemConfig;
+  }[] = [];
+  private readonly normalScratch = new THREE.Matrix3();
+  /** The back-glass material and the scene it is drawn through; built on first use. */
+  private backGlass?: {
+    material: THREE.NodeMaterial;
+    planes: THREE.Vector4[];
+    count: ReturnType<typeof uniform>;
+    ior: ReturnType<typeof uniform>;
+    strength: ReturnType<typeof uniform>;
+    depth: ReturnType<typeof uniform>;
+  };
+  private readonly backGlassScene = new THREE.Scene();
+  /**
+   * The lamp field, as uniform arrays.
+   *
+   * Fixed length rather than sized to the scene: a node graph is compiled per material, and a
+   * changing array length would recompile every one of them whenever a lamp is added. The count
+   * uniform is what actually bounds the walk.
+   */
+  private readonly lampData = Array.from(
+    { length: MAX_LAMPS },
+    () => new THREE.Vector4(0, 0, 1, 0),
+  );
+  private readonly lampColors = Array.from({ length: MAX_LAMPS }, () => new THREE.Vector3());
+  private readonly lampArray = TSL.uniformArray(this.lampData);
+  private readonly lampColorArray = TSL.uniformArray(this.lampColors);
+  private readonly lampCount = uniform(0, "int");
+  private readonly lampGain = uniform(1);
+  private readonly lampLo = uniform(0);
+  private readonly lampHi = uniform(1);
+  private readonly plateZ = uniform(-3);
+  private readonly plateScale = uniform(TSL.vec2(1, 1));
+  private readonly plateOffset = uniform(TSL.vec2(0.5, 0.5));
+
+  constructor(
+    container: HTMLElement,
+    config: Partial<SceneConfig>,
+    options: NodeMaterialRendererOptions = {},
+  ) {
+    this.container = container;
+    this.config = ensureSceneConfig(config);
+    this.ownsCanvas = !options.canvas;
+    this.renderer = new THREE.WebGPURenderer({
+      canvas: options.canvas,
+      antialias: true,
+      alpha: true,
+    });
+    // `preserveDrawingBuffer` is a WebGL context attribute and the node renderer takes no such
+    // option, so the shell's poster capture relies on `captureImage` drawing immediately before it
+    // reads the canvas rather than on the buffer surviving a present.
+    void options.preserveDrawingBuffer;
+    this.canvas = this.renderer.domElement as HTMLCanvasElement;
+    if (this.ownsCanvas) {
+      this.canvas.style.display = "block";
+      this.canvas.style.width = "100%";
+      this.canvas.style.height = "100%";
+      container.appendChild(this.canvas);
+    }
+
+    const c = this.config.camera;
+    this.camera = new THREE.PerspectiveCamera(c.fov, 1, 0.1, 200);
+    this.camera.position.set(0, c.height, c.distance);
+    this.camera.lookAt(c.lookAt.x, c.lookAt.y, c.lookAt.z);
+
+    this.scene.add(this.buildBackdrop());
+    // `init()` is async on this renderer — it negotiates a device before anything can draw — so
+    // every entry point awaits this rather than assuming a ready renderer the way WebGL allows.
+    this.ready = this.renderer.init().then(() => {
+      this.applyConfig();
+      // Targets FIRST: an item's graph captures the plate texture, and building before the target
+      // exists captures a one-pixel placeholder instead — which renders as glass refracting solid
+      // black and reads as the shapes being mysteriously dark.
+      this.resize();
+      this.buildItems();
+      this.buildBeam();
+    });
+  }
+
+  /**
+   * The backdrop, as a node graph.
+   *
+   * The GLSL twin is BACKDROP_FRAG's gradient branch. It is the first pass ported because it is
+   * the one that proves the whole seam end to end — engine selection, node material, tone map,
+   * canvas capture — without depending on any of the render targets the later passes need.
+   */
+  private buildBackdrop(): THREE.Mesh {
+    const shade = Fn(() => {
+      const base = mix(this.bottom, this.top, uv().y);
+      // The same three-way tone map the post pass applies, so the backdrop matches its twin
+      // rather than being the one surface that ignores the scene's curve.
+      const neutral = tonemapNeutral(base);
+      const aces = tonemapAces(base);
+      const mapped = select(
+        this.toneMode.equal(2),
+        aces,
+        select(this.toneMode.equal(1), neutral, base),
+      );
+      return vec4(mapped, 1);
+    });
+    const material = new THREE.NodeMaterial();
+    material.fragmentNode = shade();
+    // CLIP SPACE directly, bypassing the model-view-projection. Without this the quad is a two-unit
+    // plane sitting at the world origin, which a perspective camera renders as a small square in
+    // the middle of the scene rather than as a backdrop — and the "background" you then see is the
+    // renderer's clear colour, not the gradient at all.
+    material.vertexNode = vec4(TSL.positionGeometry.xy, 0, 1) as never;
+    material.depthWrite = false;
+    material.depthTest = false;
+    const mesh = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), material);
+    mesh.frustumCulled = false;
+    mesh.renderOrder = -1000;
+    return mesh;
+  }
+
+  /**
+   * Build a node material for one item.
+   *
+   * The material-kind branch is resolved in JAVASCRIPT rather than in the graph: the kind cannot
+   * change without a rebuild anyway, and emitting only the branch a shape actually uses keeps each
+   * compiled program to what it needs. The GLSL engine branches on a uniform instead because it
+   * shares one program across every shape — a different trade, not a different intent.
+   */
+  private buildItemMaterial(item: ItemConfig): {
+    material: THREE.NodeMaterial;
+    uniforms: Record<string, ReturnType<typeof uniform>>;
+    planes: THREE.Vector4[];
+  } {
+    const m = resolveMaterial({ path: defaultPath(item.shape), ...item.material });
+    const kindIndex = MATERIAL_KINDS.indexOf(m.kind);
+    const u = {
+      albedo: uniform(vec3(...rgb(m.albedo))),
+      edgeTint: uniform(vec3(...rgb(m.edgeTint || "#ffffff"))),
+      useEdge: uniform(m.edgeTint ? 1 : 0),
+      roughness: uniform(m.roughness),
+      spec: uniform(m.specular),
+      rim: uniform(m.rim),
+      ior: uniform(Math.max(m.ior, 1)),
+      path: uniform(m.path),
+      density: uniform(m.density),
+      lens: uniform(m.lens),
+      dispersion: uniform(m.dispersion),
+      emission: uniform(m.emission),
+      saturation: uniform(m.saturation),
+      /** 1 when this item's interior is traced against real planes rather than offset in screen space. */
+      prism: uniform(0),
+      planeCount: uniform(0, "int"),
+    };
+
+    // The traced-interior plane set, filled by `applyPrismPlanes` once the item has a world pose.
+    //
+    // SIX slots, matching the GLSL uniform array exactly. That is enough for a square prism's four
+    // sides and two caps, and not enough for a hexagon's eight — the hexagon gets its six side
+    // planes and no caps, so a ray leaving through the top finds no exit and falls back to the
+    // screen-space offset. Widening it here would be a divergence from the engine this one is
+    // being diffed against, not a fix.
+    const planes = Array.from({ length: PRISM_PLANES }, () => new THREE.Vector4(0, 0, 1, 0));
+    const planeArray = TSL.uniformArray(planes);
+
+    const room = (dir: Vec, _cone: Vec) =>
+      this.config.studio === "softbox"
+        ? studioSoftbox(dir).mul(this.config.studioGain)
+        : studioGradient(dir);
+    // The real lamp field: a ray cast at the plate plane, sampled where it lands. This is what
+    // gives a shape its colour — glass borrows chroma from whatever lamps sit behind it, and a
+    // metal's form comes almost entirely from variation in what it reflects.
+    const sampleField = platePass({
+      lamps: this.lampArray,
+      colors: this.lampColorArray,
+      count: this.lampCount,
+      gain: this.lampGain,
+      lo: this.lampLo,
+      hi: this.lampHi,
+      maxLamps: MAX_LAMPS,
+    });
+    const cast = backplate(sampleField, this.plateZ, this.plateScale, this.plateOffset);
+    const plate = (dir: Vec) => cast(TSL.positionWorld, dir);
+
+    const material = new THREE.NodeMaterial();
+    // The whole graph lives inside an `Fn`. TSL's `toVar`/`assign` need a stack to write into, and
+    // outside one they warn per node and silently drop the assignment — which renders as a shape
+    // that is mysteriously missing everything after its first mutable local.
+    material.fragmentNode = Fn(() => {
+      const normal = TSL.normalWorld;
+      // `.toVar()` HERE IS LOAD-BEARING, not a readability choice.
+      //
+      // TSL emits a node's assignment wherever it is FIRST BUILT, and building is driven by walking
+      // the returned graph — not by the order these statements appear. `view` is reached first
+      // through the argument of the plane walk below, so without a var it lands INSIDE that `Loop`
+      // body, and every later use in the shader reads whatever the last iteration left. On a shape
+      // with no planes the loop never runs at all, so `view` stays zero: `ndv` collapses to zero,
+      // every Fresnel term goes to grazing incidence, and the surface renders as a white shell.
+      // Nothing about that is visible in this file — it only shows in the generated GLSL.
+      const view = TSL.cameraPosition.sub(TSL.positionWorld).normalize().toVar();
+      const ndv = normal.dot(view).clamp(0, 1).toVar();
+      // ALPHA IS DEPTH on the plate pass, and coverage on the main one. The main pass validates its
+      // refracted samples against this, so a plate that writes a flat 1 everywhere reports every
+      // shape as sitting at the far plane and the guard passes on samples it should reject.
+      const plateAlpha: Vec = select(
+        this.passIndex.greaterThan(0.5),
+        TSL.float(1),
+        TSL.positionView.z.negate().div(FAR),
+      );
+
+      if (kindIndex > 3) {
+        const shaded = shadeOpaque({
+          kind: TSL.float(kindIndex),
+          albedo: u.albedo,
+          edgeTint: u.edgeTint,
+          useEdge: u.useEdge,
+          roughness: u.roughness,
+          spec: u.spec,
+          rim: u.rim,
+          envOn: TSL.float(0),
+          room,
+          plate,
+        })(normal, view, ndv);
+        const grey: Vec = vec3(shaded.dot(vec3(1 / 3)));
+        const desaturated = blend(grey, shaded, u.saturation);
+        return vec4(desaturated.add(vec3(u.emission).mul(0.5)), plateAlpha);
+      }
+      const cone = coneTransmission({
+        samples: 11,
+        ior: u.ior,
+        dispersion: u.dispersion,
+        roughness: u.roughness,
+        plate,
+      })(view, normal, TSL.screenCoordinate);
+      // The RAW cone result. `transmittedHue` is applied once, below — running it here as well
+      // normalizes an already-normalized colour and drains the chroma the lamps provide.
+      const lit = cone.rgb;
+      const amt = cone.a;
+
+      // BASE: what is genuinely behind this fragment. On the main pass that is the plate pass's
+      // own frame, displaced in screen space — which is what lets glass refract other glass. The
+      // displacement is RIM-WEIGHTED: a near-flat window in the middle, hard bending at the edge.
+      // Uniform displacement reads as frosted; edge-loaded displacement reads as cut.
+      // V FLIPPED, for the same reason the post pass flips its source: a render-target texture
+      // comes back with the opposite vertical orientation to the one screen uv walks. Sampling it
+      // unflipped makes glass refract a mirrored copy of the frame, which reads as the shapes
+      // being oddly dark rather than as anything obviously upside down.
+      const screenUv: Vec = TSL.vec2(TSL.screenUV.x, TSL.float(1).sub(TSL.screenUV.y));
+      const viewNormal: Vec = TSL.normalView;
+      const lensOffset = TSL.vec2(viewNormal.x.div(this.aspect), viewNormal.y)
+        .mul(u.lens)
+        .mul(TSL.float(1).sub(ndv).pow(1.35))
+        .mul(3.4);
+
+      // TRACED refraction, for a solid whose faces really are planes.
+      //
+      // Refract the view into the glass, walk it to whichever face it actually leaves by, and
+      // project THAT point. The screen-space offset above is a fair approximation for a rod, whose
+      // surface curves smoothly and whose exit is roughly opposite its entry; on a faceted solid
+      // it is not, because the refracted ray can leave through a different face entirely.
+      //
+      // `screenUv` and the projected hit are in the same convention and no flip is needed between
+      // them: `screenUV` is top-down on both backends, the `1 -` above makes it y-up, and y-up is
+      // what `ndc * 0.5 + 0.5` gives. The offset is a DIFFERENCE of two points in that one space,
+      // so it stays correct however the plate texture itself happens to be oriented.
+      const inside = bendDir(view, normal, TSL.float(1).div(u.ior.max(1))).toVar();
+      const hitT = prismExit(planeArray, u.planeCount)(TSL.positionWorld, inside).toVar();
+      const hit = TSL.positionWorld.add(inside.mul(hitT));
+      const clip = TSL.cameraProjectionMatrix.mul(TSL.cameraViewMatrix).mul(vec4(hit, 1));
+      const hitUv = clip.xy.div(clip.w.max(1e-5)).mul(0.5).add(0.5);
+      const traced: Vec = u.prism.greaterThan(0.5).and(hitT.greaterThan(0));
+      const offset = select(traced, hitUv.sub(screenUv), lensOffset);
+
+      const plateUv = screenUv.add(offset).clamp(0.002, 0.998);
+      const smp: Vec = TSL.texture(this.plateTexture(), plateUv);
+      // DEPTH VALIDATION. The plate pass stored linear depth in alpha; reject any sample NEARER
+      // than this fragment, or a shape picks up the silhouette of whatever stands in front of it
+      // and the whole cluster gains a ghost outline. This is what buys the high blend weight.
+      const behind = smp.a.mul(FAR).greaterThanEqual(TSL.positionView.z.negate().sub(0.3));
+      const sampled: Vec = smp.rgb;
+      const weight = this.passIndex.mul(0.94).mul(select(behind, TSL.float(1), TSL.float(0)));
+      const base = blend(this.clearGlass, sampled, weight);
+
+      // Beer-Lambert, over a MEASURED path where the scene asks for one.
+      //
+      // 2R·(N·V) is exactly the chord through a cylinder, which is why the analytic fallback
+      // survives: for a rod it is not an approximation at all. It is wrong for everything else — a
+      // sphere gets one constant across its whole disc, a cone the same value at tip and base.
+      //
+      // The ndv^-0.6 is a deliberate cheat kept in BOTH branches. The true chord falls off so fast
+      // at the silhouette that it leaves a wide white rim eating most of the shape's width; since
+      // a cylinder's measured thickness is exactly 2·path·ndv, this reproduces the authored curve
+      // for rods while being correct elsewhere.
+      const backZ = decodeDepth(TSL.texture(this.depthTexture(), screenUv)).mul(FAR);
+      const viewZ = TSL.positionView.z.negate();
+      const measured = backZ.sub(viewZ).max(0).mul(ndv.max(0.02).pow(-0.6));
+      const analytic = TSL.float(2).mul(u.path).mul(ndv.pow(0.4));
+      // The trace already walked the real path, so where it hit there is nothing left to
+      // approximate: `hitT` IS the distance through the glass for this fragment's refracted ray.
+      const chord = select(traced, hitT, blend(analytic, measured, this.measuredThickness));
+      const trans = TSL.float(1).sub(u.density.mul(chord).negate().exp()).mul(amt);
+      const hue = transmittedHue(lit);
+      const col = base.mul(blend(vec3(1), hue, trans)).toVar();
+      col.addAssign(lit.mul(trans).mul(u.emission));
+
+      // The reflection layer. Where the mirror ray misses the plate it lands on the ROOM rather
+      // than a flat constant: a shape over a dark backdrop has nothing to reflect otherwise, and
+      // comes out a silhouette with no faces.
+      const f = TSL.float(0.04).add(TSL.float(0.96).mul(TSL.float(1).sub(ndv).pow(5)));
+      const mirror = TSL.reflect(view.negate(), normal);
+      const rf = plate(mirror);
+      const rfCol = blend(room(mirror, u.roughness), rf.rgb, rf.a);
+      const reflW = f.mul(0.16);
+      col.assign(blend(col, rfCol, reflW));
+      // DEV PROBES, for the harnesses in `scripts/`. Two rules make them trustworthy, and both
+      // were learnt by getting a dozen readings that described a frame which did not exist:
+      //
+      // They are substituted on the MAIN pass ONLY. The plate is drawn by this same material, so a
+      // probe that returns unconditionally rewrites the plate the main pass then samples.
+      //
+      // And they carry `plateAlpha`, not 1. The plate stores linear depth there and the main pass
+      // validates against it, so a probe returning 1 disables the very guard it is measuring.
+      const probe: Record<string, Vec> = {
+        view: view.mul(0.5).add(0.5),
+        ndv: vec3(ndv),
+        normal: normal.mul(0.5).add(0.5),
+        offset: vec3(offset.x.mul(5).add(0.5), offset.y.mul(5).add(0.5), 0.5),
+        chord: vec3(chord.mul(3)),
+        depthGuard: vec3(select(behind, TSL.float(1), TSL.float(0))),
+        amt: vec3(amt),
+        base,
+        lit,
+        trans: vec3(trans),
+      };
+      const asked = devProbe();
+      const wanted = asked ? probe[asked] : undefined;
+      if (wanted !== undefined)
+        return vec4(select(this.passIndex.greaterThan(0.5), wanted, col), plateAlpha);
+      return vec4(col, plateAlpha);
+    })();
+    return { material, uniforms: u, planes };
+  }
+
+  /**
+   * Build the light sheet, if the scene has one.
+   *
+   * The tracer is CPU-side and renderer-agnostic, so the geometry is shared with the GLSL engine
+   * verbatim — the optics were never the part that needed porting. What differs is only how the
+   * per-vertex colour, profile and travel it emits reach the fragment stage.
+   */
+  private buildBeam(): void {
+    if (this.beamMesh) {
+      this.scene.remove(this.beamMesh);
+      this.beamMesh.geometry.dispose();
+      (this.beamMesh.material as THREE.Material).dispose();
+      this.beamMesh = undefined;
+    }
+    const beam = this.config.beam;
+    if (!beam) return;
+
+    const targets = (beam.targets ?? [])
+      .map((name) => resolveItems(this.config).find((i) => i.name === name))
+      .filter((c): c is NonNullable<typeof c> => c !== undefined);
+    const sections = targets
+      .map((c) =>
+        crossSectionFor(c.shape.kind, c.shape.r, c.shape.sides, beam.rotation + c.rotation.z, {
+          x: c.position.x,
+          y: c.position.y,
+        }),
+      )
+      .filter((p): p is NonNullable<typeof p> => p !== undefined);
+    const polygon = sections[0] ?? prismCrossSection(beam.radius, beam.sides, beam.rotation);
+    const aim =
+      beam.entryAngle === undefined
+        ? aimBeam(polygon, beam.face, beam.incidence, beam.entry, beam.width, beam.distance)
+        : aimBeamAtAngle(
+            polygon,
+            beam.entryAngle + (beam.entry - 0.5) * (beam.entrySweep ?? 90),
+            beam.incidence,
+            beam.width,
+            beam.distance,
+          );
+
+    const { geometry } = buildLightSheet({
+      polygon,
+      extraSolids: sections
+        .slice(1)
+        .map((p, i) => ({ polygon: p, ior: targets[i + 1].material.ior ?? 1.5 })),
+      origin: aim.origin,
+      direction: aim.direction,
+      halfWidth: beam.width,
+      z: beam.z,
+      ior: beam.ior,
+      dispersion: beam.dispersion,
+      samples: beam.samples,
+      slices: beam.slices,
+      wallHalfExtent: this.beamWallExtent(beam.z),
+      exposure: beam.exposure,
+      edgeFalloff: beam.edgeFalloff,
+    });
+
+    const material = new THREE.NodeMaterial();
+    material.fragmentNode = beamPass({
+      intensity: uniform(beam.intensity),
+      edgeFalloff: uniform(beam.edgeFalloff),
+      falloffRate: uniform(beam.falloffRate),
+      falloffPower: uniform(beam.falloffPower),
+      reveal: this.beamReveal,
+    })(
+      TSL.attribute("aColor", "vec3"),
+      TSL.attribute("aProfile", "float"),
+      TSL.attribute("aTravel", "float"),
+    ) as never;
+    material.transparent = true;
+    material.blending = THREE.CustomBlending;
+    material.blendSrc = THREE.OneFactor;
+    material.blendDst = THREE.OneFactor;
+    material.blendSrcAlpha = THREE.ZeroFactor;
+    material.blendDstAlpha = THREE.OneFactor;
+    // A ribbon has no meaningful front: its winding flips with the beam direction, so half of it
+    // culls under FrontSide and the effect renders as nothing at all.
+    material.side = THREE.DoubleSide;
+    // Light, not a surface. It has no business occluding the glass, and writing depth would give
+    // it a circle of confusion in the post pass and blur the one element that must stay a filament.
+    material.depthTest = false;
+    material.depthWrite = false;
+
+    this.beamMesh = new THREE.Mesh(geometry, material);
+    this.beamMesh.frustumCulled = false;
+    this.beamMesh.renderOrder = 10;
+    this.scene.add(this.beamMesh);
+  }
+
+  /**
+   * Half-extents of the wall the beam terminates on, walked from the frustum at the sheet's depth.
+   *
+   * Derived rather than authored, exactly as the reference derives it: the exposure that balances
+   * the picture is a function of how far the light travels before it stops, so a scene that changes
+   * its lens or its distance must not also have to remember to resize the wall.
+   */
+  private beamWallExtent(z: number): THREE.Vector2 {
+    const distance = Math.abs(this.camera.position.z - z);
+    const halfY = Math.tan((this.camera.fov * Math.PI) / 360) * distance;
+    return new THREE.Vector2(halfY * this.camera.aspect, halfY);
+  }
+
+  /** Rebuild the item meshes from the config. */
+  private buildItems(): void {
+    for (const entry of this.items) {
+      this.scene.remove(entry.mesh);
+      entry.mesh.geometry.dispose();
+      (entry.mesh.material as THREE.Material).dispose();
+    }
+    // `resolveItems` rather than `config.items`: a scatter scene describes its shapes generatively
+    // and has an empty item list, so reading the list directly renders an empty frame.
+    this.items = resolveItems(this.config).map((item) => {
+      const { material, uniforms, planes } = this.buildItemMaterial(item);
+      const mesh = new THREE.Mesh(buildShape(item.shape), material);
+      mesh.position.set(item.position.x, item.position.y, item.position.z);
+      mesh.rotation.set(item.rotation.x, item.rotation.y, item.rotation.z);
+      mesh.scale.set(item.scale.x, item.scale.y, item.scale.z);
+      this.scene.add(mesh);
+      // AFTER the pose, not before: the planes are world-space and are read off the mesh's world
+      // matrix, so computing them first traces a solid sitting at the origin while the mesh you
+      // can see is somewhere else — which draws as refraction that lags the shape.
+      const entry = { mesh, uniforms, planes, config: item };
+      this.applyPrismPlanes(entry);
+      return entry;
+    });
+  }
+
+  /**
+   * Fill an item's world-space bounding planes, for the solids whose interior can be traced.
+   *
+   * Only a shape whose faces ARE planes qualifies, which is what limits this to prisms — the walk
+   * finds the exit by intersecting a ray with each face, and that is meaningless for a lathe.
+   *
+   * The local frame has to match three's lathe exactly: it places a vertex at
+   * `(r·sin(phi), y, r·cos(phi))`, so a face's outward normal is `(sin, 0, cos)` at the midpoint
+   * angle between two vertices, at the apothem `r·cos(pi/sides)`. Note this is NOT the convention
+   * `prismCrossSection` uses for the beam, which is `(cos, sin)`; they describe the same polygon
+   * from different starting angles and agree only because the beam's is rotated to match.
+   */
+  private applyPrismPlanes(entry: {
+    mesh: THREE.Mesh;
+    uniforms: Record<string, ReturnType<typeof uniform>>;
+    planes: THREE.Vector4[];
+    config?: ItemConfig;
+  }): void {
+    const u = entry.uniforms;
+    const shape = entry.config?.shape;
+    // The EFFECTIVE side count, not the field: `hex` is six-sided by definition and its builder
+    // ignores `shape.sides` entirely, so reading the field traces a solid the mesh is not — a
+    // triangle refracting inside a hexagon.
+    const sides = shape?.kind === "hex" ? 6 : (shape?.sides ?? 0);
+    const eligible =
+      this.config.tracedRefraction &&
+      shape !== undefined &&
+      (shape.kind === "prism" || shape.kind === "hex") &&
+      sides >= 3 &&
+      sides <= 8;
+    if (!eligible) {
+      u.prism.value = 0;
+      u.planeCount.value = 0;
+      return;
+    }
+
+    entry.mesh.updateMatrixWorld(true);
+    const normalMatrix = this.normalScratch.getNormalMatrix(entry.mesh.matrixWorld);
+    const apothem = shape.r * Math.cos(Math.PI / sides);
+    const half = shape.len / 2;
+    const normal = new THREE.Vector3();
+    const point = new THREE.Vector3();
+    let count = 0;
+
+    for (let i = 0; i < sides && count < PRISM_PLANES; i++) {
+      const a = (Math.PI * 2 * (i + 0.5)) / sides;
+      normal.set(Math.sin(a), 0, Math.cos(a));
+      point.copy(normal).multiplyScalar(apothem);
+      writePlane(entry.planes[count++], normal, point, normalMatrix, entry.mesh.matrixWorld);
+    }
+    for (const dir of [1, -1]) {
+      if (count >= PRISM_PLANES) break;
+      normal.set(0, dir, 0);
+      point.set(0, dir * half, 0);
+      writePlane(entry.planes[count++], normal, point, normalMatrix, entry.mesh.matrixWorld);
+    }
+    u.prism.value = 1;
+    u.planeCount.value = count;
+  }
+
+  /**
+   * The plate texture the main pass refracts.
+   *
+   * A method rather than a captured reference because the target is reallocated on resize, and a
+   * graph holding the old texture would sample storage that no longer exists.
+   */
+  private buildDepthMaterial(): THREE.NodeMaterial {
+    const material = new THREE.NodeMaterial();
+    // `positionView.z` is negative in front of the camera; the encoding wants a distance.
+    material.fragmentNode = depthPass(TSL.positionView.z.negate(), FAR) as never;
+    material.side = THREE.BackSide;
+    return material;
+  }
+
+  /** Back-face linear depth, for the measured optical path. Same placeholder rule as the plate. */
+  private depthTexture(): THREE.Texture {
+    this.placeholder ??= new THREE.DataTexture(new Uint8Array([0, 0, 0, 255]), 1, 1);
+    this.placeholder.needsUpdate = true;
+    return this.targets?.back.texture ?? this.placeholder;
+  }
+
+  private plateTexture(): THREE.Texture {
+    this.placeholder ??= new THREE.DataTexture(new Uint8Array([0, 0, 0, 255]), 1, 1);
+    this.placeholder.needsUpdate = true;
+    return this.targets?.plate.texture ?? this.placeholder;
+  }
+
+  private applyConfig(): void {
+    const c = this.config;
+    const [r, g, b] = parseHex(c.background);
+    (this.top.value as THREE.Vector3).set(r * 0.958, g * 0.958, b * 0.96);
+    (this.bottom.value as THREE.Vector3).set(
+      Math.min(1, r * 1.005),
+      Math.min(1, g * 1.002),
+      Math.min(1, b * 0.995),
+    );
+    this.toneMode.value = c.post.toneMap === "aces" ? 2 : c.post.toneMap === "neutral" ? 1 : 0;
+    const p = c.post;
+    this.bloomThreshold.value = p.bloomThreshold;
+    this.bloomRadius.value = p.bloomSpread;
+    this.bloomAmount.value = p.bloom;
+    // The pyramid or the gather, never both — they are two answers to the same question, and
+    // summing them doubles the halo.
+    this.bloomMode.value = p.bloomMode === "pyramid" ? 1 : 0;
+    this.focus.value = p.focus;
+    this.range.value = Math.max(p.range, 1e-3);
+    this.aperture.value = p.aperture;
+    this.caustics.value = p.caustics;
+    this.haze.value = p.haze;
+    this.hazeTop.value = p.hazeTop;
+    this.vignette.value = p.vignette;
+    // The scene's own mirror composes with the target flip: mirroring vertically means NOT
+    // flipping, because the source is already inverted.
+    (this.sourceFlip.value as THREE.Vector2).set(c.mirrorH ? 1 : 0, c.mirrorV ? 0 : 1);
+    this.grain.value = p.grain;
+    const [hr, hg, hb] = parseHex(c.background);
+    (this.hazeColor.value as THREE.Vector3).set(hr, hg, hb);
+
+    const lamps = c.lamps.slice(0, MAX_LAMPS);
+    lamps.forEach((lamp, i) => {
+      this.lampData[i].set(lamp.x, lamp.y, Math.max(lamp.r, 1e-4), lamp.intensity);
+      const [lr, lg, lb] = parseHex(lamp.color);
+      this.lampColors[i].set(lr, lg, lb);
+    });
+    this.lampCount.value = lamps.length;
+    this.lampGain.value = c.lampGain;
+    this.lampLo.value = c.lampGate.lo;
+    this.lampHi.value = c.lampGate.hi;
+    this.plateZ.value = c.plate.z;
+    (this.plateScale.value as THREE.Vector2).set(c.plate.scale.x, c.plate.scale.y);
+    (this.plateOffset.value as THREE.Vector2).set(c.plate.offset.x, c.plate.offset.y);
+    (this.clearGlass.value as THREE.Vector3).set(...rgb(c.clearGlass));
+    this.measuredThickness.value = c.measuredThickness ? 1 : 0;
+  }
+
+  /**
+   * Build the pass chain, once the targets exist.
+   *
+   * Every graph here closes over a target's texture, so this cannot run before allocation and has
+   * to run again after a resize replaces one. Node graphs are compiled per material, so rebuilding
+   * is not free — but it happens on resize, not per frame.
+   */
+  private buildPasses(t: PassTargets): void {
+    this.passes = {
+      extract: passMaterial(bloomExtractPass(t.color.texture, this.bloomThreshold, texel(t.color))),
+      down: BLOOM_DIVISORS.slice(1).map((_, i) =>
+        passMaterial(bloomDownPass(t.bloom[i].a.texture, texel(t.bloom[i].a))),
+      ),
+      blur: BLOOM_DIVISORS.map((_, i) => {
+        const taps = BLOOM_TAPS[i];
+        const sigma = TSL.float(taps / 3);
+        return {
+          h: passMaterial(
+            bloomBlurPass(t.bloom[i].a.texture, taps, sigma, TSL.vec2(1, 0), texel(t.bloom[i].a)),
+          ),
+          v: passMaterial(
+            bloomBlurPass(t.bloom[i].b.texture, taps, sigma, TSL.vec2(0, 1), texel(t.bloom[i].a)),
+          ),
+        };
+      }),
+      composite: passMaterial(
+        bloomCompositePass(
+          t.bloom[0].a.texture,
+          t.bloom[1].a.texture,
+          t.bloom[2].a.texture,
+          this.bloomRadius,
+        ),
+      ),
+      post: passMaterial(
+        postPass({
+          color: t.color.texture,
+          depth: t.back.texture,
+          bloom: t.bloom[0].b.texture,
+          res: this.resolution,
+          mirror: this.sourceFlip,
+          focus: this.focus,
+          range: this.range,
+          aperture: this.aperture,
+          scale: TSL.float(1),
+          far: FAR,
+          dofTaps: 12,
+          causticTaps: 6,
+          bloomAmount: this.bloomAmount,
+          bloomMode: this.bloomMode,
+          bloomRadius: this.bloomRadius,
+          bloomThresh: this.bloomThreshold,
+          caustics: this.caustics,
+          haze: this.haze,
+          hazeTop: this.hazeTop,
+          hazeColor: this.hazeColor,
+          vignette: this.vignette,
+          grain: this.grain,
+          time: this.timeUniform,
+          transparent: TSL.float(0),
+          toneMap: this.toneMode,
+        }),
+      ),
+    };
+  }
+
+  /**
+   * Threshold, then blur a half-resolution pyramid separably, then recombine.
+   *
+   * Wider kernels are nearly free on the smaller levels, which is what buys the broad wash: a real
+   * halo spans several octaves at once, and a single-radius gather has to pick one of them and lose
+   * the rest. The composite resolves at HALF resolution rather than at the bottom of the pyramid —
+   * compositing at a sixteenth and letting post upscale it puts a staircase along every thin
+   * diagonal highlight.
+   */
+  private async renderBloom(t: PassTargets): Promise<void> {
+    if (!this.passes) return;
+    await this.quad.blit(this.renderer, this.passes.extract, t.bloom[0].a);
+    for (let i = 0; i < BLOOM_DIVISORS.length; i++) {
+      if (i > 0) await this.quad.blit(this.renderer, this.passes.down[i - 1], t.bloom[i].a);
+      await this.quad.blit(this.renderer, this.passes.blur[i].h, t.bloom[i].b);
+      await this.quad.blit(this.renderer, this.passes.blur[i].v, t.bloom[i].a);
+    }
+    await this.quad.blit(this.renderer, this.passes.composite, t.bloom[0].b);
+  }
+
+  /**
+   * Draw the inner interface of every traced solid into the plate.
+   *
+   * BETWEEN the plate and the main pass, because the plate is what the main pass refracts — this is
+   * where a back interface has to land for the front face to be able to show it.
+   *
+   * One material for every item, its plane set rewritten per draw. The alternative is a material
+   * per item, and since the graph is identical apart from uniform values that buys a compile each.
+   *
+   * The mesh moves into its own scene for the draw rather than having its material swapped in
+   * place: rendering an object that still belongs to another scene picks up that scene's state.
+   */
+  private async renderBackGlass(t: PassTargets): Promise<void> {
+    if (!this.config.tracedRefraction || this.config.backGlassStrength <= 0) return;
+    const traced = this.items.filter((item) => (item.uniforms.prism.value as number) > 0.5);
+    if (!traced.length) return;
+
+    this.backGlass ??= this.buildBackGlass();
+    const bg = this.backGlass;
+    bg.strength.value = this.config.backGlassStrength;
+
+    // AUTO-CLEAR OFF for the duration. Every `renderAsync` clears its target first, so a pass that
+    // is supposed to ADD to the plate erases it instead and leaves only its own contribution —
+    // additively blended over nothing. The symptom is a frame that gets darker when a light-adding
+    // pass is switched on, which reads as the pass being wrong rather than as the clear.
+    const previousAutoClear = this.renderer.autoClear;
+    this.renderer.autoClear = false;
+    this.renderer.setRenderTarget(t.plate);
+    for (const item of traced) {
+      bg.count.value = item.uniforms.planeCount.value;
+      for (const [i, plane] of item.planes.entries()) bg.planes[i].copy(plane);
+      bg.ior.value = item.uniforms.ior.value;
+      // Re-emit the depth the plate pass stored, so the main pass's validation still passes.
+      bg.depth.value = Math.abs(item.mesh.position.z - this.camera.position.z) / FAR;
+
+      const home = item.mesh.parent;
+      const previous = item.mesh.material;
+      item.mesh.material = bg.material;
+      this.backGlassScene.add(item.mesh);
+      await this.renderer.renderAsync(this.backGlassScene, this.camera);
+      this.backGlassScene.remove(item.mesh);
+      item.mesh.material = previous;
+      home?.add(item.mesh);
+    }
+    this.renderer.autoClear = previousAutoClear;
+  }
+
+  private buildBackGlass(): NonNullable<NodeMaterialRenderer["backGlass"]> {
+    const planes = Array.from({ length: PRISM_PLANES }, () => new THREE.Vector4(0, 0, 1, 0));
+    const planeArray = TSL.uniformArray(planes);
+    const count = uniform(0, "int");
+    const ior = uniform(1.5);
+    const strength = uniform(1);
+    const depth = uniform(1);
+
+    const material = new THREE.NodeMaterial();
+    material.fragmentNode = backGlassPass({
+      planes: planeArray,
+      planeCount: count,
+      ior,
+      strength,
+      plateDepth: depth,
+      // Mirror-smooth: the interior reflects the room sharply, and a cone here would blur away the
+      // very structure that tells a viewer they are looking through a solid rather than a shell.
+      room: (dir: Vec) =>
+        this.config.studio === "softbox"
+          ? studioSoftbox(dir).mul(this.config.studioGain)
+          : studioGradient(dir),
+      bounces: BACK_GLASS_BOUNCES,
+    })(TSL.positionWorld, TSL.normalWorld, TSL.cameraPosition) as never;
+    // Additive on COLOUR, alpha untouched — the plate's alpha is depth, not coverage.
+    material.transparent = true;
+    material.blending = THREE.CustomBlending;
+    material.blendSrc = THREE.OneFactor;
+    material.blendDst = THREE.OneFactor;
+    material.blendSrcAlpha = THREE.ZeroFactor;
+    material.blendDstAlpha = THREE.OneFactor;
+    material.side = THREE.BackSide;
+    // The plate already holds the solid's FRONT faces, so a depth-tested back face is behind them
+    // and rejected everywhere but a few silhouette pixels.
+    material.depthTest = false;
+    material.depthWrite = false;
+    return { material, planes, count, ior, strength, depth };
+  }
+
+  /** What the GLSL engine draws and this one does not yet. Named so a gap is visible, not silent. */
+  private renderPending(): void {
+    // Items, the plate and depth passes, the beam, dust and the post chain are still to port.
+  }
+
+  resize(): void {
+    const w = this.container.clientWidth || 1;
+    const h = this.container.clientHeight || 1;
+    const ratio = Math.min(globalThis.devicePixelRatio || 1, 2);
+    this.renderer.setPixelRatio(ratio);
+    this.renderer.setSize(w, h, this.ownsCanvas);
+    this.camera.aspect = w / h;
+    this.aspect.value = w / h;
+    this.camera.updateProjectionMatrix();
+
+    const pw = Math.max(1, Math.floor(w * ratio));
+    const ph = Math.max(1, Math.floor(h * ratio));
+    (this.resolution.value as THREE.Vector2).set(pw, ph);
+    const hdr = this.config.post.toneMap !== "none";
+    if (!this.targets) {
+      this.targets = createTargets(pw, ph, hdr);
+      this.buildPasses(this.targets);
+    } else {
+      resizeTargets(this.targets, pw, ph);
+      // The graphs hold texture references, and a resize replaces the underlying storage — for the
+      // items too, which sample the plate.
+      this.buildPasses(this.targets);
+      if (this.items.length) this.buildItems();
+    }
+  }
+
+  private async draw(): Promise<void> {
+    await this.ready;
+    const t = this.targets;
+    if (!t || !this.passes) {
+      // Before the targets exist there is nothing to compose, so draw straight to the screen
+      // rather than skipping the frame entirely and showing whatever was there before.
+      this.renderer.setRenderTarget(null);
+      await this.renderer.renderAsync(this.scene, this.camera);
+      return;
+    }
+    this.timeUniform.value = this.time;
+
+    // 0. Depth — the back faces, as linear depth. The post pass's gather measures its circle of
+    //    confusion against this, and without it every fragment reads depth zero and comes back at
+    //    maximum defocus, which is a frame of blocks rather than a picture.
+    this.depthMaterial ??= this.buildDepthMaterial();
+    this.scene.overrideMaterial = this.depthMaterial;
+    this.renderer.setRenderTarget(t.back);
+    await this.renderer.renderAsync(this.scene, this.camera);
+    this.scene.overrideMaterial = null;
+
+    // 1. Plate — the backdrop and every shape, un-refracted. What the main pass refracts.
+    this.passIndex.value = 0;
+    this.renderer.setRenderTarget(t.plate);
+    await this.renderer.renderAsync(this.scene, this.camera);
+
+    // 1b. The solids' INNER interfaces, added into the plate — light that bounced its way back out
+    //     of a far face, so the near faces have something to show other than the backdrop.
+    await this.renderBackGlass(t);
+
+    // 2. Main — the same frame again, now refracting the plate. Tubes refracting tubes.
+    this.passIndex.value = 1;
+    this.renderer.setRenderTarget(t.color);
+    await this.renderer.renderAsync(this.scene, this.camera);
+
+    // 3. Bloom, between main and post so it sees the frame while it still has range to work with.
+    await this.renderBloom(t);
+
+    // A dev harness can ask for an intermediate target instead of the composed frame.
+    const dump = devProbe();
+    if (dump === "plate" || dump === "back") {
+      const src = dump === "plate" ? t.plate.texture : t.back.texture;
+      // Alpha forced to one: the plate stores linear DEPTH there, and letting it reach the canvas
+      // composites the whole frame away at about one percent opacity.
+      this.debugBlit ??= passMaterial(
+        vec4(TSL.texture(src, TSL.vec2(TSL.screenUV.x, TSL.float(1).sub(TSL.screenUV.y))).rgb, 1),
+      );
+      await this.quad.blit(this.renderer, this.debugBlit, null);
+      return;
+    }
+    // 4. Post — to the screen.
+    await this.quad.blit(this.renderer, this.passes.post, null);
+    this.renderPending();
+  }
+
+  renderOnce(): void {
+    void this.draw();
+  }
+
+  start(): this {
+    if (this.running) return this;
+    this.running = true;
+    const loop = () => {
+      if (!this.running) return;
+      this.frame = requestAnimationFrame(loop);
+      if (!this.config.paused) this.time += 1 / 60;
+      void this.draw();
+    };
+    this.frame = requestAnimationFrame(loop);
+    return this;
+  }
+
+  stop(): this {
+    this.running = false;
+    cancelAnimationFrame(this.frame);
+    return this;
+  }
+
+  refreshPlayback(): void {
+    if (this.config.paused) this.stop();
+    else this.start();
+  }
+
+  seek(time: number): void {
+    this.time = time;
+    this.renderOnce();
+  }
+
+  getConfig(): SceneConfig {
+    return this.config;
+  }
+
+  setConfig(config: Partial<SceneConfig>): void {
+    this.config = ensureSceneConfig({ ...this.config, ...config });
+    this.applyConfig();
+    this.renderOnce();
+  }
+
+  setLamps(lamps: LampConfig[]): this {
+    this.config.lamps = lamps;
+    this.applyConfig();
+    return this;
+  }
+
+  setPost(post: Partial<PostConfig>): this {
+    this.config.post = { ...this.config.post, ...post };
+    this.applyConfig();
+    return this;
+  }
+
+  async captureImage(mime = "image/webp", quality?: number, time?: number): Promise<Blob> {
+    if (time !== undefined) this.time = time;
+    await this.draw();
+    return new Promise<Blob>((resolve, reject) => {
+      this.canvas.toBlob(
+        (blob) => (blob ? resolve(blob) : reject(new Error("captureImage produced no blob"))),
+        mime,
+        quality,
+      );
+    });
+  }
+
+  dispose(): void {
+    this.stop();
+    if (this.targets) disposeTargets(this.targets);
+    this.quad.dispose();
+    this.renderer.dispose();
+    if (this.ownsCanvas) this.canvas.remove();
+  }
+}

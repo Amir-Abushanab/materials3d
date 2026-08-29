@@ -1,0 +1,538 @@
+{
+  "background": "#f1f0ee",
+  "transparentBackground": false,
+  "clearGlass": "#f5f4f2",
+  "lamps": [
+    {
+      "x": 0.32,
+      "y": 0.58,
+      "r": 0.24,
+      "color": "#ffd08a",
+      "intensity": 1
+    },
+    {
+      "x": 0.58,
+      "y": 0.44,
+      "r": 0.2,
+      "color": "#e879c8",
+      "intensity": 0.95
+    },
+    {
+      "x": 0.78,
+      "y": 0.64,
+      "r": 0.18,
+      "color": "#7fd4f0",
+      "intensity": 0.95
+    }
+  ],
+  "studio": "gradient",
+  "environment": "analytic",
+  "transmission": "simple",
+  "studioGain": 1,
+  "lampGain": 1.4,
+  "lampGate": {
+    "lo": 0.06,
+    "hi": 0.94
+  },
+  "backdropLamps": 0.05,
+  "plate": {
+    "z": -3,
+    "scale": {
+      "x": 26,
+      "y": 20
+    },
+    "offset": {
+      "x": 0.5,
+      "y": 0.5
+    }
+  },
+  "camera": {
+    "fov": 16,
+    "distance": 38,
+    "lookAt": {
+      "x": 0,
+      "y": 0,
+      "z": 0
+    },
+    "height": 0.5,
+    "roll": 0,
+    "fit": "cover",
+    "minVisibleWidth": 0
+  },
+  "post": {
+    "focus": 38,
+    "range": 9,
+    "aperture": 11,
+    "bloom": 0.03,
+    "caustics": 0.14,
+    "haze": 0.08,
+    "hazeTop": 0.08,
+    "hazeColor": "#f6f5f3",
+    "vignette": 0.16,
+    "grain": 0.012,
+    "bloomRadius": 9,
+    "bloomThreshold": 0,
+    "toneMap": "none",
+    "bloomMode": "gather",
+    "bloomSpread": 0.5,
+    "innerLight": 0,
+    "innerLightDensity": 0.5,
+    "innerLightDecay": 0.94,
+    "innerLightX": 0.5,
+    "innerLightY": 0.15,
+    "dither": 0,
+    "ditherScale": 2,
+    "ditherSteps": 4,
+    "halftone": 0,
+    "halftoneCell": 6,
+    "halftoneAngle": 0.4,
+    "halftoneCmyk": 0,
+    "halftoneCmykCell": 6,
+    "paperTexture": 0,
+    "paperTextureScale": 2
+  },
+  "orbit": true,
+  "tracedRefraction": false,
+  "backGlassStrength": 0,
+  "measuredThickness": true,
+  "loopSeconds": 0,
+  "introRamp": true,
+  "mirrorH": false,
+  "mirrorV": false,
+  "backgroundMode": "color",
+  "backgroundPalette": [
+    {
+      "color": "#efedeb",
+      "position": 0
+    },
+    {
+      "color": "#d9d5f0",
+      "position": 1
+    }
+  ],
+  "backgroundGradientType": "linear",
+  "backgroundGradientAngle": 1.5707963267948966,
+  "backgroundMeshPoints": [
+    {
+      "x": 0.25,
+      "y": 0.3,
+      "color": "#f3d9e8"
+    },
+    {
+      "x": 0.75,
+      "y": 0.35,
+      "color": "#d7e0f6"
+    },
+    {
+      "x": 0.5,
+      "y": 0.8,
+      "color": "#f7f0e4"
+    }
+  ],
+  "backgroundMeshSoftness": 0.55,
+  "backgroundImageFit": "cover",
+  "backgroundImageZoom": 1,
+  "backgroundImagePosition": {
+    "x": 0.5,
+    "y": 0.5
+  },
+  "items": [
+    {
+      "shape": {
+        "kind": "blob",
+        "r": 2,
+        "len": 8,
+        "thickness": 0.5,
+        "fillet": 0,
+        "bevel": 0,
+        "sides": 72,
+        "hole": 1,
+        "shaft": 0.35,
+        "head": 1,
+        "depth": 0.5,
+        "seed": 7,
+        "bump": 0.85
+      },
+      "position": {
+        "x": -5.4,
+        "y": 0.2,
+        "z": 0
+      },
+      "rotation": {
+        "x": 0.2,
+        "y": 0.7,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "material": {
+        "kind": "liquid",
+        "ior": 1.38,
+        "density": 1.55,
+        "dispersion": 0.03,
+        "ripple": 0.62,
+        "rippleScale": 2.1,
+        "flow": 0.45,
+        "rim": 0.72,
+        "specular": 1.3,
+        "saturation": 1.22,
+        "emission": 0.06,
+        "iridescence": 0.26,
+        "filmNm": 340,
+        "tint": "#8ede3c",
+        "path": 0.84
+      },
+      "motion": {
+        "kind": "wobble",
+        "axis": "y",
+        "rate": 0.9,
+        "amount": 0.14
+      },
+      "phase": 0
+    },
+    {
+      "shape": {
+        "kind": "droplet",
+        "r": 1.5,
+        "len": 3.5,
+        "thickness": 0.5,
+        "fillet": 0,
+        "bevel": 0,
+        "sides": 72,
+        "hole": 1,
+        "shaft": 0.35,
+        "head": 1,
+        "depth": 0.5,
+        "seed": 1,
+        "bump": 0.5
+      },
+      "position": {
+        "x": -2.4,
+        "y": -2.3,
+        "z": 1.7
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0.08
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "material": {
+        "kind": "liquid",
+        "ior": 1.38,
+        "density": 1.55,
+        "dispersion": 0.03,
+        "ripple": 0.62,
+        "rippleScale": 2.1,
+        "flow": 0.45,
+        "rim": 0.72,
+        "specular": 1.3,
+        "saturation": 1.22,
+        "emission": 0.06,
+        "iridescence": 0.26,
+        "filmNm": 340,
+        "tint": "#f04fae",
+        "path": 0.63
+      },
+      "motion": {
+        "kind": "wobble",
+        "axis": "y",
+        "rate": 0.9,
+        "amount": 0.12
+      },
+      "phase": 1.9
+    },
+    {
+      "shape": {
+        "kind": "blob",
+        "r": 1.7,
+        "len": 8,
+        "thickness": 0.5,
+        "fillet": 0,
+        "bevel": 0,
+        "sides": 72,
+        "hole": 1,
+        "shaft": 0.35,
+        "head": 1,
+        "depth": 0.5,
+        "seed": 12,
+        "bump": 0.78
+      },
+      "position": {
+        "x": 0.2,
+        "y": 1,
+        "z": -1
+      },
+      "rotation": {
+        "x": 0.3,
+        "y": 2.1,
+        "z": 0.2
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "material": {
+        "kind": "liquid",
+        "ior": 1.38,
+        "density": 1.55,
+        "dispersion": 0.03,
+        "ripple": 0.62,
+        "rippleScale": 2.1,
+        "flow": 0.45,
+        "rim": 0.72,
+        "specular": 1.3,
+        "saturation": 1.22,
+        "emission": 0.06,
+        "iridescence": 0.26,
+        "filmNm": 340,
+        "tint": "#3fd2e6",
+        "path": 0.714
+      },
+      "motion": {
+        "kind": "wobble",
+        "axis": "y",
+        "rate": 0.9,
+        "amount": 0.15
+      },
+      "phase": 3.8
+    },
+    {
+      "shape": {
+        "kind": "droplet",
+        "r": 1.15,
+        "len": 2.7,
+        "thickness": 0.5,
+        "fillet": 0,
+        "bevel": 0,
+        "sides": 72,
+        "hole": 1,
+        "shaft": 0.35,
+        "head": 1,
+        "depth": 0.5,
+        "seed": 1,
+        "bump": 0.5
+      },
+      "position": {
+        "x": 2.8,
+        "y": -2.3,
+        "z": 0.8
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": -0.12
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "material": {
+        "kind": "liquid",
+        "ior": 1.38,
+        "density": 1.55,
+        "dispersion": 0.03,
+        "ripple": 0.62,
+        "rippleScale": 2.1,
+        "flow": 0.45,
+        "rim": 0.72,
+        "specular": 1.3,
+        "saturation": 1.22,
+        "emission": 0.06,
+        "iridescence": 0.26,
+        "filmNm": 340,
+        "tint": "#ff9130",
+        "path": 0.48299999999999993
+      },
+      "motion": {
+        "kind": "wobble",
+        "axis": "y",
+        "rate": 0.9,
+        "amount": 0.11
+      },
+      "phase": 5.699999999999999
+    },
+    {
+      "shape": {
+        "kind": "blob",
+        "r": 1.9,
+        "len": 8,
+        "thickness": 0.5,
+        "fillet": 0,
+        "bevel": 0,
+        "sides": 72,
+        "hole": 1,
+        "shaft": 0.35,
+        "head": 1,
+        "depth": 0.5,
+        "seed": 21,
+        "bump": 0.9
+      },
+      "position": {
+        "x": 5.2,
+        "y": 0.1,
+        "z": -0.4
+      },
+      "rotation": {
+        "x": 0.1,
+        "y": 2.8,
+        "z": 0.3
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "material": {
+        "kind": "liquid",
+        "ior": 1.38,
+        "density": 1.55,
+        "dispersion": 0.03,
+        "ripple": 0.62,
+        "rippleScale": 2.1,
+        "flow": 0.45,
+        "rim": 0.72,
+        "specular": 1.3,
+        "saturation": 1.22,
+        "emission": 0.06,
+        "iridescence": 0.26,
+        "filmNm": 340,
+        "tint": "#9a5ff0",
+        "path": 0.7979999999999999
+      },
+      "motion": {
+        "kind": "wobble",
+        "axis": "y",
+        "rate": 0.9,
+        "amount": 0.13
+      },
+      "phase": 7.6
+    },
+    {
+      "shape": {
+        "kind": "sphere",
+        "r": 1,
+        "len": 8,
+        "thickness": 0.5,
+        "fillet": 0,
+        "bevel": 0,
+        "sides": 72,
+        "hole": 1,
+        "shaft": 0.35,
+        "head": 1,
+        "depth": 0.5,
+        "seed": 1,
+        "bump": 0.5
+      },
+      "position": {
+        "x": -6.9,
+        "y": -2.6,
+        "z": 1.2
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "material": {
+        "kind": "liquid",
+        "ior": 1.38,
+        "density": 1.55,
+        "dispersion": 0.03,
+        "ripple": 0.62,
+        "rippleScale": 2.1,
+        "flow": 0.45,
+        "rim": 0.72,
+        "specular": 1.3,
+        "saturation": 1.22,
+        "emission": 0.06,
+        "iridescence": 0.26,
+        "filmNm": 340,
+        "tint": "#f5d63c",
+        "path": 0.42
+      },
+      "motion": {
+        "kind": "wobble",
+        "axis": "y",
+        "rate": 0.9,
+        "amount": 0.16
+      },
+      "phase": 9.5
+    },
+    {
+      "shape": {
+        "kind": "blob",
+        "r": 1.05,
+        "len": 8,
+        "thickness": 0.5,
+        "fillet": 0,
+        "bevel": 0,
+        "sides": 72,
+        "hole": 1,
+        "shaft": 0.35,
+        "head": 1,
+        "depth": 0.5,
+        "seed": 33,
+        "bump": 0.95
+      },
+      "position": {
+        "x": 7.1,
+        "y": -2.6,
+        "z": 1.4
+      },
+      "rotation": {
+        "x": 0.4,
+        "y": 1.2,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "material": {
+        "kind": "liquid",
+        "ior": 1.38,
+        "density": 1.55,
+        "dispersion": 0.03,
+        "ripple": 0.62,
+        "rippleScale": 2.1,
+        "flow": 0.45,
+        "rim": 0.72,
+        "specular": 1.3,
+        "saturation": 1.22,
+        "emission": 0.06,
+        "iridescence": 0.26,
+        "filmNm": 340,
+        "tint": "#ff5f7a",
+        "path": 0.441
+      },
+      "motion": {
+        "kind": "wobble",
+        "axis": "y",
+        "rate": 0.9,
+        "amount": 0.17
+      },
+      "phase": 11.399999999999999
+    }
+  ],
+  "groups": [],
+  "quality": 1,
+  "dprMax": 1.75,
+  "paused": false,
+  "timeOffset": 0
+}

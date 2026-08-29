@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-label="Materials3D">
+  <!--
+    Favicon cut of the mark. Same rod, same lamps, reduced until it survives 16px:
+    the dispersion fringe and the specular streak are both sub-pixel there and only add mush,
+    the rod is scaled up so its colour carries the tile, and the chord is pushed harder so the
+    clear rim still reads after downsampling. Keep this in sync with mark.svg by eye, not by diff.
+  -->
+  <defs>
+    <linearGradient id="f-barrel" x1="0" y1="1" x2="0" y2="0">
+      <stop offset="0" stop-color="#f8c852"/><stop offset=".22" stop-color="#f59d3e"/>
+      <stop offset=".44" stop-color="#ee4f45"/><stop offset=".64" stop-color="#e2418a"/>
+      <stop offset=".84" stop-color="#ab4fc8"/><stop offset="1" stop-color="#7d63d6"/>
+    </linearGradient>
+    <linearGradient id="f-chord" gradientUnits="userSpaceOnUse" x1="70" y1="0" x2="186" y2="0">
+      <stop offset="0" stop-color="#f7f6f5" stop-opacity="1"/>
+      <stop offset=".13" stop-color="#f7f6f5" stop-opacity=".62"/>
+      <stop offset=".34" stop-color="#f7f6f5" stop-opacity="0"/>
+      <stop offset=".70" stop-color="#f7f6f5" stop-opacity="0"/>
+      <stop offset=".88" stop-color="#f7f6f5" stop-opacity=".62"/>
+      <stop offset="1" stop-color="#f7f6f5" stop-opacity="1"/>
+    </linearGradient>
+    <linearGradient id="f-face" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#fdfcfb"/><stop offset="1" stop-color="#e4d8ee"/>
+    </linearGradient>
+    <radialGradient id="f-l1"><stop offset="0" stop-color="#f59d3e" stop-opacity=".72"/><stop offset="1" stop-color="#f59d3e" stop-opacity="0"/></radialGradient>
+    <radialGradient id="f-l2"><stop offset="0" stop-color="#b461cb" stop-opacity=".66"/><stop offset="1" stop-color="#b461cb" stop-opacity="0"/></radialGradient>
+    <clipPath id="f-plate"><rect width="256" height="256" rx="58"/></clipPath>
+    <clipPath id="f-rod"><path d="M70 40 L70 330 L186 330 L186 40 A58 18 0 0 1 70 40 Z"/></clipPath>
+  </defs>
+  <g clip-path="url(#f-plate)">
+    <rect width="256" height="256" fill="#efedeb"/>
+    <ellipse cx="44" cy="50" rx="84" ry="76" fill="url(#f-l1)"/>
+    <ellipse cx="218" cy="208" rx="88" ry="80" fill="url(#f-l2)"/>
+    <g transform="rotate(-17 128 150)">
+      <g clip-path="url(#f-rod)">
+        <rect x="70" y="22" width="116" height="308" fill="url(#f-barrel)"/>
+        <rect x="70" y="22" width="116" height="308" fill="url(#f-chord)"/>
+      </g>
+      <ellipse cx="128" cy="40" rx="58" ry="18" fill="url(#f-face)"/>
+    </g>
+  </g>
+</svg>

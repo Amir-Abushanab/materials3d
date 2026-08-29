@@ -1,0 +1,10 @@
+node_modules/
+dist/
+dist-embed/
+*.local
+.DS_Store
+.vite/
+*.log
+scratchpad/
+*.tsbuildinfo
+__pycache__/

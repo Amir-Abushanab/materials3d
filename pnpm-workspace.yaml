@@ -1,0 +1,21 @@
+packages:
+  - "apps/*"
+  - "packages/*"
+
+# pnpm reads package settings from here (not the package.json "pnpm" field).
+# Allow esbuild (a Vite dependency) to run its install script so its native binary is
+# set up; pnpm blocks dependency build scripts by default.
+# Playwright's install script places the browser it needs; without it `pnpm render` has nothing
+# to drive. It is a no-op when a matching revision is already in ~/Library/Caches/ms-playwright.
+allowBuilds:
+  esbuild: true
+  playwright: true
+
+# tweakpane 4 ships types that re-export @tweakpane/core but doesn't declare it as a
+# dependency. Declare it as a peer so pnpm nests @tweakpane/core under tweakpane and the
+# Pane types (addFolder/refresh/binding events) stay resolvable. The studio provides it
+# as a devDependency.
+packageExtensions:
+  tweakpane:
+    peerDependencies:
+      "@tweakpane/core": "*"

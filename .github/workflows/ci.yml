@@ -1,0 +1,71 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Check & build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm check
+      - run: pnpm build
+
+  # Gate the deploy on the Cloudflare secrets existing, so the very first push — before
+  # they've been added — still shows a green CI instead of a red "missing token" failure.
+  preflight:
+    name: Deploy preflight
+    needs: check
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    outputs:
+      deploy: ${{ steps.gate.outputs.deploy }}
+    steps:
+      - id: gate
+        env:
+          CF_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          if [ -n "$CF_API_TOKEN" ]; then
+            echo "deploy=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::CLOUDFLARE_API_TOKEN not set — skipping the studio deploy."
+          fi
+
+  deploy-studio:
+    name: Deploy studio → Cloudflare Pages
+    needs: preflight
+    if: needs.preflight.outputs.deploy == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter materials-studio build
+      # cloudflare/wrangler-action auto-installs wrangler via `pnpm add`, which pnpm refuses at a
+      # workspace root (ERR_PNPM_ADDING_TO_ROOT). Invoke wrangler directly — `pnpm dlx` runs it
+      # from a temp store without touching the workspace, and it reads the CLOUDFLARE_* env.
+      - name: Deploy to Cloudflare Pages
+        run: |
+          pnpm dlx wrangler pages project create materials-studio --production-branch=main || true
+          pnpm dlx wrangler pages deploy apps/studio/dist --project-name=materials-studio --branch=main
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

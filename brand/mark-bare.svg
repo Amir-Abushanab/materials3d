@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-label="Materials3D">
+  <!--
+    The mark without its plate, for surfaces that supply their own background. The lamp field is
+    still here — it is the point of the mark, not decoration — but unbounded by the tile it reads
+    as a glow rather than a backdrop, so the rod is shown whole rather than cropped.
+  -->
+  <defs>
+    <linearGradient id="b-barrel" x1="0" y1="1" x2="0" y2="0">
+      <stop offset="0" stop-color="#f8c852"/><stop offset=".24" stop-color="#f59d3e"/>
+      <stop offset=".45" stop-color="#ef5a4d"/><stop offset=".64" stop-color="#e55392"/>
+      <stop offset=".83" stop-color="#b461cb"/><stop offset="1" stop-color="#8a72d6"/>
+    </linearGradient>
+    <linearGradient id="b-chord" gradientUnits="userSpaceOnUse" x1="82" y1="0" x2="174" y2="0">
+      <stop offset="0" stop-color="#f6f5f4" stop-opacity=".98"/><stop offset=".09" stop-color="#f6f5f4" stop-opacity=".78"/>
+      <stop offset=".28" stop-color="#f6f5f4" stop-opacity=".08"/><stop offset=".56" stop-color="#f6f5f4" stop-opacity="0"/>
+      <stop offset=".80" stop-color="#f6f5f4" stop-opacity=".28"/><stop offset=".93" stop-color="#f6f5f4" stop-opacity=".78"/>
+      <stop offset="1" stop-color="#f6f5f4" stop-opacity=".96"/>
+    </linearGradient>
+    <linearGradient id="b-disp" gradientUnits="userSpaceOnUse" x1="82" y1="0" x2="174" y2="0">
+      <stop offset="0" stop-color="#ffb45e" stop-opacity=".26"/><stop offset=".11" stop-color="#ffb45e" stop-opacity="0"/>
+      <stop offset=".89" stop-color="#6fd0f2" stop-opacity="0"/><stop offset="1" stop-color="#6fd0f2" stop-opacity=".22"/>
+    </linearGradient>
+    <linearGradient id="b-face" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#fdfcfb"/><stop offset=".55" stop-color="#f3eef6"/><stop offset="1" stop-color="#e6dcee"/>
+    </linearGradient>
+    <radialGradient id="b-l1"><stop offset="0" stop-color="#f59d3e" stop-opacity=".42"/><stop offset="1" stop-color="#f59d3e" stop-opacity="0"/></radialGradient>
+    <radialGradient id="b-l2"><stop offset="0" stop-color="#b461cb" stop-opacity=".38"/><stop offset="1" stop-color="#b461cb" stop-opacity="0"/></radialGradient>
+    <clipPath id="b-rod"><path d="M82 48 L82 208 A46 15 0 0 0 174 208 L174 48 A46 15 0 0 1 82 48 Z"/></clipPath>
+  </defs>
+  <ellipse cx="66" cy="72" rx="66" ry="60" fill="url(#b-l1)"/>
+  <ellipse cx="196" cy="190" rx="68" ry="62" fill="url(#b-l2)"/>
+  <g transform="rotate(-17 128 128)">
+    <g clip-path="url(#b-rod)">
+      <rect x="82" y="33" width="92" height="190" fill="url(#b-barrel)"/>
+      <rect x="82" y="33" width="92" height="190" fill="url(#b-chord)"/>
+      <rect x="82" y="33" width="92" height="190" fill="url(#b-disp)"/>
+    </g>
+    <ellipse cx="128" cy="48" rx="46" ry="15" fill="url(#b-face)" opacity=".93"/>
+    <ellipse cx="128" cy="48" rx="46" ry="15" fill="none" stroke="#fff" stroke-width="2" opacity=".95"/>
+    <rect x="93" y="64" width="7" height="132" rx="3.5" fill="#fff" opacity=".6"/>
+  </g>
+</svg>

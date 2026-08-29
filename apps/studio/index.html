@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <!--
+      Favicon: the Materials3D mark — one flat-ended glass rod over a bounded lamp field, reduced
+      until it still reads at 16px (no dispersion fringe, no specular streak; both are sub-pixel
+      there and only add mush). Source of truth is brand/favicon.svg — regenerate this URI from it
+      rather than editing the encoded string.
+
+      Inlined as a data URI rather than served from a file: this app's `publicDir` is repointed at
+      the core's standalone build output (so the HTML exporter can fetch /materials3d.standalone.js),
+      which means apps/studio/public/ is never served.
+    -->
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 256 256%22 width=%22256%22 height=%22256%22%3E%3Cdefs%3E%3ClinearGradient id=%22f-barrel%22 x1=%220%22 y1=%221%22 x2=%220%22 y2=%220%22%3E%3Cstop offset=%220%22 stop-color=%22%23f8c852%22/%3E%3Cstop offset=%22.22%22 stop-color=%22%23f59d3e%22/%3E%3Cstop offset=%22.44%22 stop-color=%22%23ee4f45%22/%3E%3Cstop offset=%22.64%22 stop-color=%22%23e2418a%22/%3E%3Cstop offset=%22.84%22 stop-color=%22%23ab4fc8%22/%3E%3Cstop offset=%221%22 stop-color=%22%237d63d6%22/%3E%3C/linearGradient%3E%3ClinearGradient id=%22f-chord%22 gradientUnits=%22userSpaceOnUse%22 x1=%2270%22 y1=%220%22 x2=%22186%22 y2=%220%22%3E%3Cstop offset=%220%22 stop-color=%22%23f7f6f5%22 stop-opacity=%221%22/%3E%3Cstop offset=%22.13%22 stop-color=%22%23f7f6f5%22 stop-opacity=%22.62%22/%3E%3Cstop offset=%22.34%22 stop-color=%22%23f7f6f5%22 stop-opacity=%220%22/%3E%3Cstop offset=%22.70%22 stop-color=%22%23f7f6f5%22 stop-opacity=%220%22/%3E%3Cstop offset=%22.88%22 stop-color=%22%23f7f6f5%22 stop-opacity=%22.62%22/%3E%3Cstop offset=%221%22 stop-color=%22%23f7f6f5%22 stop-opacity=%221%22/%3E%3C/linearGradient%3E%3ClinearGradient id=%22f-face%22 x1=%220%22 y1=%220%22 x2=%221%22 y2=%221%22%3E%3Cstop offset=%220%22 stop-color=%22%23fdfcfb%22/%3E%3Cstop offset=%221%22 stop-color=%22%23e4d8ee%22/%3E%3C/linearGradient%3E%3CradialGradient id=%22f-l1%22%3E%3Cstop offset=%220%22 stop-color=%22%23f59d3e%22 stop-opacity=%22.72%22/%3E%3Cstop offset=%221%22 stop-color=%22%23f59d3e%22 stop-opacity=%220%22/%3E%3C/radialGradient%3E%3CradialGradient id=%22f-l2%22%3E%3Cstop offset=%220%22 stop-color=%22%23b461cb%22 stop-opacity=%22.66%22/%3E%3Cstop offset=%221%22 stop-color=%22%23b461cb%22 stop-opacity=%220%22/%3E%3C/radialGradient%3E%3CclipPath id=%22f-plate%22%3E%3Crect width=%22256%22 height=%22256%22 rx=%2258%22/%3E%3C/clipPath%3E%3CclipPath id=%22f-rod%22%3E%3Cpath d=%22M70 40 L70 330 L186 330 L186 40 A58 18 0 0 1 70 40 Z%22/%3E%3C/clipPath%3E%3C/defs%3E%3Cg clip-path=%22url(%23f-plate)%22%3E%3Crect width=%22256%22 height=%22256%22 fill=%22%23efedeb%22/%3E%3Cellipse cx=%2244%22 cy=%2250%22 rx=%2284%22 ry=%2276%22 fill=%22url(%23f-l1)%22/%3E%3Cellipse cx=%22218%22 cy=%22208%22 rx=%2288%22 ry=%2280%22 fill=%22url(%23f-l2)%22/%3E%3Cg transform=%22rotate(-17 128 150)%22%3E%3Cg clip-path=%22url(%23f-rod)%22%3E%3Crect x=%2270%22 y=%2222%22 width=%22116%22 height=%22308%22 fill=%22url(%23f-barrel)%22/%3E%3Crect x=%2270%22 y=%2222%22 width=%22116%22 height=%22308%22 fill=%22url(%23f-chord)%22/%3E%3C/g%3E%3Cellipse cx=%22128%22 cy=%2240%22 rx=%2258%22 ry=%2218%22 fill=%22url(%23f-face)%22/%3E%3C/g%3E%3C/g%3E%3C/svg%3E"
+    />
+    <!-- iOS home-screen bookmarks cannot use the SVG above. Vite resolves this relative path at
+         build time and emits the PNG as a hashed asset, which is why it is not a data URI. -->
+    <link rel="apple-touch-icon" href="../../brand/apple-touch-icon.png" />
+    <meta name="theme-color" content="#efedeb" />
+
+    <!--
+      Link previews. og:image must be an absolute URL, and this app's deploy domain is not settled
+      (DEPLOY.md: pages.dev until a custom domain), so it points at the file in the repo rather than
+      at the hashed build output — which also survives a domain change and a rebuild.
+    -->
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Materials Studio" />
+    <meta
+      property="og:description"
+      content="Design refractive-glass scenes in the browser and export them as code, config, stills, or clips."
+    />
+    <meta
+      property="og:image"
+      content="https://raw.githubusercontent.com/Amir-Abushanab/materials3d/main/brand/og.png"
+    />
+    <meta name="twitter:card" content="summary_large_image" />
+    <title>Materials Studio</title>
+    <meta
+      name="description"
+      content="Design refractive-glass scenes in the browser and export them as code, config, stills, or clips."
+    />
+  </head>
+  <body>
+    <div id="stage">
+      <div id="scene" aria-label="Materials scene preview">
+        <button
+          type="button"
+          class="output-resize-handle"
+          data-corner="nw"
+          aria-label="Resize output from the top-left corner. Use arrow keys for precise adjustments."
+          title="Drag the top-left corner to resize"
+        ></button>
+        <button
+          type="button"
+          class="output-resize-handle"
+          data-corner="ne"
+          aria-label="Resize output from the top-right corner. Use arrow keys for precise adjustments."
+          title="Drag the top-right corner to resize"
+        ></button>
+        <button
+          type="button"
+          class="output-resize-handle"
+          data-corner="sw"
+          aria-label="Resize output from the bottom-left corner. Use arrow keys for precise adjustments."
+          title="Drag the bottom-left corner to resize"
+        ></button>
+        <button
+          type="button"
+          class="output-resize-handle"
+          data-corner="se"
+          aria-label="Resize output from the bottom-right corner. Use arrow keys for precise adjustments."
+          title="Drag the bottom-right corner to resize"
+        ></button>
+        <div id="capture-size" role="status" aria-live="polite"></div>
+      </div>
+    </div>
+
+    <aside id="panel" aria-label="Scene controls">
+      <div class="panel-head">
+        <div class="brand">
+          <!-- The mark, inlined for the same reason as the favicon: `publicDir` is repointed at
+               the core standalone build, so a relative path here resolves at build time but 404s
+               under `vite dev`. Source of truth is brand/mark.svg — copy it, do not redraw it. -->
+          <svg class="brand-mark" viewBox="0 0 256 256" width="26" height="26" aria-hidden="true">
+            <defs>
+              <linearGradient id="m3d-barrel" x1="0" y1="1" x2="0" y2="0">
+                <stop offset="0" stop-color="#f8c852" />
+                <stop offset=".24" stop-color="#f59d3e" />
+                <stop offset=".45" stop-color="#ef5a4d" />
+                <stop offset=".64" stop-color="#e55392" />
+                <stop offset=".83" stop-color="#b461cb" />
+                <stop offset="1" stop-color="#8a72d6" />
+              </linearGradient>
+              <linearGradient
+                id="m3d-chord"
+                gradientUnits="userSpaceOnUse"
+                x1="82"
+                y1="0"
+                x2="174"
+                y2="0"
+              >
+                <stop offset="0" stop-color="#f6f5f4" stop-opacity=".98" />
+                <stop offset=".09" stop-color="#f6f5f4" stop-opacity=".78" />
+                <stop offset=".28" stop-color="#f6f5f4" stop-opacity=".08" />
+                <stop offset=".56" stop-color="#f6f5f4" stop-opacity="0" />
+                <stop offset=".80" stop-color="#f6f5f4" stop-opacity=".28" />
+                <stop offset=".93" stop-color="#f6f5f4" stop-opacity=".78" />
+                <stop offset="1" stop-color="#f6f5f4" stop-opacity=".96" />
+              </linearGradient>
+              <linearGradient
+                id="m3d-disp"
+                gradientUnits="userSpaceOnUse"
+                x1="82"
+                y1="0"
+                x2="174"
+                y2="0"
+              >
+                <stop offset="0" stop-color="#ffb45e" stop-opacity=".26" />
+                <stop offset=".11" stop-color="#ffb45e" stop-opacity="0" />
+                <stop offset=".89" stop-color="#6fd0f2" stop-opacity="0" />
+                <stop offset="1" stop-color="#6fd0f2" stop-opacity=".22" />
+              </linearGradient>
+              <linearGradient id="m3d-face" x1="0" y1="0" x2="1" y2="1">
+                <stop offset="0" stop-color="#fdfcfb" />
+                <stop offset=".55" stop-color="#f3eef6" />
+                <stop offset="1" stop-color="#e6dcee" />
+              </linearGradient>
+              <radialGradient id="m3d-l1">
+                <stop offset="0" stop-color="#f59d3e" stop-opacity=".60" />
+                <stop offset="1" stop-color="#f59d3e" stop-opacity="0" />
+              </radialGradient>
+              <radialGradient id="m3d-l2">
+                <stop offset="0" stop-color="#b461cb" stop-opacity=".55" />
+                <stop offset="1" stop-color="#b461cb" stop-opacity="0" />
+              </radialGradient>
+              <radialGradient id="m3d-l3">
+                <stop offset="0" stop-color="#ea4776" stop-opacity=".40" />
+                <stop offset="1" stop-color="#ea4776" stop-opacity="0" />
+              </radialGradient>
+              <clipPath id="m3d-plate"><rect width="256" height="256" rx="58" /></clipPath>
+              <clipPath id="m3d-rod">
+                <path d="M82 44 L82 320 L174 320 L174 44 A46 15 0 0 1 82 44 Z" />
+              </clipPath>
+            </defs>
+            <g clip-path="url(#m3d-plate)">
+              <rect width="256" height="256" fill="#efedeb" />
+              <ellipse cx="52" cy="58" rx="78" ry="70" fill="url(#m3d-l1)" />
+              <ellipse cx="196" cy="52" rx="58" ry="52" fill="url(#m3d-l3)" />
+              <ellipse cx="212" cy="204" rx="82" ry="74" fill="url(#m3d-l2)" />
+              <g transform="rotate(-17 128 150)">
+                <g clip-path="url(#m3d-rod)">
+                  <rect x="82" y="29" width="92" height="300" fill="url(#m3d-barrel)" />
+                  <rect x="82" y="29" width="92" height="300" fill="url(#m3d-chord)" />
+                  <rect x="82" y="29" width="92" height="300" fill="url(#m3d-disp)" />
+                </g>
+                <ellipse cx="128" cy="44" rx="46" ry="15" fill="url(#m3d-face)" opacity=".93" />
+                <ellipse
+                  cx="128"
+                  cy="44"
+                  rx="46"
+                  ry="15"
+                  fill="none"
+                  stroke="#fff"
+                  stroke-width="2"
+                  opacity=".95"
+                />
+                <rect x="93" y="60" width="7" height="240" rx="3.5" fill="#fff" opacity=".6" />
+              </g>
+            </g>
+          </svg>
+          <div>
+            <b>Materials Studio</b>
+            <span>@materials3d/core</span>
+          </div>
+        </div>
+        <div id="history-slot"></div>
+      </div>
+      <div id="pane"></div>
+    </aside>
+
+    <dialog id="dialog">
+      <form method="dialog" class="dialog-head">
+        <b id="dialog-title"></b>
+        <button value="close" aria-label="Close">×</button>
+      </form>
+      <div id="dialog-tabs" class="dialog-tabs"></div>
+      <div id="dialog-body"></div>
+      <div class="dialog-foot">
+        <span id="dialog-note"></span>
+        <span class="spacer"></span>
+        <button type="button" id="dialog-embed" data-action="dialog-embed" hidden>
+          Save embed
+        </button>
+        <button type="button" id="dialog-save" data-action="dialog-save" hidden>Save .json</button>
+        <button type="button" id="dialog-apply" data-action="dialog-apply" hidden>Apply</button>
+        <button type="button" data-action="dialog-copy">Copy</button>
+      </div>
+    </dialog>
+
+    <input id="file-input" type="file" accept="application/json,.json" hidden />
+    <div id="toast" role="status" aria-live="polite"></div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

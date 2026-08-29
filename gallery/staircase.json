@@ -1,0 +1,1593 @@
+{
+  "background": "#f2f1f4",
+  "transparentBackground": false,
+  "clearGlass": "#f6f5f8",
+  "lamps": [
+    {
+      "x": 0.5,
+      "y": 0.545,
+      "r": 0.1,
+      "color": "#f79a34",
+      "intensity": 1.4
+    },
+    {
+      "x": 0.565,
+      "y": 0.47,
+      "r": 0.09,
+      "color": "#ea4f7d",
+      "intensity": 1.15
+    },
+    {
+      "x": 0.44,
+      "y": 0.4,
+      "r": 0.09,
+      "color": "#8a63e0",
+      "intensity": 1.05
+    },
+    {
+      "x": 0.525,
+      "y": 0.33,
+      "r": 0.085,
+      "color": "#5f8ae6",
+      "intensity": 0.95
+    }
+  ],
+  "studio": "gradient",
+  "environment": "analytic",
+  "transmission": "simple",
+  "studioGain": 1,
+  "lampGain": 1.4,
+  "lampGate": {
+    "lo": 0.04,
+    "hi": 0.96
+  },
+  "backdropLamps": 0.05,
+  "plate": {
+    "z": -22,
+    "scale": {
+      "x": 108,
+      "y": 128
+    },
+    "offset": {
+      "x": 0.5,
+      "y": 0.5
+    }
+  },
+  "camera": {
+    "fov": 46,
+    "distance": 13,
+    "lookAt": {
+      "x": -0.9,
+      "y": 1.05,
+      "z": 0
+    },
+    "height": 4.2,
+    "roll": 0,
+    "fit": "cover",
+    "minVisibleWidth": 0
+  },
+  "post": {
+    "focus": 6,
+    "range": 14,
+    "aperture": 0,
+    "bloom": 0.012,
+    "caustics": 0.04,
+    "haze": 0.07,
+    "hazeTop": 0.03,
+    "hazeColor": "#f7f6fa",
+    "vignette": 0.2,
+    "grain": 0.01,
+    "bloomRadius": 9,
+    "bloomThreshold": 0,
+    "toneMap": "none",
+    "bloomMode": "gather",
+    "bloomSpread": 0.5,
+    "innerLight": 0,
+    "innerLightDensity": 0.5,
+    "innerLightDecay": 0.94,
+    "innerLightX": 0.5,
+    "innerLightY": 0.15,
+    "dither": 0,
+    "ditherScale": 2,
+    "ditherSteps": 4,
+    "halftone": 0,
+    "halftoneCell": 6,
+    "halftoneAngle": 0.4,
+    "halftoneCmyk": 0,
+    "halftoneCmykCell": 6,
+    "paperTexture": 0,
+    "paperTextureScale": 2
+  },
+  "orbit": true,
+  "tracedRefraction": false,
+  "backGlassStrength": 0,
+  "measuredThickness": true,
+  "loopSeconds": 0,
+  "introRamp": true,
+  "mirrorH": false,
+  "mirrorV": false,
+  "backgroundMode": "gradient",
+  "backgroundPalette": [
+    {
+      "color": "#fbfaFc",
+      "position": 0
+    },
+    {
+      "color": "#e7e6ee",
+      "position": 1
+    }
+  ],
+  "backgroundGradientType": "linear",
+  "backgroundGradientAngle": 1.5707963267948966,
+  "backgroundMeshPoints": [
+    {
+      "x": 0.25,
+      "y": 0.3,
+      "color": "#f3d9e8"
+    },
+    {
+      "x": 0.75,
+      "y": 0.35,
+      "color": "#d7e0f6"
+    },
+    {
+      "x": 0.5,
+      "y": 0.8,
+      "color": "#f7f0e4"
+    }
+  ],
+  "backgroundMeshSoftness": 0.55,
+  "backgroundImageFit": "cover",
+  "backgroundImageZoom": 1,
+  "backgroundImagePosition": {
+    "x": 0.5,
+    "y": 0.5
+  },
+  "items": [
+    {
+      "shape": {
+        "kind": "slab",
+        "r": 0.84,
+        "len": 4.6,
+        "thickness": 3.9,
+        "fillet": 0,
+        "bevel": 0,
+        "sides": 72,
+        "hole": 1,
+        "shaft": 0.35,
+        "head": 1,
+        "depth": 0.72,
+        "seed": 1,
+        "bump": 0.5
+      },
+      "position": {
+        "x": 2.3883410298802894,
+        "y": 5.5,
+        "z": 4.163631482851281
+      },
+      "rotation": {
+        "x": -1.1207963267948966,
+        "y": 0,
+        "z": -1.05
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "name": "tread 1",
+      "material": {
+        "density": 1.6,
+        "ior": 1.47,
+        "dispersion": 0,
+        "lens": 0,
+        "rim": 0.3,
+        "specular": 1.15,
+        "saturation": 1.16,
+        "emission": 0
+      },
+      "motion": {
+        "kind": "drift",
+        "axis": "y",
+        "rate": 0.17,
+        "amount": 0.12
+      },
+      "phase": 1.05,
+      "interaction": {
+        "bindings": [
+          {
+            "source": "hoverSelf",
+            "target": "hueShift",
+            "to": 0.38,
+            "smoothing": 0.55
+          },
+          {
+            "source": "hoverSelf",
+            "target": "emission",
+            "to": 0.34,
+            "smoothing": 0.55
+          },
+          {
+            "source": "scroll",
+            "target": "positionY",
+            "to": 41.5,
+            "smoothing": 0.12
+          }
+        ]
+      }
+    },
+    {
+      "shape": {
+        "kind": "slab",
+        "r": 0.8037473684210527,
+        "len": 4.401473684210526,
+        "thickness": 3.731684210526316,
+        "fillet": 0,
+        "bevel": 0,
+        "sides": 72,
+        "hole": 1,
+        "shaft": 0.35,
+        "head": 1,
+        "depth": 0.6889263157894737,
+        "seed": 1,
+        "bump": 0.5
+      },
+      "position": {
+        "x": -0.9438671544808367,
+        "y": 3.710526315789474,
+        "z": 4.41220329589178
+      },
+      "rotation": {
+        "x": -1.1071121162685809,
+        "y": 0,
+        "z": -1.77
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "name": "tread 2",
+      "material": {
+        "density": 1.6,
+        "ior": 1.47,
+        "dispersion": 0,
+        "lens": 0,
+        "rim": 0.3,
+        "specular": 1.15,
+        "saturation": 1.16,
+        "emission": 0
+      },
+      "motion": {
+        "kind": "drift",
+        "axis": "y",
+        "rate": 0.17,
+        "amount": 0.12
+      },
+      "phase": 1.77,
+      "interaction": {
+        "bindings": [
+          {
+            "source": "hoverSelf",
+            "target": "hueShift",
+            "to": 0.38,
+            "smoothing": 0.55
+          },
+          {
+            "source": "hoverSelf",
+            "target": "emission",
+            "to": 0.34,
+            "smoothing": 0.55
+          },
+          {
+            "source": "scroll",
+            "target": "positionY",
+            "to": 39.71052631578947,
+            "smoothing": 0.12
+          }
+        ]
+      }
+    },
+    {
+      "shape": {
+        "kind": "slab",
+        "r": 0.7674947368421052,
+        "len": 4.202947368421052,
+        "thickness": 3.5633684210526315,
+        "fillet": 0,
+        "bevel": 0,
+        "sides": 72,
+        "hole": 1,
+        "shaft": 0.35,
+        "head": 1,
+        "depth": 0.6578526315789474,
+        "seed": 1,
+        "bump": 0.5
+      },
+      "position": {
+        "x": -3.768361581016672,
+        "y": 1.9210526315789478,
+        "z": 2.3478908880616047
+      },
+      "rotation": {
+        "x": -1.0934279057422651,
+        "y": 0,
+        "z": -2.49
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "name": "tread 3",
+      "material": {
+        "density": 1.6,
+        "ior": 1.47,
+        "dispersion": 0,
+        "lens": 0,
+        "rim": 0.3,
+        "specular": 1.15,
+        "saturation": 1.16,
+        "emission": 0
+      },
+      "motion": {
+        "kind": "drift",
+        "axis": "y",
+        "rate": 0.17,
+        "amount": 0.12
+      },
+      "phase": 2.49,
+      "interaction": {
+        "bindings": [
+          {
+            "source": "hoverSelf",
+            "target": "hueShift",
+            "to": 0.38,
+            "smoothing": 0.55
+          },
+          {
+            "source": "hoverSelf",
+            "target": "emission",
+            "to": 0.34,
+            "smoothing": 0.55
+          },
+          {
+            "source": "scroll",
+            "target": "positionY",
+            "to": 37.921052631578945,
+            "smoothing": 0.12
+          }
+        ]
+      }
+    },
+    {
+      "shape": {
+        "kind": "slab",
+        "r": 0.7312421052631579,
+        "len": 4.004421052631579,
+        "thickness": 3.3950526315789475,
+        "fillet": 0,
+        "bevel": 0,
+        "sides": 72,
+        "hole": 1,
+        "shaft": 0.35,
+        "head": 1,
+        "depth": 0.626778947368421,
+        "seed": 1,
+        "bump": 0.5
+      },
+      "position": {
+        "x": -4.698038768551516,
+        "y": 0.13157894736842124,
+        "z": -1.1113562966138097
+      },
+      "rotation": {
+        "x": -1.0797436952159492,
+        "y": 0,
+        "z": -3.21
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "name": "tread 4",
+      "material": {
+        "density": 1.6,
+        "ior": 1.47,
+        "dispersion": 0,
+        "lens": 0,
+        "rim": 0.3,
+        "specular": 1.15,
+        "saturation": 1.16,
+        "emission": 0
+      },
+      "motion": {
+        "kind": "drift",
+        "axis": "y",
+        "rate": 0.17,
+        "amount": 0.12
+      },
+      "phase": 3.21,
+      "interaction": {
+        "bindings": [
+          {
+            "source": "hoverSelf",
+            "target": "hueShift",
+            "to": 0.38,
+            "smoothing": 0.55
+          },
+          {
+            "source": "hoverSelf",
+            "target": "emission",
+            "to": 0.34,
+            "smoothing": 0.55
+          },
+          {
+            "source": "scroll",
+            "target": "positionY",
+            "to": 36.131578947368425,
+            "smoothing": 0.12
+          }
+        ]
+      }
+    },
+    {
+      "shape": {
+        "kind": "slab",
+        "r": 0.6949894736842105,
+        "len": 3.8058947368421046,
+        "thickness": 3.2267368421052627,
+        "fillet": 0,
+        "bevel": 0,
+        "sides": 72,
+        "hole": 1,
+        "shaft": 0.35,
+        "head": 1,
+        "depth": 0.5957052631578946,
+        "seed": 1,
+        "bump": 0.5
+      },
+      "position": {
+        "x": -3.2983961041272214,
+        "y": -1.6578947368421044,
+        "z": -4.370938613860125
+      },
+      "rotation": {
+        "x": -1.0660594846896334,
+        "y": 0,
+        "z": -3.9299999999999997
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "name": "tread 5",
+      "material": {
+        "density": 1.6,
+        "ior": 1.47,
+        "dispersion": 0,
+        "lens": 0,
+        "rim": 0.3,
+        "specular": 1.15,
+        "saturation": 1.16,
+        "emission": 0
+      },
+      "motion": {
+        "kind": "drift",
+        "axis": "y",
+        "rate": 0.17,
+        "amount": 0.12
+      },
+      "phase": 3.9299999999999997,
+      "interaction": {
+        "bindings": [
+          {
+            "source": "hoverSelf",
+            "target": "hueShift",
+            "to": 0.38,
+            "smoothing": 0.55
+          },
+          {
+            "source": "hoverSelf",
+            "target": "emission",
+            "to": 0.34,
+            "smoothing": 0.55
+          },
+          {
+            "source": "scroll",
+            "target": "positionY",
+            "to": 34.3421052631579,
+            "smoothing": 0.12
+          }
+        ]
+      }
+    },
+    {
+      "shape": {
+        "kind": "slab",
+        "r": 0.6587368421052632,
+        "len": 3.607368421052631,
+        "thickness": 3.0584210526315787,
+        "fillet": 0,
+        "bevel": 0,
+        "sides": 72,
+        "hole": 1,
+        "shaft": 0.35,
+        "head": 1,
+        "depth": 0.5646315789473684,
+        "seed": 1,
+        "bump": 0.5
+      },
+      "position": {
+        "x": -0.28982214789945165,
+        "y": -3.447368421052632,
+        "z": -5.95516673848338
+      },
+      "rotation": {
+        "x": -1.0523752741633177,
+        "y": 0,
+        "z": -4.6499999999999995
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "name": "tread 6",
+      "material": {
+        "density": 1.6,
+        "ior": 1.47,
+        "dispersion": 0,
+        "lens": 0,
+        "rim": 0.3,
+        "specular": 1.15,
+        "saturation": 1.16,
+        "emission": 0
+      },
+      "motion": {
+        "kind": "drift",
+        "axis": "y",
+        "rate": 0.17,
+        "amount": 0.12
+      },
+      "phase": 4.6499999999999995,
+      "interaction": {
+        "bindings": [
+          {
+            "source": "hoverSelf",
+            "target": "hueShift",
+            "to": 0.38,
+            "smoothing": 0.55
+          },
+          {
+            "source": "hoverSelf",
+            "target": "emission",
+            "to": 0.34,
+            "smoothing": 0.55
+          },
+          {
+            "source": "scroll",
+            "target": "positionY",
+            "to": 32.55263157894737,
+            "smoothing": 0.12
+          }
+        ]
+      }
+    },
+    {
+      "shape": {
+        "kind": "slab",
+        "r": 0.6224842105263158,
+        "len": 3.4088421052631577,
+        "thickness": 2.8901052631578947,
+        "fillet": 0,
+        "bevel": 0,
+        "sides": 72,
+        "hole": 1,
+        "shaft": 0.35,
+        "head": 1,
+        "depth": 0.5335578947368421,
+        "seed": 1,
+        "bump": 0.5
+      },
+      "position": {
+        "x": 2.822714450517837,
+        "y": -5.2368421052631575,
+        "z": -5.233968483605537
+      },
+      "rotation": {
+        "x": -1.038691063637002,
+        "y": 0,
+        "z": -5.37
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "name": "tread 7",
+      "material": {
+        "density": 1.6,
+        "ior": 1.47,
+        "dispersion": 0,
+        "lens": 0,
+        "rim": 0.3,
+        "specular": 1.15,
+        "saturation": 1.16,
+        "emission": 0
+      },
+      "motion": {
+        "kind": "drift",
+        "axis": "y",
+        "rate": 0.17,
+        "amount": 0.12
+      },
+      "phase": 5.37,
+      "interaction": {
+        "bindings": [
+          {
+            "source": "hoverSelf",
+            "target": "hueShift",
+            "to": 0.38,
+            "smoothing": 0.55
+          },
+          {
+            "source": "hoverSelf",
+            "target": "emission",
+            "to": 0.34,
+            "smoothing": 0.55
+          },
+          {
+            "source": "scroll",
+            "target": "positionY",
+            "to": 30.763157894736842,
+            "smoothing": 0.12
+          }
+        ]
+      }
+    },
+    {
+      "shape": {
+        "kind": "slab",
+        "r": 0.5862315789473684,
+        "len": 3.2103157894736842,
+        "thickness": 2.7217894736842108,
+        "fillet": 0,
+        "bevel": 0,
+        "sides": 72,
+        "hole": 1,
+        "shaft": 0.35,
+        "head": 1,
+        "depth": 0.5024842105263159,
+        "seed": 1,
+        "bump": 0.5
+      },
+      "position": {
+        "x": 4.502445949233317,
+        "y": -7.026315789473683,
+        "z": -2.7228962310271956
+      },
+      "rotation": {
+        "x": -1.0250068531106862,
+        "y": 0,
+        "z": -6.09
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "name": "tread 8",
+      "material": {
+        "density": 1.6,
+        "ior": 1.47,
+        "dispersion": 0,
+        "lens": 0,
+        "rim": 0.3,
+        "specular": 1.15,
+        "saturation": 1.16,
+        "emission": 0
+      },
+      "motion": {
+        "kind": "drift",
+        "axis": "y",
+        "rate": 0.17,
+        "amount": 0.12
+      },
+      "phase": 6.09,
+      "interaction": {
+        "bindings": [
+          {
+            "source": "hoverSelf",
+            "target": "hueShift",
+            "to": 0.38,
+            "smoothing": 0.55
+          },
+          {
+            "source": "hoverSelf",
+            "target": "emission",
+            "to": 0.34,
+            "smoothing": 0.55
+          },
+          {
+            "source": "scroll",
+            "target": "positionY",
+            "to": 28.973684210526315,
+            "smoothing": 0.12
+          }
+        ]
+      }
+    },
+    {
+      "shape": {
+        "kind": "slab",
+        "r": 0.549978947368421,
+        "len": 3.0117894736842103,
+        "thickness": 2.5534736842105263,
+        "fillet": 0,
+        "bevel": 0,
+        "sides": 72,
+        "hole": 1,
+        "shaft": 0.35,
+        "head": 1,
+        "depth": 0.47141052631578945,
+        "seed": 1,
+        "bump": 0.5
+      },
+      "position": {
+        "x": 3.9395393615976793,
+        "y": -8.815789473684209,
+        "z": 0.18615474390624653
+      },
+      "rotation": {
+        "x": -1.0113226425843702,
+        "y": 0,
+        "z": -6.81
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "name": "tread 9",
+      "material": {
+        "density": 1.6,
+        "ior": 1.47,
+        "dispersion": 0,
+        "lens": 0,
+        "rim": 0.3,
+        "specular": 1.15,
+        "saturation": 1.16,
+        "emission": 0
+      },
+      "motion": {
+        "kind": "drift",
+        "axis": "y",
+        "rate": 0.17,
+        "amount": 0.12
+      },
+      "phase": 6.81,
+      "interaction": {
+        "bindings": [
+          {
+            "source": "hoverSelf",
+            "target": "hueShift",
+            "to": 0.38,
+            "smoothing": 0.55
+          },
+          {
+            "source": "hoverSelf",
+            "target": "emission",
+            "to": 0.34,
+            "smoothing": 0.55
+          },
+          {
+            "source": "scroll",
+            "target": "positionY",
+            "to": 27.18421052631579,
+            "smoothing": 0.12
+          }
+        ]
+      }
+    },
+    {
+      "shape": {
+        "kind": "slab",
+        "r": 0.5137263157894737,
+        "len": 2.813263157894737,
+        "thickness": 2.3851578947368424,
+        "fillet": 0,
+        "bevel": 0,
+        "sides": 72,
+        "hole": 1,
+        "shaft": 0.35,
+        "head": 1,
+        "depth": 0.4403368421052632,
+        "seed": 1,
+        "bump": 0.5
+      },
+      "position": {
+        "x": 1.4411915841952896,
+        "y": -10.605263157894736,
+        "z": 1.9232133005633418
+      },
+      "rotation": {
+        "x": -0.9976384320580545,
+        "y": 0,
+        "z": -7.529999999999999
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "name": "tread 10",
+      "material": {
+        "density": 1.6,
+        "ior": 1.47,
+        "dispersion": 0,
+        "lens": 0,
+        "rim": 0.3,
+        "specular": 1.15,
+        "saturation": 1.16,
+        "emission": 0
+      },
+      "motion": {
+        "kind": "drift",
+        "axis": "y",
+        "rate": 0.17,
+        "amount": 0.12
+      },
+      "phase": 7.529999999999999,
+      "interaction": {
+        "bindings": [
+          {
+            "source": "hoverSelf",
+            "target": "hueShift",
+            "to": 0.38,
+            "smoothing": 0.55
+          },
+          {
+            "source": "hoverSelf",
+            "target": "emission",
+            "to": 0.34,
+            "smoothing": 0.55
+          },
+          {
+            "source": "scroll",
+            "target": "positionY",
+            "to": 25.394736842105264,
+            "smoothing": 0.12
+          }
+        ]
+      }
+    },
+    {
+      "shape": {
+        "kind": "slab",
+        "r": 0.4774736842105263,
+        "len": 2.614736842105263,
+        "thickness": 2.216842105263158,
+        "fillet": 0,
+        "bevel": 0,
+        "sides": 72,
+        "hole": 1,
+        "shaft": 0.35,
+        "head": 1,
+        "depth": 0.40926315789473683,
+        "seed": 1,
+        "bump": 0.5
+      },
+      "position": {
+        "x": -1.7346475671535702,
+        "y": -12.394736842105264,
+        "z": 1.5172265117289077
+      },
+      "rotation": {
+        "x": -0.9839542215317387,
+        "y": 0,
+        "z": -8.25
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "name": "tread 11",
+      "material": {
+        "density": 1.6,
+        "ior": 1.47,
+        "dispersion": 0,
+        "lens": 0,
+        "rim": 0.3,
+        "specular": 1.15,
+        "saturation": 1.16,
+        "emission": 0
+      },
+      "motion": {
+        "kind": "drift",
+        "axis": "y",
+        "rate": 0.17,
+        "amount": 0.12
+      },
+      "phase": 8.25,
+      "interaction": {
+        "bindings": [
+          {
+            "source": "hoverSelf",
+            "target": "hueShift",
+            "to": 0.38,
+            "smoothing": 0.55
+          },
+          {
+            "source": "hoverSelf",
+            "target": "emission",
+            "to": 0.34,
+            "smoothing": 0.55
+          },
+          {
+            "source": "scroll",
+            "target": "positionY",
+            "to": 23.605263157894736,
+            "smoothing": 0.12
+          }
+        ]
+      }
+    },
+    {
+      "shape": {
+        "kind": "slab",
+        "r": 0.44122105263157896,
+        "len": 2.4162105263157896,
+        "thickness": 2.048526315789474,
+        "fillet": 0,
+        "bevel": 0,
+        "sides": 72,
+        "hole": 1,
+        "shaft": 0.35,
+        "head": 1,
+        "depth": 0.3781894736842105,
+        "seed": 1,
+        "bump": 0.5
+      },
+      "position": {
+        "x": -4.012542256045056,
+        "y": -14.184210526315791,
+        "z": -0.9327577461175558
+      },
+      "rotation": {
+        "x": -0.9702700110054229,
+        "y": 0,
+        "z": -8.97
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "name": "tread 12",
+      "material": {
+        "density": 1.6,
+        "ior": 1.47,
+        "dispersion": 0,
+        "lens": 0,
+        "rim": 0.3,
+        "specular": 1.15,
+        "saturation": 1.16,
+        "emission": 0
+      },
+      "motion": {
+        "kind": "drift",
+        "axis": "y",
+        "rate": 0.17,
+        "amount": 0.12
+      },
+      "phase": 8.97,
+      "interaction": {
+        "bindings": [
+          {
+            "source": "hoverSelf",
+            "target": "hueShift",
+            "to": 0.38,
+            "smoothing": 0.55
+          },
+          {
+            "source": "hoverSelf",
+            "target": "emission",
+            "to": 0.34,
+            "smoothing": 0.55
+          },
+          {
+            "source": "scroll",
+            "target": "positionY",
+            "to": 21.81578947368421,
+            "smoothing": 0.12
+          }
+        ]
+      }
+    },
+    {
+      "shape": {
+        "kind": "slab",
+        "r": 0.40496842105263164,
+        "len": 2.217684210526316,
+        "thickness": 1.8802105263157898,
+        "fillet": 0,
+        "bevel": 0,
+        "sides": 72,
+        "hole": 1,
+        "shaft": 0.35,
+        "head": 1,
+        "depth": 0.34711578947368427,
+        "seed": 1,
+        "bump": 0.5
+      },
+      "position": {
+        "x": -4.281095421767636,
+        "y": -15.973684210526315,
+        "z": -4.320729988937261
+      },
+      "rotation": {
+        "x": -0.9565858004791071,
+        "y": 0,
+        "z": -9.690000000000001
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "name": "tread 13",
+      "material": {
+        "density": 1.6,
+        "ior": 1.47,
+        "dispersion": 0,
+        "lens": 0,
+        "rim": 0.3,
+        "specular": 1.15,
+        "saturation": 1.16,
+        "emission": 0
+      },
+      "motion": {
+        "kind": "drift",
+        "axis": "y",
+        "rate": 0.17,
+        "amount": 0.12
+      },
+      "phase": 9.690000000000001,
+      "interaction": {
+        "bindings": [
+          {
+            "source": "hoverSelf",
+            "target": "hueShift",
+            "to": 0.38,
+            "smoothing": 0.55
+          },
+          {
+            "source": "hoverSelf",
+            "target": "emission",
+            "to": 0.34,
+            "smoothing": 0.55
+          },
+          {
+            "source": "scroll",
+            "target": "positionY",
+            "to": 20.026315789473685,
+            "smoothing": 0.12
+          }
+        ]
+      }
+    },
+    {
+      "shape": {
+        "kind": "slab",
+        "r": 0.3687157894736842,
+        "len": 2.019157894736842,
+        "thickness": 1.7118947368421054,
+        "fillet": 0,
+        "bevel": 0,
+        "sides": 72,
+        "hole": 1,
+        "shaft": 0.35,
+        "head": 1,
+        "depth": 0.3160421052631579,
+        "seed": 1,
+        "bump": 0.5
+      },
+      "position": {
+        "x": -2.435041451451765,
+        "y": -17.763157894736842,
+        "z": -7.092902514382525
+      },
+      "rotation": {
+        "x": -0.9429015899527913,
+        "y": 0,
+        "z": -10.41
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "name": "tread 14",
+      "material": {
+        "density": 1.6,
+        "ior": 1.47,
+        "dispersion": 0,
+        "lens": 0,
+        "rim": 0.3,
+        "specular": 1.15,
+        "saturation": 1.16,
+        "emission": 0
+      },
+      "motion": {
+        "kind": "drift",
+        "axis": "y",
+        "rate": 0.17,
+        "amount": 0.12
+      },
+      "phase": 10.41,
+      "interaction": {
+        "bindings": [
+          {
+            "source": "hoverSelf",
+            "target": "hueShift",
+            "to": 0.38,
+            "smoothing": 0.55
+          },
+          {
+            "source": "hoverSelf",
+            "target": "emission",
+            "to": 0.34,
+            "smoothing": 0.55
+          },
+          {
+            "source": "scroll",
+            "target": "positionY",
+            "to": 18.236842105263158,
+            "smoothing": 0.12
+          }
+        ]
+      }
+    },
+    {
+      "shape": {
+        "kind": "slab",
+        "r": 0.33246315789473685,
+        "len": 1.8206315789473686,
+        "thickness": 1.5435789473684212,
+        "fillet": 0,
+        "bevel": 0,
+        "sides": 72,
+        "hole": 1,
+        "shaft": 0.35,
+        "head": 1,
+        "depth": 0.2849684210526316,
+        "seed": 1,
+        "bump": 0.5
+      },
+      "position": {
+        "x": 0.5864204573153753,
+        "y": -19.552631578947366,
+        "z": -8.02031501904838
+      },
+      "rotation": {
+        "x": -0.9292173794264755,
+        "y": 0,
+        "z": -11.13
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "name": "tread 15",
+      "material": {
+        "density": 1.6,
+        "ior": 1.47,
+        "dispersion": 0,
+        "lens": 0,
+        "rim": 0.3,
+        "specular": 1.15,
+        "saturation": 1.16,
+        "emission": 0
+      },
+      "motion": {
+        "kind": "drift",
+        "axis": "y",
+        "rate": 0.17,
+        "amount": 0.12
+      },
+      "phase": 11.13,
+      "interaction": {
+        "bindings": [
+          {
+            "source": "hoverSelf",
+            "target": "hueShift",
+            "to": 0.38,
+            "smoothing": 0.55
+          },
+          {
+            "source": "hoverSelf",
+            "target": "emission",
+            "to": 0.34,
+            "smoothing": 0.55
+          },
+          {
+            "source": "scroll",
+            "target": "positionY",
+            "to": 16.447368421052634,
+            "smoothing": 0.12
+          }
+        ]
+      }
+    },
+    {
+      "shape": {
+        "kind": "slab",
+        "r": 0.2962105263157894,
+        "len": 1.6221052631578945,
+        "thickness": 1.3752631578947367,
+        "fillet": 0,
+        "bevel": 0,
+        "sides": 72,
+        "hole": 1,
+        "shaft": 0.35,
+        "head": 1,
+        "depth": 0.25389473684210523,
+        "seed": 1,
+        "bump": 0.5
+      },
+      "position": {
+        "x": 3.2771711135564456,
+        "y": -21.342105263157894,
+        "z": -6.80069304398437
+      },
+      "rotation": {
+        "x": -0.9155331689001598,
+        "y": 0,
+        "z": -11.85
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "name": "tread 16",
+      "material": {
+        "density": 1.6,
+        "ior": 1.47,
+        "dispersion": 0,
+        "lens": 0,
+        "rim": 0.3,
+        "specular": 1.15,
+        "saturation": 1.16,
+        "emission": 0
+      },
+      "motion": {
+        "kind": "drift",
+        "axis": "y",
+        "rate": 0.17,
+        "amount": 0.12
+      },
+      "phase": 11.85,
+      "interaction": {
+        "bindings": [
+          {
+            "source": "hoverSelf",
+            "target": "hueShift",
+            "to": 0.38,
+            "smoothing": 0.55
+          },
+          {
+            "source": "hoverSelf",
+            "target": "emission",
+            "to": 0.34,
+            "smoothing": 0.55
+          },
+          {
+            "source": "scroll",
+            "target": "positionY",
+            "to": 14.657894736842106,
+            "smoothing": 0.12
+          }
+        ]
+      }
+    },
+    {
+      "shape": {
+        "kind": "slab",
+        "r": 0.2599578947368421,
+        "len": 1.423578947368421,
+        "thickness": 1.2069473684210528,
+        "fillet": 0,
+        "bevel": 0,
+        "sides": 72,
+        "hole": 1,
+        "shaft": 0.35,
+        "head": 1,
+        "depth": 0.22282105263157895,
+        "seed": 1,
+        "bump": 0.5
+      },
+      "position": {
+        "x": 4.314918949259311,
+        "y": -23.131578947368418,
+        "z": -4.194865742150982
+      },
+      "rotation": {
+        "x": -0.9018489583738439,
+        "y": 0,
+        "z": -12.57
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "name": "tread 17",
+      "material": {
+        "density": 1.6,
+        "ior": 1.47,
+        "dispersion": 0,
+        "lens": 0,
+        "rim": 0.3,
+        "specular": 1.15,
+        "saturation": 1.16,
+        "emission": 0
+      },
+      "motion": {
+        "kind": "drift",
+        "axis": "y",
+        "rate": 0.17,
+        "amount": 0.12
+      },
+      "phase": 12.57,
+      "interaction": {
+        "bindings": [
+          {
+            "source": "hoverSelf",
+            "target": "hueShift",
+            "to": 0.38,
+            "smoothing": 0.55
+          },
+          {
+            "source": "hoverSelf",
+            "target": "emission",
+            "to": 0.34,
+            "smoothing": 0.55
+          },
+          {
+            "source": "scroll",
+            "target": "positionY",
+            "to": 12.868421052631582,
+            "smoothing": 0.12
+          }
+        ]
+      }
+    },
+    {
+      "shape": {
+        "kind": "slab",
+        "r": 0.2237052631578948,
+        "len": 1.2250526315789476,
+        "thickness": 1.0386315789473686,
+        "fillet": 0,
+        "bevel": 0,
+        "sides": 72,
+        "hole": 1,
+        "shaft": 0.35,
+        "head": 1,
+        "depth": 0.19174736842105267,
+        "seed": 1,
+        "bump": 0.5
+      },
+      "position": {
+        "x": 3.2109355609344004,
+        "y": -24.92105263157895,
+        "z": -1.63679144011008
+      },
+      "rotation": {
+        "x": -0.8881647478475282,
+        "y": 0,
+        "z": -13.290000000000001
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "name": "tread 18",
+      "material": {
+        "density": 1.6,
+        "ior": 1.47,
+        "dispersion": 0,
+        "lens": 0,
+        "rim": 0.3,
+        "specular": 1.15,
+        "saturation": 1.16,
+        "emission": 0
+      },
+      "motion": {
+        "kind": "drift",
+        "axis": "y",
+        "rate": 0.17,
+        "amount": 0.12
+      },
+      "phase": 13.290000000000001,
+      "interaction": {
+        "bindings": [
+          {
+            "source": "hoverSelf",
+            "target": "hueShift",
+            "to": 0.38,
+            "smoothing": 0.55
+          },
+          {
+            "source": "hoverSelf",
+            "target": "emission",
+            "to": 0.34,
+            "smoothing": 0.55
+          },
+          {
+            "source": "scroll",
+            "target": "positionY",
+            "to": 11.078947368421051,
+            "smoothing": 0.12
+          }
+        ]
+      }
+    },
+    {
+      "shape": {
+        "kind": "slab",
+        "r": 0.18745263157894745,
+        "len": 1.0265263157894742,
+        "thickness": 0.8703157894736846,
+        "fillet": 0,
+        "bevel": 0,
+        "sides": 72,
+        "hole": 1,
+        "shaft": 0.35,
+        "head": 1,
+        "depth": 0.16067368421052639,
+        "seed": 1,
+        "bump": 0.5
+      },
+      "position": {
+        "x": 0.5395513577515841,
+        "y": -26.710526315789473,
+        "z": -0.5168791707205429
+      },
+      "rotation": {
+        "x": -0.8744805373212123,
+        "y": 0,
+        "z": -14.01
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "name": "tread 19",
+      "material": {
+        "density": 1.6,
+        "ior": 1.47,
+        "dispersion": 0,
+        "lens": 0,
+        "rim": 0.3,
+        "specular": 1.15,
+        "saturation": 1.16,
+        "emission": 0
+      },
+      "motion": {
+        "kind": "drift",
+        "axis": "y",
+        "rate": 0.17,
+        "amount": 0.12
+      },
+      "phase": 14.01,
+      "interaction": {
+        "bindings": [
+          {
+            "source": "hoverSelf",
+            "target": "hueShift",
+            "to": 0.38,
+            "smoothing": 0.55
+          },
+          {
+            "source": "hoverSelf",
+            "target": "emission",
+            "to": 0.34,
+            "smoothing": 0.55
+          },
+          {
+            "source": "scroll",
+            "target": "positionY",
+            "to": 9.289473684210527,
+            "smoothing": 0.12
+          }
+        ]
+      }
+    },
+    {
+      "shape": {
+        "kind": "slab",
+        "r": 0.15120000000000003,
+        "len": 0.8280000000000002,
+        "thickness": 0.7020000000000002,
+        "fillet": 0,
+        "bevel": 0,
+        "sides": 72,
+        "hole": 1,
+        "shaft": 0.35,
+        "head": 1,
+        "depth": 0.12960000000000002,
+        "seed": 1,
+        "bump": 0.5
+      },
+      "position": {
+        "x": -2.3600032510259856,
+        "y": -28.5,
+        "z": -1.4967785318157834
+      },
+      "rotation": {
+        "x": -0.8607963267948966,
+        "y": 0,
+        "z": -14.73
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "name": "tread 20",
+      "material": {
+        "density": 1.6,
+        "ior": 1.47,
+        "dispersion": 0,
+        "lens": 0,
+        "rim": 0.3,
+        "specular": 1.15,
+        "saturation": 1.16,
+        "emission": 0
+      },
+      "motion": {
+        "kind": "drift",
+        "axis": "y",
+        "rate": 0.17,
+        "amount": 0.12
+      },
+      "phase": 14.73,
+      "interaction": {
+        "bindings": [
+          {
+            "source": "hoverSelf",
+            "target": "hueShift",
+            "to": 0.38,
+            "smoothing": 0.55
+          },
+          {
+            "source": "hoverSelf",
+            "target": "emission",
+            "to": 0.34,
+            "smoothing": 0.55
+          },
+          {
+            "source": "scroll",
+            "target": "positionY",
+            "to": 7.5,
+            "smoothing": 0.12
+          }
+        ]
+      }
+    }
+  ],
+  "groups": [],
+  "quality": 1,
+  "dprMax": 1.75,
+  "paused": false,
+  "timeOffset": 0
+}

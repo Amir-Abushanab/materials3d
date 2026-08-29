@@ -1,0 +1,73 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-label="Materials3D">
+  <!--
+    Materials3D — the mark. One flat-ended glass rod over a bounded lamp field.
+
+    Every element is a claim the renderer actually makes:
+      · the colour sits BEHIND the glass (the field), never painted on it
+      · the field is BOUNDED — clear plate between the lamps, which is what lets glass read as clear
+      · the barrel is saturated down its middle and clear at both rims: the absorption chord, 2R·(N·V)
+      · flat end with an elliptical face, not a hemisphere — the cue a capsule throws away
+      · a warm fringe on one rim and a cool one on the other: dispersion
+    Colours are the shipped default lamps, so the mark and the renderer agree.
+  -->
+  <defs>
+    <!-- down the barrel: the default lamp ramp, warm at the base through to violet at the face -->
+    <linearGradient id="m3d-barrel" x1="0" y1="1" x2="0" y2="0">
+      <stop offset="0" stop-color="#f8c852"/>
+      <stop offset=".24" stop-color="#f59d3e"/>
+      <stop offset=".45" stop-color="#ef5a4d"/>
+      <stop offset=".64" stop-color="#e55392"/>
+      <stop offset=".83" stop-color="#b461cb"/>
+      <stop offset="1" stop-color="#8a72d6"/>
+    </linearGradient>
+
+    <!-- across the barrel: clear at the rims, saturated through the middle. userSpaceOnUse so the
+         stops land on the rod's real edges rather than on its rotated bounding box. -->
+    <linearGradient id="m3d-chord" gradientUnits="userSpaceOnUse" x1="82" y1="0" x2="174" y2="0">
+      <stop offset="0" stop-color="#f6f5f4" stop-opacity=".98"/>
+      <stop offset=".09" stop-color="#f6f5f4" stop-opacity=".78"/>
+      <stop offset=".28" stop-color="#f6f5f4" stop-opacity=".08"/>
+      <stop offset=".56" stop-color="#f6f5f4" stop-opacity="0"/>
+      <stop offset=".80" stop-color="#f6f5f4" stop-opacity=".28"/>
+      <stop offset=".93" stop-color="#f6f5f4" stop-opacity=".78"/>
+      <stop offset="1" stop-color="#f6f5f4" stop-opacity=".96"/>
+    </linearGradient>
+
+    <linearGradient id="m3d-disp" gradientUnits="userSpaceOnUse" x1="82" y1="0" x2="174" y2="0">
+      <stop offset="0" stop-color="#ffb45e" stop-opacity=".26"/>
+      <stop offset=".11" stop-color="#ffb45e" stop-opacity="0"/>
+      <stop offset=".89" stop-color="#6fd0f2" stop-opacity="0"/>
+      <stop offset="1" stop-color="#6fd0f2" stop-opacity=".22"/>
+    </linearGradient>
+
+    <linearGradient id="m3d-face" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#fdfcfb"/><stop offset=".55" stop-color="#f3eef6"/><stop offset="1" stop-color="#e6dcee"/>
+    </linearGradient>
+
+    <radialGradient id="m3d-l1"><stop offset="0" stop-color="#f59d3e" stop-opacity=".60"/><stop offset="1" stop-color="#f59d3e" stop-opacity="0"/></radialGradient>
+    <radialGradient id="m3d-l2"><stop offset="0" stop-color="#b461cb" stop-opacity=".55"/><stop offset="1" stop-color="#b461cb" stop-opacity="0"/></radialGradient>
+    <radialGradient id="m3d-l3"><stop offset="0" stop-color="#ea4776" stop-opacity=".40"/><stop offset="1" stop-color="#ea4776" stop-opacity="0"/></radialGradient>
+
+    <clipPath id="m3d-plate"><rect width="256" height="256" rx="58"/></clipPath>
+    <!-- flat top face, barrel running off the bottom edge -->
+    <clipPath id="m3d-rod"><path d="M82 44 L82 320 L174 320 L174 44 A46 15 0 0 1 82 44 Z"/></clipPath>
+  </defs>
+
+  <g clip-path="url(#m3d-plate)">
+    <rect width="256" height="256" fill="#efedeb"/>
+    <ellipse cx="52" cy="58" rx="78" ry="70" fill="url(#m3d-l1)"/>
+    <ellipse cx="196" cy="52" rx="58" ry="52" fill="url(#m3d-l3)"/>
+    <ellipse cx="212" cy="204" rx="82" ry="74" fill="url(#m3d-l2)"/>
+
+    <g transform="rotate(-17 128 150)">
+      <g clip-path="url(#m3d-rod)">
+        <rect x="82" y="29" width="92" height="300" fill="url(#m3d-barrel)"/>
+        <rect x="82" y="29" width="92" height="300" fill="url(#m3d-chord)"/>
+        <rect x="82" y="29" width="92" height="300" fill="url(#m3d-disp)"/>
+      </g>
+      <ellipse cx="128" cy="44" rx="46" ry="15" fill="url(#m3d-face)" opacity=".93"/>
+      <ellipse cx="128" cy="44" rx="46" ry="15" fill="none" stroke="#fff" stroke-width="2" opacity=".95"/>
+      <rect x="93" y="60" width="7" height="240" rx="3.5" fill="#fff" opacity=".6"/>
+    </g>
+  </g>
+</svg>

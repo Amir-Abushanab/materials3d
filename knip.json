@@ -1,0 +1,29 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "workspaces": {
+    ".": {
+      "ignoreDependencies": ["@tweakpane/core"]
+    },
+    "packages/core": {
+      "project": ["src/**/*.ts"]
+    },
+    "packages/react": {
+      "project": ["src/**/*.{ts,tsx}"]
+    },
+    "packages/element": {
+      "project": ["src/**/*.ts"]
+    },
+    "apps/studio": {
+      "project": ["src/**/*.ts"]
+    }
+  },
+  "include": [
+    "files",
+    "dependencies",
+    "devDependencies",
+    "optionalPeerDependencies",
+    "unlisted",
+    "binaries",
+    "unresolved"
+  ]
+}

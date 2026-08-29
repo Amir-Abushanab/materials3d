@@ -1,0 +1,82 @@
+---
+"@materials3d/core": minor
+---
+
+A second engine, on three's node renderer and TSL, reached by `MaterialOptions.renderer: "webgpu"`.
+
+**Opt-in, and code-split.** The two engines are separate three builds sharing only `three.core`, so
+the default path is unchanged at roughly 733 KB while the node renderer's is nearer 1,028 KB. The
+shell picks between two sibling dynamic imports and never folds them into one parameterized
+`import(path)`, because a bundler can only split on a literal specifier — doing it the other way
+pulls both engines into every build with nothing to indicate it.
+
+`"webgpu"` selects the ENGINE, not the backend: three's node renderer falls back to a WebGL backend
+on its own, so what opting in actually buys is TSL and whatever a WebGPU backend adds where the
+browser has one. Headless Chromium has no `navigator.gpu` under any flag, which is why the WebGL
+backend is the only one CI can exercise.
+
+**`scripts/tsl-parity.mjs` is the reason this is a parallel migration rather than a replacement.**
+Every ported pass has a GLSL twin, and the harness renders both on identical input and diffs the
+whole frame. Forty-three cases, all matching — most bit-identical, the rest within one level of
+8-bit quantisation. It exits non-zero on any mismatch.
+
+Ported and under test: the colour transfer functions and both tone maps, the studio room in both
+forms, value noise and the slope limiter; the whole bloom chain (extract, downsample, paired blur,
+composite, particle field, blit); the post pass with its depth-of-field gather, occlusion guard,
+saturation-weighted bloom, caustic pool, haze, vignette and tone map; the lamp plate, the prism
+plane walk, the back-glass total-internal-reflection walk, depth encoding and dielectric Fresnel;
+the microfacet layer (GGX, correlated Smith, F82, thin film, the Zirr–Kaplanyan glint field); the
+three opaque families; the transmissive cone with its spectral weighting and hue rotation; and the
+beam and dust materials.
+
+Six things the harness and the engine smoke test caught that reading the code would not have:
+
+- **A node's assignment is emitted where it is FIRST BUILT, not where the JavaScript reads.**
+  Building follows a walk of the returned graph, so a value first reached through the argument of
+  something containing a `Loop` lands inside that loop body — and every later use reads whatever
+  the last iteration left, or nothing when the bound is zero. That put `view` inside the prism's
+  plane walk: on a shape with no planes the loop never ran, `view` stayed zero, and every Fresnel
+  term collapsed to grazing incidence. `.toVar()` pins it to the enclosing scope.
+- **An `If` callback with a concise body silently loses its assignment.** `() => x.assign(y)`
+  returns a node, so TSL reads the branch as having a return value and emits `return <value>;`
+  inside inlined code — then, finding no function to return from, comments the line out and reports
+  the node's generated code as empty. A block body returns undefined and none of it happens.
+
+- **`select` takes the condition FIRST.** Written the other way round it passes a colour as the
+  predicate, which compiles, renders, and is wrong in every branch. It was wrong in five places
+  across three files, and the post pass rendered pure black.
+- **Fluent `mix` argument order is not obviously `(a, b, t)`.** Using it swapped the near and far
+  bloom scales — a 34/255 error that produced a perfectly plausible picture.
+- **`Fn` cannot take a plain JavaScript object.** The opaque shader was written to take its uniforms
+  as an argument; it compiled and rendered nothing. Passes are factories over their uniforms now.
+- **The node renderer applies output colour management a raw `ShaderMaterial` does not.** Left at
+  defaults, a pass that does nothing but copy a ramp differed by 74/255.
+
+Two conventions in `renderer/nodes/` are load-bearing. TSL is imported from `three/webgpu`, never
+`three/tsl` — they are separate module instances with separate node registries, and mixing them
+fails a weak-map lookup at draw time with an error that names nothing. And the combinators go
+through thin wrappers with their argument order pinned, because passing a relaxed node to three's
+typed overloads makes resolution pick the first candidate rather than infer: a vec3 silently
+resolves as a vec2 and the error surfaces at an unrelated `.z` several lines later.
+
+**Wired into the render loop**: the four passes in order — back-face depth, plate, main and post —
+with the bloom pyramid between the last two, plus the light sheet, the traced prism interior and the
+back-glass total-internal-reflection pass. The prism preset renders its dispersed fan through the
+node engine. Three things there are worth knowing:
+
+- The plate carries linear depth in ALPHA and coverage only on the main pass, because the main pass
+  validates its refracted samples against it. A plate that writes a flat one reports every shape at
+  the far plane and the guard passes on samples it should reject.
+- `renderBackGlass` turns `autoClear` off for its draws. Every `renderAsync` clears its target
+  first, so a pass meant to ADD to the plate erases it instead — visible as a frame that gets
+  DARKER when a light-adding pass is switched on.
+- The dev probes in the item material are substituted on the main pass only and carry the plate's
+  own alpha. The plate is drawn by that same material, so a probe returning unconditionally
+  rewrites the plate the main pass then samples, and every reading taken through it describes a
+  frame that does not exist. That cost a dozen measurements before it was spotted.
+
+**Not yet done**: the dust field's vertex stage, the backdrop's remaining branches (gradient
+variants, image, mesh, wall), the prefiltered environment map, and the finish and wireframe
+materials. The two engines are also not yet calibrated — the node engine runs brighter on the same
+preset, most of it the environment lookup the GLSL path has and this one does not.
+`core-loader-webgpu` documents exactly what its type assertion is hiding.

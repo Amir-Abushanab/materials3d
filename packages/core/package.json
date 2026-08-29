@@ -1,0 +1,84 @@
+{
+  "name": "@materials3d/core",
+  "version": "0.1.0",
+  "description": "Scene-level refractive glass for the web: the four-pass renderer, shapes, motions and config model behind Materials Studio",
+  "keywords": [
+    "background",
+    "glass",
+    "hero",
+    "refraction",
+    "shader",
+    "three",
+    "threejs",
+    "webgl"
+  ],
+  "homepage": "https://github.com/Amir-Abushanab/materials3d/tree/main/packages/core#readme",
+  "bugs": "https://github.com/Amir-Abushanab/materials3d/issues",
+  "license": "MIT",
+  "author": "Amir Abushanab (https://github.com/Amir-Abushanab)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Amir-Abushanab/materials3d.git",
+    "directory": "packages/core"
+  },
+  "files": [
+    "dist",
+    "licenses",
+    "THIRD-PARTY-NOTICES.md"
+  ],
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": "./src/index.ts",
+    "./renderer": "./src/renderer/index.ts",
+    "./presets": "./src/presets.ts",
+    "./studio": "./src/studio/index.ts",
+    "./standalone": "./src/standalone.ts"
+  },
+  "publishConfig": {
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "./renderer": {
+        "types": "./dist/renderer/index.d.ts",
+        "default": "./dist/renderer/index.js"
+      },
+      "./presets": {
+        "types": "./dist/presets.d.ts",
+        "default": "./dist/presets.js"
+      },
+      "./studio": {
+        "types": "./dist/studio/index.d.ts",
+        "default": "./dist/studio/index.js"
+      },
+      "./standalone": {
+        "types": "./dist/standalone.d.ts",
+        "default": "./dist/standalone/materials3d.standalone.js"
+      }
+    },
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsdown && pnpm build:standalone",
+    "build:standalone": "vite build --config vite.standalone.config.ts",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/three": "^0.185.0",
+    "three": "^0.185.0",
+    "vite": "^8.1.0",
+    "vitest": "^4.1.10"
+  },
+  "peerDependencies": {
+    "@types/three": ">=0.180",
+    "three": ">=0.180 <1"
+  },
+  "peerDependenciesMeta": {
+    "@types/three": {
+      "optional": true
+    }
+  }
+}

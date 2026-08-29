@@ -1,0 +1,78 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 506 112" width="506" height="112" role="img" aria-label="Materials3D">
+  <!-- Materials3D horizontal lockup. Wordmark is Inter Display SemiBold, outlined, so it
+       needs no font at render time. Clear space on all sides = the mark's corner radius (25px). -->
+  <g transform="scale(0.437500)">
+  <!--
+    Materials3D — the mark. One flat-ended glass rod over a bounded lamp field.
+
+    Every element is a claim the renderer actually makes:
+      · the colour sits BEHIND the glass (the field), never painted on it
+      · the field is BOUNDED — clear plate between the lamps, which is what lets glass read as clear
+      · the barrel is saturated down its middle and clear at both rims: the absorption chord, 2R·(N·V)
+      · flat end with an elliptical face, not a hemisphere — the cue a capsule throws away
+      · a warm fringe on one rim and a cool one on the other: dispersion
+    Colours are the shipped default lamps, so the mark and the renderer agree.
+  -->
+  <defs>
+    <!-- down the barrel: the default lamp ramp, warm at the base through to violet at the face -->
+    <linearGradient id="m3d-barrel" x1="0" y1="1" x2="0" y2="0">
+      <stop offset="0" stop-color="#f8c852"/>
+      <stop offset=".24" stop-color="#f59d3e"/>
+      <stop offset=".45" stop-color="#ef5a4d"/>
+      <stop offset=".64" stop-color="#e55392"/>
+      <stop offset=".83" stop-color="#b461cb"/>
+      <stop offset="1" stop-color="#8a72d6"/>
+    </linearGradient>
+
+    <!-- across the barrel: clear at the rims, saturated through the middle. userSpaceOnUse so the
+         stops land on the rod's real edges rather than on its rotated bounding box. -->
+    <linearGradient id="m3d-chord" gradientUnits="userSpaceOnUse" x1="82" y1="0" x2="174" y2="0">
+      <stop offset="0" stop-color="#f6f5f4" stop-opacity=".98"/>
+      <stop offset=".09" stop-color="#f6f5f4" stop-opacity=".78"/>
+      <stop offset=".28" stop-color="#f6f5f4" stop-opacity=".08"/>
+      <stop offset=".56" stop-color="#f6f5f4" stop-opacity="0"/>
+      <stop offset=".80" stop-color="#f6f5f4" stop-opacity=".28"/>
+      <stop offset=".93" stop-color="#f6f5f4" stop-opacity=".78"/>
+      <stop offset="1" stop-color="#f6f5f4" stop-opacity=".96"/>
+    </linearGradient>
+
+    <linearGradient id="m3d-disp" gradientUnits="userSpaceOnUse" x1="82" y1="0" x2="174" y2="0">
+      <stop offset="0" stop-color="#ffb45e" stop-opacity=".26"/>
+      <stop offset=".11" stop-color="#ffb45e" stop-opacity="0"/>
+      <stop offset=".89" stop-color="#6fd0f2" stop-opacity="0"/>
+      <stop offset="1" stop-color="#6fd0f2" stop-opacity=".22"/>
+    </linearGradient>
+
+    <linearGradient id="m3d-face" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#fdfcfb"/><stop offset=".55" stop-color="#f3eef6"/><stop offset="1" stop-color="#e6dcee"/>
+    </linearGradient>
+
+    <radialGradient id="m3d-l1"><stop offset="0" stop-color="#f59d3e" stop-opacity=".60"/><stop offset="1" stop-color="#f59d3e" stop-opacity="0"/></radialGradient>
+    <radialGradient id="m3d-l2"><stop offset="0" stop-color="#b461cb" stop-opacity=".55"/><stop offset="1" stop-color="#b461cb" stop-opacity="0"/></radialGradient>
+    <radialGradient id="m3d-l3"><stop offset="0" stop-color="#ea4776" stop-opacity=".40"/><stop offset="1" stop-color="#ea4776" stop-opacity="0"/></radialGradient>
+
+    <clipPath id="m3d-plate"><rect width="256" height="256" rx="58"/></clipPath>
+    <!-- flat top face, barrel running off the bottom edge -->
+    <clipPath id="m3d-rod"><path d="M82 44 L82 320 L174 320 L174 44 A46 15 0 0 1 82 44 Z"/></clipPath>
+  </defs>
+
+  <g clip-path="url(#m3d-plate)">
+    <rect width="256" height="256" fill="#efedeb"/>
+    <ellipse cx="52" cy="58" rx="78" ry="70" fill="url(#m3d-l1)"/>
+    <ellipse cx="196" cy="52" rx="58" ry="52" fill="url(#m3d-l3)"/>
+    <ellipse cx="212" cy="204" rx="82" ry="74" fill="url(#m3d-l2)"/>
+
+    <g transform="rotate(-17 128 150)">
+      <g clip-path="url(#m3d-rod)">
+        <rect x="82" y="29" width="92" height="300" fill="url(#m3d-barrel)"/>
+        <rect x="82" y="29" width="92" height="300" fill="url(#m3d-chord)"/>
+        <rect x="82" y="29" width="92" height="300" fill="url(#m3d-disp)"/>
+      </g>
+      <ellipse cx="128" cy="44" rx="46" ry="15" fill="url(#m3d-face)" opacity=".93"/>
+      <ellipse cx="128" cy="44" rx="46" ry="15" fill="none" stroke="#fff" stroke-width="2" opacity=".95"/>
+      <rect x="93" y="60" width="7" height="240" rx="3.5" fill="#fff" opacity=".6"/>
+    </g>
+  </g>
+</g>
+  <g transform="translate(140 28) scale(0.776262) translate(-5.25 -15.0312)" fill="#1b1a1f"><path d="M 5.25,86 H 17.0625 V 56.46875 c 0,-7.078125 4.546875,-10.921875 9.890625,-10.921875 5.25,0 9,3.515625 9,8.90625 V 86 H 47.4375 V 55.625 c 0,-5.90625 3.703125,-10.078125 9.703125,-10.078125 5.0625,0 9.1875,2.90625 9.1875,9.46875 V 86 H 78.1875 V 53.328125 c 0,-11.625 -7.21875,-17.8125 -16.59375,-17.8125 -7.21875,0 -13.125,3.65625 -15.75,9.375 -2.0625,-5.671875 -7.546875,-9.375 -14.25,-9.375 -6.234375,0 -11.90625,3.1875 -14.90625,9.5625 V 36.5 H 5.25 Z m 95.08437,0.796875 c 8.0625,0 12.23438,-3.375 14.57813,-7.78125 H 115.1 V 86 h 11.625 V 52.25 c 0,-10.3125 -7.64063,-16.734375 -20.53125,-16.734375 -12.937502,0 -21.000002,6.515625 -21.562502,16.359375 h 11.390625 c 0.328125,-4.171875 4.171877,-7.171875 9.937497,-7.171875 5.67188,0 9.04688,3 9.04688,7.21875 v 0.375 c 0,3.375 -3.14063,3.515625 -12.32813,4.546875 -10.218747,1.078125 -19.453122,3.84375 -19.453122,15.09375 0,9.890625 7.265625,14.859375 17.109372,14.859375 z m 2.90625,-8.765625 c -5.156247,0 -8.484372,-2.296875 -8.484372,-6.1875 0,-4.5 4.3125,-6.328125 9.375002,-7.078125 4.875,-0.75 9.46875,-1.5 10.92187,-2.4375 v 5.34375 c 0,5.765625 -4.07812,10.359375 -11.8125,10.359375 z M 159.8875,36.5 H 149.80937 V 23 H 137.95 v 13.5 h -8.625 v 9.515625 h 8.625 V 73.53125 C 137.95,82.015625 142.68437,86 152.7625,86 h 7.125 v -9.515625 h -5.0625 c -3.84375,0 -5.01563,-1.171875 -5.01563,-4.6875 v -25.78125 h 10.07813 z m 25.14688,50.625 c 11.57812,0 20.76562,-6.703125 22.64062,-16.40625 h -11.0625 c -1.35937,4.21875 -5.34375,7.078125 -11.29687,7.078125 -7.96875,0 -12.5625,-5.390625 -12.84375,-13.453125 h 35.8125 v -3.234375 c 0,-15.1875 -9.46875,-25.734375 -23.71875,-25.734375 -13.875,0 -23.67188,10.875 -23.67188,25.921875 0,15 9.28125,25.828125 24.14063,25.828125 z M 172.56563,56.1875 c 0.79687,-7.078125 5.34375,-11.4375 12.1875,-11.4375 6.84375,0 11.4375,4.359375 12.1875,11.4375 z M 212.89999,86 h 11.8125 V 57.96875 c 0,-7.734375 4.35938,-11.625 9.98438,-11.625 2.34375,0 4.6875,0.234375 5.57812,0.375 v -10.5 c -0.9375,-0.09375 -2.25,-0.1875 -3.84375,-0.1875 -6.375,0 -10.17187,3 -12,8.671875 h -0.14062 V 36.5 H 212.89999 Z M 244,86 h 11.8125 V 36.5 H 244 Z m 5.90625,-56.859375 c 4.03125,0 7.07812,-2.90625 7.07812,-6.75 0,-3.796875 -3.04687,-6.703125 -7.07812,-6.703125 -4.03125,0 -7.07813,2.90625 -7.07813,6.703125 0,3.84375 3.04688,6.75 7.07813,6.75 z m 28.10001,57.65625 c 8.0625,0 12.23437,-3.375 14.57812,-7.78125 h 0.1875 V 86 h 11.625 V 52.25 c 0,-10.3125 -7.64062,-16.734375 -20.53125,-16.734375 -12.9375,0 -21,6.515625 -21.5625,16.359375 h 11.39063 c 0.32812,-4.171875 4.17187,-7.171875 9.9375,-7.171875 5.67187,0 9.04687,3 9.04687,7.21875 v 0.375 c 0,3.375 -3.14062,3.515625 -12.32812,4.546875 -10.21875,1.078125 -19.45313,3.84375 -19.45313,15.09375 0,9.890625 7.26563,14.859375 17.10938,14.859375 z m 2.90625,-8.765625 c -5.15625,0 -8.48438,-2.296875 -8.48438,-6.1875 0,-4.5 4.3125,-6.328125 9.375,-7.078125 4.875,-0.75 9.46875,-1.5 10.92188,-2.4375 v 5.34375 c 0,5.765625 -4.07813,10.359375 -11.8125,10.359375 z m 42.35,-61.875 h -11.8125 V 86 h 11.8125 z m 26.50623,71.015625 c 12.23437,0 21,-6.09375 21,-15.75 0,-7.265625 -4.54688,-11.578125 -14.34375,-13.640625 l -8.90625,-1.828125 c -4.125,-0.890625 -6.5625,-2.71875 -6.5625,-5.671875 0,-3.375 3.1875,-6 8.39062,-6 5.39063,0 9,3.234375 9.09375,7.640625 h 11.10938 c -0.28125,-10.171875 -8.48438,-16.5 -20.48438,-16.5 -12.09375,0 -19.92187,6.140625 -19.92187,15.234375 0,7.5 4.96875,12.328125 14.4375,14.296875 l 8.4375,1.734375 c 4.17187,0.890625 6.75,2.625 6.75,5.625 0,3.515625 -3.46875,6 -9.1875,6 -5.90625,0 -9.375,-2.765625 -9.89063,-7.59375 h -11.67187 c 0.75,10.640625 9.70312,16.453125 21.75,16.453125 z"/><path d="m 399.80624,87.125 c 15.04688,0 25.82813,-8.671875 25.82813,-20.8125 0,-8.296875 -5.76563,-15.140625 -15.23438,-16.453125 V 49.71875 c 7.82813,-1.875 13.07813,-7.546875 13.07813,-15.140625 0,-11.390625 -10.125,-19.546875 -23.90625,-19.546875 -14.625,0 -24.23438,9.1875 -24.23438,21.890625 h 11.76563 c 0,-7.453125 4.875,-12.09375 12.42187,-12.09375 7.3125,0 12.23438,4.21875 12.23438,10.875 0,6 -5.25,9.84375 -13.26563,9.84375 h -6 V 55.0625 h 6 c 8.90625,0 14.90625,4.265625 14.90625,10.734375 0,6.890625 -5.625,11.34375 -13.73437,11.34375 -8.625,0 -13.73438,-5.109375 -13.73438,-13.828125 h -12.04687 c 0,13.40625 9.51562,23.8125 25.92187,23.8125 z m 50.17813,-0.140625 c 6.46875,0 11.90625,-2.8125 15,-8.53125 h 0.0937 V 86 h 11.625 V 16.15625 h -11.8125 v 27.375 h -0.0937 c -3.1875,-5.4375 -8.48437,-8.015625 -14.90625,-8.015625 -12.70312,0 -21.32812,10.453125 -21.32812,25.6875 0,15.421875 8.48437,25.78125 21.42187,25.78125 z M 452.75,77.09375 c -7.3125,0 -12.23438,-5.625 -12.23438,-15.890625 0,-10.21875 4.92188,-15.890625 12.23438,-15.890625 7.73437,0 12.79687,6.28125 12.79687,15.890625 0,9.65625 -5.0625,15.890625 -12.79687,15.890625 z" fill="#8a72d6"/></g>
+</svg>

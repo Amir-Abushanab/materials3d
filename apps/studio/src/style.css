@@ -1,0 +1,624 @@
+/* Materials Studio. Light, quiet chrome — the scene is a near-white studio backdrop, so anything
+   with strong colour in the UI competes with the thing being designed. */
+
+:root {
+  --ink: #1b1a1f;
+  --ink-2: #6d6a75;
+  --ink-3: #9a97a2;
+  --hair: rgb(27 26 31 / 14%);
+  --panel: #fbfafa;
+  --accent: #a24bc8;
+  --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Helvetica, Arial, sans-serif;
+  --panel-w: 320px;
+  --edge: 28px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  display: grid;
+  /* An explicit row: #scene is absolutely positioned, so #stage has no intrinsic height and the
+     row would otherwise be sized by whatever the panel happens to contain. */
+  grid-template-rows: minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) var(--panel-w);
+  overflow: hidden;
+  background: #efedeb;
+  color: var(--ink);
+  font-family: var(--sans);
+}
+
+/* The stage reserves the preview area; the SCENE inside it is the export frame, at the exact
+   aspect every image, clip and embed will be written at. Before this, the scene simply filled the
+   stage, so choosing "1:1" changed the exported file but not the thing you were composing
+   against — and `camera.fit` had nothing visible to act on. */
+#stage {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  min-height: 0;
+  padding: var(--edge);
+  overflow: hidden;
+}
+
+#scene {
+  position: relative;
+  flex: none;
+  /* `refitPreview` sets the real inline/block size — CSS cannot fit an arbitrary aspect inside a
+     box on its own, see the note there. These are the first-paint fallback and a safety net only;
+     the aspect-ratio never survives once the computed size lands. */
+  inline-size: 100%;
+  max-inline-size: 100%;
+  max-block-size: 100%;
+  aspect-ratio: var(--capture-aspect, 16 / 9);
+  outline: 1px solid var(--hair);
+  outline-offset: 0;
+  box-shadow: 0 18px 50px rgb(27 26 31 / 10%);
+}
+
+/* Actual size: the frame takes its real pixel dimensions and the stage scrolls to reach the rest.
+   `safe center` rather than plain `center` because a centred flex item that overflows its scroll
+   container is unreachable at the start edge — the top and left of a 4K frame would be scrolled
+   past with no way back. `safe` drops to start alignment exactly when that would happen. */
+#stage.actual-size {
+  justify-content: safe center;
+  align-items: safe center;
+  overflow: auto;
+}
+
+#stage.actual-size #scene {
+  max-inline-size: none;
+  max-block-size: none;
+}
+
+/* The export-area readout, tucked under the frame's top edge. Quiet by default — it is a label,
+   not a control — and it brightens with the resize handles while the size is being changed. */
+#capture-size {
+  position: absolute;
+  inset-block-start: 100%;
+  inset-inline-start: 0;
+  z-index: 5;
+  padding-block-start: 6px;
+  color: var(--ink-3);
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0.75;
+  transition: opacity 0.15s ease;
+}
+
+#stage:hover #capture-size,
+#stage.size-adjusting #capture-size {
+  opacity: 1;
+}
+
+/* Corner handles for dragging the export size. Hidden until the pointer is over the stage, so a
+   frame you are only looking at stays clean. */
+.output-resize-handle {
+  position: absolute;
+  z-index: 6;
+  inline-size: 26px;
+  block-size: 26px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  opacity: 0;
+  touch-action: none;
+  transition: opacity 0.15s ease;
+}
+
+/* The visible part is a corner bracket, drawn inside the frame rather than straddling its edge. */
+.output-resize-handle::before {
+  content: "";
+  position: absolute;
+  inset: 5px;
+  border: 2px solid var(--ink-2);
+  border-radius: 1px;
+}
+
+#stage:hover .output-resize-handle,
+#scene.is-resizing .output-resize-handle {
+  opacity: 0.85;
+}
+
+.output-resize-handle:hover,
+.output-resize-handle:focus-visible {
+  opacity: 1 !important;
+}
+
+.output-resize-handle[data-corner="nw"] {
+  inset-block-start: 0;
+  inset-inline-start: 0;
+  cursor: nwse-resize;
+}
+
+.output-resize-handle[data-corner="nw"]::before {
+  border-inline-end: 0;
+  border-block-end: 0;
+}
+
+.output-resize-handle[data-corner="ne"] {
+  inset-block-start: 0;
+  inset-inline-end: 0;
+  cursor: nesw-resize;
+}
+
+.output-resize-handle[data-corner="ne"]::before {
+  border-inline-start: 0;
+  border-block-end: 0;
+}
+
+.output-resize-handle[data-corner="sw"] {
+  inset-block-end: 0;
+  inset-inline-start: 0;
+  cursor: nesw-resize;
+}
+
+.output-resize-handle[data-corner="sw"]::before {
+  border-inline-end: 0;
+  border-block-start: 0;
+}
+
+.output-resize-handle[data-corner="se"] {
+  inset-block-end: 0;
+  inset-inline-end: 0;
+  cursor: nwse-resize;
+}
+
+.output-resize-handle[data-corner="se"]::before {
+  border-inline-start: 0;
+  border-block-start: 0;
+}
+
+/* While a corner is being dragged the frame takes an explicit size, so the aspect-ratio rule is
+   inert; this just keeps the pointer from selecting text across the page. */
+#scene.is-resizing {
+  user-select: none;
+}
+
+/* Transparency needs something behind it to read against; the checkerboard is the studio's, not
+   the scene's, so it never reaches an export. */
+#scene[data-transparent="1"] {
+  background-image:
+    linear-gradient(45deg, rgb(27 26 31 / 7%) 25%, transparent 25%),
+    linear-gradient(-45deg, rgb(27 26 31 / 7%) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, rgb(27 26 31 / 7%) 75%),
+    linear-gradient(-45deg, transparent 75%, rgb(27 26 31 / 7%) 75%);
+  background-position:
+    0 0,
+    0 8px,
+    8px -8px,
+    -8px 0;
+  background-size: 16px 16px;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* ------------------------------------------------------------------ panel -- */
+
+#panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-left: 1px solid var(--hair);
+  background: var(--panel);
+}
+
+.panel-head {
+  position: relative; /* anchors the history popover */
+  z-index: 2;
+  display: flex;
+  flex: none;
+  gap: 6px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--hair);
+}
+
+/* The mark sits at the studio's smallest useful size; its corner radius is 22.7% of the tile,
+   the same ratio the SVG's own plate uses, so the shadow follows the artwork rather than a box. */
+.brand {
+  display: flex;
+  gap: 9px;
+  align-items: center;
+  min-width: 0;
+}
+
+.brand-mark {
+  display: block;
+  flex: none;
+  border-radius: 5.9px;
+  box-shadow: 0 1px 2px rgb(27 26 31 / 12%);
+}
+
+.brand b {
+  display: block;
+  font-size: 13px;
+  letter-spacing: -0.01em;
+}
+
+.brand span {
+  color: var(--ink-3);
+  font-family: var(--mono);
+  font-size: 10px;
+}
+
+button {
+  padding: 6px 10px;
+  border: 1px solid var(--hair);
+  border-radius: 7px;
+  background: #fff;
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+button:hover {
+  border-color: rgb(27 26 31 / 28%);
+}
+
+#pane {
+  flex: 1;
+  min-height: 0;
+  padding: 10px;
+  overflow-y: auto;
+}
+
+/* Tweakpane's default dark theme fights a near-white studio; recolour it to the panel. */
+#pane .tp-dfwv {
+  width: 100%;
+}
+
+#pane {
+  --tp-base-background-color: transparent;
+  --tp-base-shadow-color: rgb(0 0 0 / 0%);
+  --tp-button-background-color: #fff;
+  --tp-button-background-color-active: #ececef;
+  --tp-button-background-color-focus: #f2f2f4;
+  --tp-button-background-color-hover: #f6f6f8;
+  --tp-button-foreground-color: #1b1a1f;
+  --tp-container-background-color: rgb(27 26 31 / 4%);
+  --tp-container-background-color-active: rgb(27 26 31 / 10%);
+  --tp-container-background-color-focus: rgb(27 26 31 / 8%);
+  --tp-container-background-color-hover: rgb(27 26 31 / 6%);
+  --tp-container-foreground-color: #46434d;
+  --tp-groove-foreground-color: rgb(27 26 31 / 10%);
+  --tp-input-background-color: #fff;
+  --tp-input-background-color-active: #f2f2f4;
+  --tp-input-background-color-focus: #f6f6f8;
+  --tp-input-background-color-hover: #fafafb;
+  --tp-input-foreground-color: #1b1a1f;
+  --tp-label-foreground-color: #6d6a75;
+  --tp-monitor-background-color: rgb(27 26 31 / 4%);
+  --tp-monitor-foreground-color: #6d6a75;
+}
+
+/* ----------------------------------------------------------------- dialog -- */
+
+dialog {
+  width: min(760px, 92vw);
+  max-height: 82vh;
+  padding: 0;
+  border: 1px solid var(--hair);
+  border-radius: 14px;
+  box-shadow: 0 40px 80px -30px rgb(27 26 31 / 45%);
+}
+
+dialog::backdrop {
+  background: rgb(27 26 31 / 28%);
+}
+
+.dialog-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--hair);
+}
+
+.dialog-head b {
+  font-size: 13px;
+}
+
+.dialog-head button {
+  padding: 2px 9px;
+  font-size: 15px;
+  line-height: 1;
+}
+
+.dialog-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 10px 16px 0;
+}
+
+.dialog-tabs button[aria-selected="true"] {
+  border-color: var(--ink);
+}
+
+/* CodeMirror host. The editor owns its own scrolling, so the box is a fixed viewport. */
+#dialog-body {
+  height: min(48vh, 440px);
+  overflow: hidden;
+}
+
+#dialog-body .cm-editor {
+  height: 100%;
+}
+
+#dialog-note[data-error="1"] {
+  color: #d0342c;
+}
+
+.dialog-foot {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 12px 16px;
+  border-top: 1px solid var(--hair);
+}
+
+.dialog-foot .spacer {
+  flex: 1;
+}
+
+#dialog-note {
+  color: var(--ink-3);
+  font-family: var(--mono);
+  font-size: 10.5px;
+}
+
+.g3-note {
+  margin: 2px 0 6px;
+  padding: 0 4px;
+  color: var(--ink-3);
+  font-family: var(--mono);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+/* Warnings get their own row rather than a suffix on the readout: an amber block reads as
+   "something is wrong here", where grey text appended to a size reads as more size. */
+.g3-warn {
+  margin: 0 4px 8px;
+  padding: 6px 8px;
+  border: 1px solid rgb(178 90 30 / 34%);
+  border-inline-start-width: 3px;
+  border-radius: 5px;
+  background: rgb(178 90 30 / 8%);
+  color: #8a4416;
+  font-family: var(--mono);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.g3-warn[hidden] {
+  display: none;
+}
+
+/* The preset picker's thumbnail grid, inside the Actions folder. */
+.g3-presets {
+  display: grid;
+  gap: 6px;
+  grid-template-columns: repeat(2, 1fr);
+  padding: 4px 4px 8px;
+}
+
+.g3-preset {
+  display: block;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--hair);
+  border-radius: 8px;
+  background: #fff;
+  cursor: pointer;
+  text-align: left;
+}
+
+.g3-preset:hover {
+  border-color: rgb(27 26 31 / 30%);
+}
+
+.g3-preset[aria-pressed="true"] {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.g3-preset-img {
+  display: block;
+  aspect-ratio: 16 / 9;
+  /* Until a thumbnail renders, the tile is a quiet placeholder rather than a hole. */
+  background: #f4f3f2 center / cover no-repeat;
+}
+
+.g3-preset-label {
+  display: block;
+  padding: 5px 7px;
+  border-top: 1px solid var(--hair);
+  color: var(--ink-2);
+  font-size: 10.5px;
+  letter-spacing: 0.02em;
+}
+
+.g3-preset[aria-pressed="true"] .g3-preset-label {
+  color: var(--ink);
+}
+
+/* The config folder for the shape selected in the viewport. The ring persists (it marks the
+   selection) while the wash fades, so the jump is legible without leaving a permanent glare. */
+#pane .tp-fldv.is-focused {
+  border-radius: 6px;
+  box-shadow: 0 0 0 2px var(--accent);
+}
+
+#pane .tp-fldv.is-focused > .tp-fldv_t {
+  animation: g3-flash 1.1s ease-out;
+}
+
+@keyframes g3-flash {
+  from {
+    background: color-mix(in srgb, var(--accent) 34%, transparent);
+  }
+
+  to {
+    background: transparent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #pane .tp-fldv.is-focused > .tp-fldv_t {
+    animation: none;
+  }
+}
+
+/* A rebuild reopens the folders that were open; letting each one ease would leave the restored
+   scroll position chasing a dozen animating heights. See ControlPanel.restoreView. */
+#pane.is-restoring,
+#pane.is-restoring * {
+  transition: none !important;
+}
+
+/* A group's folder. Tweakpane nests folders without indenting them, so a group would read as a
+   header followed by an unrelated list; the rule down the left is what says "these are inside". */
+#pane .tp-fldv.g3-group > .tp-fldv_c {
+  margin-left: 6px;
+  padding-left: 4px;
+  border-left: 2px solid color-mix(in srgb, var(--accent) 40%, transparent);
+}
+
+#pane .tp-fldv.g3-group > .tp-fldv_t {
+  color: var(--accent);
+}
+
+/* ------------------------------------------------------------------ toast -- */
+
+#toast {
+  position: fixed;
+  bottom: 22px;
+  left: 50%;
+  z-index: 20;
+  padding: 9px 16px;
+  transform: translate(-50%, 12px);
+  transition:
+    opacity 0.18s ease,
+    transform 0.18s ease;
+  border-radius: 9px;
+  opacity: 0;
+  background: var(--ink);
+  color: #fff;
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  pointer-events: none;
+}
+
+#toast[data-show="1"] {
+  transform: translate(-50%, 0);
+  opacity: 1;
+}
+
+@media (width <= 900px) {
+  body {
+    grid-template-columns: 1fr;
+    grid-template-rows: 45vh 1fr;
+  }
+
+  #panel {
+    border-top: 1px solid var(--hair);
+    border-left: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #toast {
+    transition: none;
+  }
+}
+
+/* Control hints: dotted-underline labels whose hover/focus reveals the shared #g3-tooltip.
+   See src/ui/controlHints.ts. */
+.tp-lblv_l.g3-has-hint {
+  cursor: help;
+  text-decoration: underline dotted rgb(27 26 31 / 35%);
+  text-underline-offset: 2px;
+  text-decoration-thickness: 1px;
+  transition:
+    color 120ms ease,
+    text-decoration-color 120ms ease;
+}
+
+.tp-lblv_l.g3-has-hint:hover {
+  color: var(--ink);
+  text-decoration-color: rgb(27 26 31 / 70%);
+}
+
+/* A hinted BUTTON's info glyph. Buttons exist to be clicked, so the hint gets its own small target
+   rather than borrowing the label's dotted underline — which on a button would advertise the whole
+   thing as hoverable-for-help and fight the click. Dim until approached; strokes with currentColor
+   so it can never be invisible against its own control. */
+.g3-hint-info {
+  display: inline-flex;
+  align-items: center;
+  vertical-align: -2px;
+  margin-left: 6px;
+  cursor: help;
+  opacity: 0.55;
+  transition: opacity 120ms ease;
+}
+.g3-hint-info:hover {
+  opacity: 1;
+}
+
+/* Shared tooltip, rendered in the top layer via the Popover API so it escapes the panel's
+   overflow/scroll clipping and the canvas. Positioned in JS (fixed coords from the label rect).
+   Ink-on-light UI, so the tip inverts: dark card, light text. */
+#g3-tooltip {
+  position: fixed;
+  inset: auto;
+  margin: 0;
+  max-width: 244px;
+  padding: 8px 10px;
+  border: 1px solid rgb(255 255 255 / 14%);
+  border-radius: 8px;
+  background: rgb(27 26 31 / 96%);
+  color: #f2f1f4;
+  font-size: 0.6875rem;
+  line-height: 1.42;
+  box-shadow: 0 10px 30px rgb(0 0 0 / 28%);
+  backdrop-filter: blur(10px);
+  pointer-events: none; /* never steal hover from the label it describes */
+  opacity: 0;
+  transform: translateY(-3px);
+  transition:
+    opacity 120ms ease-out,
+    transform 120ms ease-out;
+}
+
+#g3-tooltip.g3-tip-show {
+  opacity: 1;
+  transform: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #g3-tooltip {
+    transform: none;
+    transition: none;
+  }
+}

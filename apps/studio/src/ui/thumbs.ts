@@ -1,0 +1,158 @@
+/**
+ * Thumbnail generation for the preset picker and the version history.
+ *
+ * Both use the same trick: ONE hidden, low-resolution MaterialRenderer that renders a config to a
+ * still frame. Four passes per frame is expensive enough that spinning up a renderer per thumbnail
+ * would be felt, and a shared one keeps a long history cheap.
+ *
+ * Preset thumbs are generated once, eagerly but after first paint. History thumbs are rendered on
+ * demand — only when a row scrolls into view — because a timeline can be eighty entries long and
+ * most are never looked at.
+ */
+
+import { MaterialRenderer } from "@materials3d/core/renderer";
+import { createThumbHost, prepThumbConfig, renderThumbFrame } from "@materials3d/core/studio";
+import type { SceneConfig } from "@materials3d/core";
+
+// Sized for the largest display these are shown at, times a HiDPI factor. The preset card is
+// ~118 CSS px wide and the history row's is 46 — an image rendered at the CSS size is upscaled on
+// every retina screen, which is exactly what made the first version look soft.
+const PRESET_W = 384;
+const PRESET_H = 216;
+const HISTORY_W = 160;
+const HISTORY_H = 90;
+
+const presetCache = new Map<string, string>();
+let presetsStarted = false;
+
+/** The rendered thumbnail for a preset, or undefined until generation reaches it. */
+export function getPresetThumb(name: string): string | undefined {
+  return presetCache.get(name);
+}
+
+/** Render a thumbnail for every preset once, then call `onReady`. Safe to call repeatedly. */
+export async function generatePresetThumbs(
+  presets: Record<string, () => SceneConfig>,
+  onReady: () => void,
+): Promise<void> {
+  if (presetsStarted) return;
+  presetsStarted = true;
+
+  const host = createThumbHost(PRESET_W, PRESET_H);
+  let renderer: MaterialRenderer | null = null;
+  try {
+    for (const [name, make] of Object.entries(presets)) {
+      const config = make();
+      prepThumbConfig(config);
+      // Reduced motion must not freeze the offscreen renderer at a blank first frame.
+      if (!renderer) renderer = new MaterialRenderer(host, config, { respectReducedMotion: false });
+      else renderer.setConfig(config);
+      const canvas = renderThumbFrame(renderer, host);
+      if (canvas) presetCache.set(name, canvas.toDataURL("image/webp", 0.9));
+      // Sequential on purpose — every iteration reuses the one renderer. Yield so startup paint
+      // and the first interactions stay smooth.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+  } catch (error) {
+    console.warn("Preset thumbnail generation failed:", error);
+  } finally {
+    renderer?.dispose();
+    host.remove();
+  }
+  onReady();
+}
+
+/** Lazy, queued thumbnails for history rows, keyed by entry id. */
+export class HistoryThumbnailer {
+  private readonly cache = new Map<number, string>();
+  private readonly waiters = new Map<number, Array<(url: string | null) => void>>();
+  private readonly queue: number[] = [];
+  private running = false;
+  private disposed = false;
+  private host?: HTMLDivElement;
+  private renderer?: MaterialRenderer;
+
+  constructor(private readonly getConfig: (id: number) => SceneConfig | null) {}
+
+  /** A synchronous cache hit, if this one is already rendered. */
+  cached(id: number): string | undefined {
+    return this.cache.get(id);
+  }
+
+  /** Get (or render) the thumbnail for an entry; `cb` fires with the data URL, or null on failure. */
+  request(id: number, cb: (url: string | null) => void): void {
+    if (this.disposed) return;
+    const hit = this.cache.get(id);
+    if (hit !== undefined) {
+      cb(hit);
+      return;
+    }
+    const waiting = this.waiters.get(id);
+    if (waiting) {
+      waiting.push(cb); // a render is already queued for this id
+      return;
+    }
+    this.waiters.set(id, [cb]);
+    this.queue.push(id);
+    void this.pump();
+  }
+
+  dispose(): void {
+    this.disposed = true;
+    this.queue.length = 0;
+    this.waiters.clear();
+    this.cache.clear();
+    this.renderer?.dispose();
+    this.renderer = undefined;
+    this.host?.remove();
+    this.host = undefined;
+  }
+
+  private async pump(): Promise<void> {
+    if (this.running || this.disposed) return;
+    this.running = true;
+    try {
+      while (this.queue.length > 0 && !this.disposed) {
+        const id = this.queue.shift();
+        if (id === undefined) break;
+        let url: string | null = null;
+        try {
+          url = this.renderOne(id);
+        } catch (error) {
+          console.warn("History thumbnail render failed:", error);
+        }
+        if (url) {
+          this.cache.set(id, url);
+          // The timeline caps at ~80 entries, but ids from truncated redo branches linger here —
+          // evict the oldest past a generous ceiling so memory stays bounded.
+          if (this.cache.size > 240) {
+            const oldest = this.cache.keys().next().value;
+            if (oldest !== undefined) this.cache.delete(oldest);
+          }
+        }
+        const callbacks = this.waiters.get(id) ?? [];
+        this.waiters.delete(id);
+        for (const cb of callbacks) cb(url);
+        await new Promise((resolve) => setTimeout(resolve, 0)); // yield between renders
+      }
+    } finally {
+      this.running = false;
+    }
+  }
+
+  private renderOne(id: number): string | null {
+    const source = this.getConfig(id);
+    if (!source) return null;
+    // Clone before touching it: setConfig normalizes in place, and this is a History-owned snapshot.
+    const config = structuredClone(source);
+    prepThumbConfig(config);
+    if (!this.host) this.host = createThumbHost(HISTORY_W, HISTORY_H);
+    if (!this.renderer) {
+      this.renderer = new MaterialRenderer(this.host, config, { respectReducedMotion: false });
+    } else {
+      this.renderer.setConfig(config);
+    }
+    const out = renderThumbFrame(this.renderer, this.host);
+    return out ? out.toDataURL("image/webp", 0.8) : null;
+  }
+}

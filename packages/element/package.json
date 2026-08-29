@@ -1,0 +1,60 @@
+{
+  "name": "@materials3d/element",
+  "version": "0.1.0",
+  "description": "Drop-in refractive-glass scene for Vue, Svelte, or plain HTML: the <materials-3d> custom element",
+  "keywords": [
+    "custom-elements",
+    "glass",
+    "refraction",
+    "svelte",
+    "three",
+    "vue",
+    "web-components",
+    "webgl"
+  ],
+  "homepage": "https://github.com/Amir-Abushanab/materials3d/tree/main/packages/element#readme",
+  "bugs": "https://github.com/Amir-Abushanab/materials3d/issues",
+  "license": "MIT",
+  "author": "Amir Abushanab (https://github.com/Amir-Abushanab)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Amir-Abushanab/materials3d.git",
+    "directory": "packages/element"
+  },
+  "files": [
+    "dist"
+  ],
+  "type": "module",
+  "sideEffects": [
+    "./src/index.ts",
+    "./dist/index.js"
+  ],
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "publishConfig": {
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      }
+    },
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsdown",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@materials3d/core": "workspace:^"
+  },
+  "peerDependencies": {
+    "@types/three": ">=0.180",
+    "three": ">=0.180 <1"
+  },
+  "peerDependenciesMeta": {
+    "@types/three": {
+      "optional": true
+    }
+  }
+}

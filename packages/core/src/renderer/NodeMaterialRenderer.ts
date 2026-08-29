@@ -225,6 +225,8 @@ export class NodeMaterialRenderer implements Engine {
   private readonly aspect = uniform(1);
   private placeholder?: THREE.DataTexture;
   private readonly measuredThickness = uniform(0);
+  /** Scratch for the front depth pass's clear colour, which encodes the focal distance. */
+  private readonly depthClear = new THREE.Color();
   /** 1 for `transmission: "cone"`, 0 for the three-ray default. */
   private readonly coneMode = uniform(0);
   /**
@@ -236,6 +238,8 @@ export class NodeMaterialRenderer implements Engine {
    * already see, which is zero.
    */
   private depthMaterial?: THREE.NodeMaterial;
+  /** The same encoding, front faces — what the depth of field measures its blur against. */
+  private frontDepthMaterial?: THREE.NodeMaterial;
   private plateSource?: Vec;
   private debugBlit?: THREE.NodeMaterial;
   private debugEnv?: THREE.NodeMaterial;
@@ -1131,6 +1135,12 @@ export class NodeMaterialRenderer implements Engine {
     return material;
   }
 
+  private buildFrontDepthMaterial(): THREE.NodeMaterial {
+    const material = new THREE.NodeMaterial();
+    material.fragmentNode = depthPass(TSL.positionView.z.negate(), FAR) as never;
+    return material;
+  }
+
   /** Back-face linear depth, for the measured optical path. Same placeholder rule as the plate. */
   private depthTexture(): THREE.Texture {
     this.placeholder ??= new THREE.DataTexture(new Uint8Array([0, 0, 0, 255]), 1, 1);
@@ -1254,7 +1264,7 @@ export class NodeMaterialRenderer implements Engine {
       post: passMaterial(
         postPass({
           color: t.color.texture,
-          depth: t.back.texture,
+          depth: t.front.texture,
           bloom: t.bloom[0].b.texture,
           res: this.resolution,
           mirror: this.sourceFlip,
@@ -1447,6 +1457,32 @@ export class NodeMaterialRenderer implements Engine {
     // 0. Depth — the back faces, as linear depth. The post pass's gather measures its circle of
     //    confusion against this, and without it every fragment reads depth zero and comes back at
     //    maximum defocus, which is a frame of blocks rather than a picture.
+    // 0a. FRONT depth, for the post pass's gather.
+    //
+    // Cleared to the FOCAL depth, not to zero: a backdrop sitting far outside the focal range has
+    // a maximal circle of confusion, so every background pixel near a shape gathers a dozen pixels
+    // of that shape's colour and the frame turns to smeared watercolour. Pinning the background to
+    // the focal plane removes the bleed outright, and backgrounds are smooth gradients that do not
+    // need blurring anyway.
+    this.frontDepthMaterial ??= this.buildFrontDepthMaterial();
+    const focal = Math.min(1, Math.max(0, this.config.post.focus / FAR));
+    const focalLow = (focal * 255) % 1;
+    this.depthClear.setRGB(focal - focalLow / 255, focalLow, 0);
+    const previousClear0 = this.renderer.getClearColor(new THREE.Color());
+    const previousClearAlpha0 = this.renderer.getClearAlpha();
+    const backdropWasVisible0 = this.backdrop?.visible ?? false;
+    const beamWasVisible0 = this.beamMesh?.visible ?? false;
+    if (this.backdrop) this.backdrop.visible = false;
+    if (this.beamMesh) this.beamMesh.visible = false;
+    this.scene.overrideMaterial = this.frontDepthMaterial;
+    this.renderer.setClearColor(this.depthClear, 1);
+    this.renderer.setRenderTarget(t.front);
+    await this.renderer.renderAsync(this.scene, this.camera);
+    this.scene.overrideMaterial = null;
+    this.renderer.setClearColor(previousClear0, previousClearAlpha0);
+    if (this.backdrop) this.backdrop.visible = backdropWasVisible0;
+    if (this.beamMesh) this.beamMesh.visible = beamWasVisible0;
+
     this.depthMaterial ??= this.buildDepthMaterial();
     this.scene.overrideMaterial = this.depthMaterial;
     // The backdrop and the beam are HIDDEN here, and both for the same reason: under an override

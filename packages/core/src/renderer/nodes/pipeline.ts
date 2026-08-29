@@ -17,6 +17,14 @@
 import * as THREE from "three/webgpu";
 
 export interface PassTargets {
+  /**
+   * FRONT-face linear depth, read by the post pass's depth-of-field gather.
+   *
+   * Separate from `back` because they answer different questions: this is how far away the surface
+   * you can SEE is, which is what defocus is measured against, while `back` is where the light
+   * leaves. It is also cleared differently — to the focal depth, so the backdrop sits in focus.
+   */
+  front: THREE.RenderTarget;
   /** Back-face linear depth, read by the main pass to measure thickness. */
   back: THREE.RenderTarget;
   /** The plate: backdrop plus shapes, un-refracted. Alpha carries linear depth. */
@@ -61,6 +69,12 @@ export function createTargets(width: number, height: number, hdr: boolean): Pass
     // NEAREST, not linear. The two-channel packing splits depth across r and g, and a blend of the
     // LOW byte of two different depths decodes to a distance that is in neither of them — which
     // shows up as wedges of wrong thickness wherever depth changes fast, meaning every silhouette.
+    front: makeTarget(width, height, {
+      ...base,
+      type: THREE.UnsignedByteType,
+      minFilter: THREE.NearestFilter,
+      magFilter: THREE.NearestFilter,
+    }),
     back: makeTarget(width, height, {
       ...base,
       type: THREE.UnsignedByteType,
@@ -87,6 +101,7 @@ export function createTargets(width: number, height: number, hdr: boolean): Pass
 export function resizeTargets(t: PassTargets, width: number, height: number): void {
   const w = Math.max(1, Math.floor(width));
   const h = Math.max(1, Math.floor(height));
+  t.front.setSize(w, h);
   t.back.setSize(w, h);
   t.plate.setSize(w, h);
   t.color.setSize(w, h);
@@ -97,6 +112,7 @@ export function resizeTargets(t: PassTargets, width: number, height: number): vo
 }
 
 export function disposeTargets(t: PassTargets): void {
+  t.front.dispose();
   t.back.dispose();
   t.plate.dispose();
   t.color.dispose();

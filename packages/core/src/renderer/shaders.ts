@@ -942,10 +942,17 @@ export const BACKDROP_FRAG = /* glsl */ `
     return acc;
   }
 
-  /** A 0 -> 1 transition centred ON the contour, so the true silhouette sits at the half value. */
+  /**
+   * A 0 -> 1 transition centred ON the contour, so the true silhouette sits at the half value.
+   *
+   * NOT named 'half'. That is a reserved word in GLSL ES 3.00, and three rewrites every non-raw
+   * ShaderMaterial to 3.00 — so the declaration failed to compile, took the whole backdrop program
+   * with it, and the wall mode drew nothing at all. A dead backdrop looks like a scene that simply
+   * has no wall configured, which is why it survived so long.
+   */
   float softInside(float distance, float amplitude){
-    float half = max(amplitude * 0.5, 0.0001);
-    return 1.0 - smoothstep(-half, half, distance);
+    float edge = max(amplitude * 0.5, 0.0001);
+    return 1.0 - smoothstep(-edge, edge, distance);
   }
 
   float shadowContrastCurve(float v, float contrast, float pivot){

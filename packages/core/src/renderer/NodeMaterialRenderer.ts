@@ -25,7 +25,15 @@ import {
 import { parseHex } from "../util/color";
 import type { Engine } from "../engine";
 import { tonemapAces, tonemapNeutral } from "./nodes/common";
-import { bloomBlurPass, bloomCompositePass, bloomDownPass, bloomExtractPass } from "./nodes/passes";
+import {
+  blitPass,
+  bloomBlurPass,
+  bloomCompositePass,
+  bloomDownPass,
+  bloomExtractPass,
+  envBakePass,
+  envBlurPass,
+} from "./nodes/passes";
 import { postPass } from "./nodes/post";
 import {
   BLOOM_DIVISORS,
@@ -59,7 +67,7 @@ import {
 } from "./nodes/glass";
 import { shadeOpaque } from "./nodes/opaque";
 import { bendDir, coneTransmission, transmittedHue } from "./nodes/transmissive";
-import { studioGradient, studioSoftbox } from "./nodes/common";
+import { studioCone, studioRoom } from "./nodes/common";
 
 /** Mirrors {@link MaterialRendererOptions}; the shell hands the same object to either engine. */
 export interface NodeMaterialRendererOptions {
@@ -102,6 +110,28 @@ function writePlane(
   const p = localPoint.clone().applyMatrix4(world);
   out.set(n.x, n.y, n.z, -n.dot(p));
 }
+/**
+ * A scratch target for one step of the environment chain.
+ *
+ * Wraps horizontally and clamps vertically, which is what an equirect map needs: the seam at
+ * phi = ±pi is continuous and has to blur across, while the poles are not and must not.
+ */
+const envScratch = (w: number, h: number) =>
+  new THREE.RenderTarget(Math.max(1, w), Math.max(1, h), {
+    type: THREE.HalfFloatType,
+    format: THREE.RGBAFormat,
+    minFilter: THREE.LinearFilter,
+    magFilter: THREE.LinearFilter,
+    wrapS: THREE.RepeatWrapping,
+    wrapT: THREE.ClampToEdgeWrapping,
+    depthBuffer: false,
+  });
+
+/** Level 0 of the baked room, in texels. The height is half this — an equirect map is 2:1. */
+const ENV_WIDTH = 512;
+/** Mips in the chain; the widest cone a material can ask for is the last one. */
+const ENV_LEVELS = 8;
+
 /** How many total internal reflections the back-glass walk follows before giving up. */
 const BACK_GLASS_BOUNCES = 4;
 
@@ -186,6 +216,7 @@ export class NodeMaterialRenderer implements Engine {
    */
   private depthMaterial?: THREE.NodeMaterial;
   private debugBlit?: THREE.NodeMaterial;
+  private debugEnv?: THREE.NodeMaterial;
   private beamMesh?: THREE.Mesh;
   private readonly beamReveal = uniform(1);
   /** One entry per configured item; rebuilt when the shapes change, not per frame. */
@@ -225,6 +256,34 @@ export class NodeMaterialRenderer implements Engine {
   private readonly lampGain = uniform(1);
   private readonly lampLo = uniform(0);
   private readonly lampHi = uniform(1);
+  /**
+   * The room, as uniforms both engines' materials read through one lookup.
+   *
+   * Held here rather than rebuilt per material so a change of studio or a fresh bake is a uniform
+   * write, and so the analytic fallback and the baked chain cannot drift apart: `studioCone`
+   * switches between them on `envOn`, and every surface in the scene goes through it.
+   */
+  private readonly envOn = uniform(0);
+  private readonly envSize = uniform(TSL.vec2(ENV_WIDTH, ENV_WIDTH / 2));
+  private readonly envTexelAngle = uniform((Math.PI * 2) / ENV_WIDTH);
+  private readonly envLevels = uniform(ENV_LEVELS);
+  private readonly studioMode = uniform(0);
+  private readonly studioGain = uniform(1);
+  private envTarget?: THREE.RenderTarget;
+  /** Guards the bake: the room is a pure function of these, so a scene that never changes them bakes once. */
+  private envKey = "";
+  private envPasses?: {
+    bake: THREE.NodeMaterial;
+    blur: THREE.NodeMaterial;
+    copy: THREE.NodeMaterial;
+    /** The blur's and the copy's sources, swapped per level rather than recompiled. */
+    blurSource: Vec;
+    copySource: Vec;
+  };
+  private readonly envBlurTexel = uniform(TSL.vec2(1, 1));
+  private readonly envBlurDir = uniform(TSL.vec2(1, 0));
+  private readonly envBlurCompensate = uniform(1);
+
   private readonly plateZ = uniform(-3);
   private readonly plateScale = uniform(TSL.vec2(1, 1));
   private readonly plateOffset = uniform(TSL.vec2(0.5, 0.5));
@@ -280,6 +339,136 @@ export class NodeMaterialRenderer implements Engine {
    * the one that proves the whole seam end to end — engine selection, node material, tone map,
    * canvas capture — without depending on any of the render targets the later passes need.
    */
+  /**
+   * The room lookup every surface goes through.
+   *
+   * A method rather than a field because the graph closes over the environment TEXTURE, and the
+   * target is reallocated whenever the chain is rebuilt — a captured reference would keep sampling
+   * storage that no longer exists.
+   */
+  private room(): (dir: Vec, cone: Vec) => Vec {
+    return studioCone({
+      envOn: this.envOn,
+      map: this.envTexture(),
+      size: this.envSize,
+      texelAngle: this.envTexelAngle,
+      levels: this.envLevels,
+      softbox: this.studioMode,
+      gain: this.studioGain,
+    });
+  }
+
+  private envTexture(): THREE.Texture {
+    this.placeholder ??= new THREE.DataTexture(new Uint8Array([0, 0, 0, 255]), 1, 1);
+    this.placeholder.needsUpdate = true;
+    return this.envTarget?.texture ?? this.placeholder;
+  }
+
+  /**
+   * Bake the room into an equirectangular mip chain, once per configuration.
+   *
+   * Rendered into the mip levels of ONE texture rather than kept as eight separate targets, so a
+   * shader picks its cone width with a single `lod` argument instead of eight samplers and a manual
+   * blend between them.
+   *
+   * The chain is built through scratch targets rather than by blurring level N-1 in place: a
+   * texture cannot be sampled and written by the same draw, and reading the level above while
+   * writing the one below is exactly that.
+   *
+   * Returns whether the item materials have to be rebuilt — they capture the texture, so the first
+   * bake and any reallocation invalidate their graphs.
+   */
+  private async buildEnvironment(): Promise<boolean> {
+    const c = this.config;
+    if (c.environment !== "baked") {
+      const had = this.envTarget !== undefined;
+      this.envTarget?.dispose();
+      this.envTarget = undefined;
+      this.envKey = "";
+      this.envOn.value = 0;
+      return had;
+    }
+    const key = `${c.studio}|${c.studioGain}`;
+    if (key === this.envKey && this.envTarget) return false;
+    this.envKey = key;
+
+    const fresh = this.envTarget === undefined;
+    const height = ENV_WIDTH / 2;
+    this.envTarget ??= new THREE.RenderTarget(ENV_WIDTH, height, {
+      type: THREE.HalfFloatType,
+      format: THREE.RGBAFormat,
+      minFilter: THREE.LinearMipmapLinearFilter,
+      magFilter: THREE.LinearFilter,
+      wrapS: THREE.RepeatWrapping,
+      wrapT: THREE.ClampToEdgeWrapping,
+      depthBuffer: false,
+      generateMipmaps: false,
+    });
+    // Storage for every level has to exist before anything can be rendered into one.
+    this.envTarget.texture.mipmaps = Array.from({ length: ENV_LEVELS }, (_, i) => ({
+      width: Math.max(1, ENV_WIDTH >> i),
+      height: Math.max(1, height >> i),
+    })) as THREE.Texture["mipmaps"];
+
+    let source = envScratch(ENV_WIDTH, height);
+    this.envPasses ??= this.buildEnvPasses();
+    const previous = this.renderer.getRenderTarget();
+    await this.quad.blit(this.renderer, this.envPasses.bake, source);
+    await this.copyIntoLevel(source, 0);
+
+    for (let level = 1; level < ENV_LEVELS; level++) {
+      const w = Math.max(1, ENV_WIDTH >> level);
+      const h = Math.max(1, height >> level);
+      const horizontal = envScratch(w, h);
+      const vertical = envScratch(w, h);
+      this.envPasses.blurSource.value = source.texture;
+      (this.envBlurTexel.value as THREE.Vector2).set(1 / w, 1 / h);
+      (this.envBlurDir.value as THREE.Vector2).set(1, 0);
+      this.envBlurCompensate.value = 1;
+      await this.quad.blit(this.renderer, this.envPasses.blur, horizontal);
+      this.envPasses.blurSource.value = horizontal.texture;
+      (this.envBlurDir.value as THREE.Vector2).set(0, 1);
+      this.envBlurCompensate.value = 0;
+      await this.quad.blit(this.renderer, this.envPasses.blur, vertical);
+      await this.copyIntoLevel(vertical, level);
+      horizontal.dispose();
+      source.dispose();
+      source = vertical;
+    }
+    source.dispose();
+    this.renderer.setRenderTarget(previous);
+    this.envOn.value = 1;
+    return fresh;
+  }
+
+  private buildEnvPasses(): NonNullable<NodeMaterialRenderer["envPasses"]> {
+    const blurSource = TSL.texture(this.envTexture());
+    const copySource = TSL.texture(this.envTexture());
+    return {
+      bake: passMaterial(envBakePass(this.studioMode, this.studioGain)),
+      blur: passMaterial(
+        envBlurPass(
+          blurSource,
+          this.envBlurTexel,
+          this.envBlurDir,
+          // The reference's radius, which is what sets how fast the chain widens per level.
+          TSL.float(1.15),
+          this.envBlurCompensate,
+        ),
+      ),
+      copy: passMaterial(blitPass(copySource)),
+      blurSource,
+      copySource,
+    };
+  }
+
+  /** Copy a scratch target into one mip of the environment texture. */
+  private async copyIntoLevel(source: THREE.RenderTarget, level: number): Promise<void> {
+    if (!this.envTarget || !this.envPasses) return;
+    this.envPasses.copySource.value = source.texture;
+    await this.quad.blit(this.renderer, this.envPasses.copy, this.envTarget, level);
+  }
+
   private buildBackdrop(): THREE.Mesh {
     const shade = Fn(() => {
       const base = mix(this.bottom, this.top, uv().y);
@@ -353,10 +542,10 @@ export class NodeMaterialRenderer implements Engine {
     const planes = Array.from({ length: PRISM_PLANES }, () => new THREE.Vector4(0, 0, 1, 0));
     const planeArray = TSL.uniformArray(planes);
 
-    const room = (dir: Vec, _cone: Vec) =>
-      this.config.studio === "softbox"
-        ? studioSoftbox(dir).mul(this.config.studioGain)
-        : studioGradient(dir);
+    // The room, through the ONE lookup — sharp for a mirror, a wider cone as the surface roughens.
+    // Reading the analytic room directly here is what made a metal's reflection alias into crawling
+    // noise wherever a shape curved away and compressed the whole room into a few pixels.
+    const room = this.room();
     // The real lamp field: a ray cast at the plate plane, sampled where it lands. This is what
     // gives a shape its colour — glass borrows chroma from whatever lamps sit behind it, and a
     // metal's form comes almost entirely from variation in what it reflects.
@@ -407,7 +596,7 @@ export class NodeMaterialRenderer implements Engine {
           roughness: u.roughness,
           spec: u.spec,
           rim: u.rim,
-          envOn: TSL.float(0),
+          envOn: this.envOn,
           room,
           plate,
         })(normal, view, ndv);
@@ -499,7 +688,10 @@ export class NodeMaterialRenderer implements Engine {
       const f = TSL.float(0.04).add(TSL.float(0.96).mul(TSL.float(1).sub(ndv).pow(5)));
       const mirror = TSL.reflect(view.negate(), normal);
       const rf = plate(mirror);
-      const rfCol = blend(room(mirror, u.roughness), rf.rgb, rf.a);
+      // The ANALYTIC room here, not the cone — matching GLASS_FRAG, which reads `studio(R)` at this
+      // one site. Glass takes a mirror reflection whatever its roughness, because the roughness of
+      // a transmissive surface is already spent scattering the cone that goes THROUGH it.
+      const rfCol = blend(studioRoom(mirror, this.studioMode, this.studioGain), rf.rgb, rf.a);
       const reflW = f.mul(0.16);
       col.assign(blend(col, rfCol, reflW));
       // DEV PROBES, for the harnesses in `scripts/`. Two rules make them trustworthy, and both
@@ -792,6 +984,11 @@ export class NodeMaterialRenderer implements Engine {
     (this.plateOffset.value as THREE.Vector2).set(c.plate.offset.x, c.plate.offset.y);
     (this.clearGlass.value as THREE.Vector3).set(...rgb(c.clearGlass));
     this.measuredThickness.value = c.measuredThickness ? 1 : 0;
+    // The room's own uniforms, read by BOTH the analytic fallback and the bake — the two have to
+    // describe the same room, or a scene shading one material through each disagrees about what is
+    // reflected in it.
+    this.studioMode.value = c.studio === "softbox" ? 1 : 0;
+    this.studioGain.value = c.studioGain;
   }
 
   /**
@@ -943,10 +1140,7 @@ export class NodeMaterialRenderer implements Engine {
       plateDepth: depth,
       // Mirror-smooth: the interior reflects the room sharply, and a cone here would blur away the
       // very structure that tells a viewer they are looking through a solid rather than a shell.
-      room: (dir: Vec) =>
-        this.config.studio === "softbox"
-          ? studioSoftbox(dir).mul(this.config.studioGain)
-          : studioGradient(dir),
+      room: (dir: Vec) => this.room()(dir, TSL.float(0)),
       bounces: BACK_GLASS_BOUNCES,
     })(TSL.positionWorld, TSL.normalWorld, TSL.cameraPosition) as never;
     // Additive on COLOUR, alpha untouched — the plate's alpha is depth, not coverage.
@@ -1006,6 +1200,14 @@ export class NodeMaterialRenderer implements Engine {
       return;
     }
     this.timeUniform.value = this.time;
+    // The room, baked before anything samples it. Cheap after the first call — it returns on an
+    // unchanged key — but a fresh target invalidates every graph that captured the texture, which
+    // is why the rebuild is driven from its return rather than from the config change.
+    if (await this.buildEnvironment()) {
+      this.backGlass?.material.dispose();
+      this.backGlass = undefined;
+      if (this.items.length) this.buildItems();
+    }
 
     // 0. Depth — the back faces, as linear depth. The post pass's gather measures its circle of
     //    confusion against this, and without it every fragment reads depth zero and comes back at
@@ -1035,6 +1237,14 @@ export class NodeMaterialRenderer implements Engine {
 
     // A dev harness can ask for an intermediate target instead of the composed frame.
     const dump = devProbe();
+    if (dump?.startsWith("env")) {
+      const level = Number(dump.slice(3)) || 0;
+      this.debugEnv ??= passMaterial(
+        vec4(TSL.texture(this.envTexture(), uv()).level(TSL.float(level)).rgb, 1),
+      );
+      await this.quad.blit(this.renderer, this.debugEnv, null);
+      return;
+    }
     if (dump === "plate" || dump === "back") {
       const src = dump === "plate" ? t.plate.texture : t.back.texture;
       // Alpha forced to one: the plate stores linear DEPTH there, and letting it reach the canvas
@@ -1120,6 +1330,7 @@ export class NodeMaterialRenderer implements Engine {
   dispose(): void {
     this.stop();
     if (this.targets) disposeTargets(this.targets);
+    this.envTarget?.dispose();
     this.quad.dispose();
     this.renderer.dispose();
     if (this.ownsCanvas) this.canvas.remove();

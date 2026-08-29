@@ -407,6 +407,62 @@ const results = await page.evaluate(
       },
     };
 
+    // The room switch, the bake and one axis of the blur that builds the chain. `sampleEnv` itself
+    // is not here: it reads an explicit mip level, and the harness renders single-level textures —
+    // a case for it would compare two level-zero fetches and prove nothing.
+    cases.envBlur = {
+      glsl: `
+      uniform vec2 uDir; uniform float uRadius, uCompensate;
+      void main(){
+        float sinTheta = max(sin(vUvIn.y * 3.141592653589793), 0.15);
+        float scale = mix(1.0, 1.0 / sinTheta, uCompensate);
+        vec2 stp = uDir * uTexel * uRadius * scale;
+        float offsets[3];
+        float weights[3];
+        offsets[0] = 0.0;          weights[0] = 0.2270270270;
+        offsets[1] = 1.3846153846; weights[1] = 0.3162162162;
+        offsets[2] = 3.2307692308; weights[2] = 0.0702702703;
+        vec4 sum = texture2D(tSrc, vUvIn) * weights[0];
+        for (int i = 1; i < 3; i++){
+          sum += texture2D(tSrc, vUvIn + stp * offsets[i]) * weights[i];
+          sum += texture2D(tSrc, vUvIn - stp * offsets[i]) * weights[i];
+        }
+        gl_FragColor = sum;
+      }`,
+      glslUniforms: {
+        uDir: { value: new GL.Vector2(1, 0) },
+        uRadius: { value: 1.15 },
+        uCompensate: { value: 1 },
+      },
+      tsl: () =>
+        passes.envBlurPass(
+          TSL.texture(gpuTex),
+          TSL.vec2(...TEXEL),
+          TSL.vec2(1, 0),
+          TSL.float(1.15),
+          TSL.float(1),
+        ),
+    };
+
+    // The vertical axis, which runs UNCOMPENSATED — the sin(theta) correction is for rows covering
+    // different solid angles, and applying it down the columns pulls the poles apart.
+    cases.envBlurVertical = {
+      glsl: cases.envBlur.glsl,
+      glslUniforms: {
+        uDir: { value: new GL.Vector2(0, 1) },
+        uRadius: { value: 1.15 },
+        uCompensate: { value: 0 },
+      },
+      tsl: () =>
+        passes.envBlurPass(
+          TSL.texture(gpuTex),
+          TSL.vec2(...TEXEL),
+          TSL.vec2(0, 1),
+          TSL.float(1.15),
+          TSL.float(0),
+        ),
+    };
+
     cases.bloomComposite = {
       glsl: `
       uniform sampler2D tL0, tL1, tL2; uniform float uRadius;

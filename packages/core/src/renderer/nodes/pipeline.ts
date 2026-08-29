@@ -115,14 +115,20 @@ export class FullScreenQuad {
     this.scene.add(this.mesh);
   }
 
-  /** Draw `material` into `target`, or to the screen when target is null. */
+  /**
+   * Draw `material` into `target`, or to the screen when target is null.
+   *
+   * `level` targets one mip rather than the base, which is how the environment chain is written:
+   * eight blurs, each landing in the level it belongs to, inside a single texture.
+   */
   async blit(
     renderer: THREE.WebGPURenderer,
     material: THREE.NodeMaterial,
     target: THREE.RenderTarget | null,
+    level = 0,
   ): Promise<void> {
     this.mesh.material = material;
-    renderer.setRenderTarget(target);
+    renderer.setRenderTarget(target, 0, level);
     await renderer.renderAsync(this.scene, this.camera);
   }
 

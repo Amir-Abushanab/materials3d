@@ -13,7 +13,7 @@
  */
 import { TSL } from "three/webgpu";
 import type { Texture } from "three/webgpu";
-import { srgbToLinear } from "./common";
+import { directionFromEquirect, srgbToLinear, studioRoom } from "./common";
 
 /** See `nodes/common` — three's TSL types resolve the wrong overload for a relaxed node. */
 type Vec = any;
@@ -25,8 +25,50 @@ const max = (a: Vec, b: Vec): Vec => TSL.max(a, b);
 // scales — a 34/255 error that looked like a plausible picture and was caught only by parity.
 const mix = (a: Vec, b: Vec, t: Vec): Vec => TSL.mix(a, b, t);
 
+/** The room, rasterized into an equirectangular map — level 0 of the chain. */
+export const envBakePass = (softbox: Vec, gain: Vec) =>
+  Fn(() => vec4(studioRoom(directionFromEquirect(uv()), softbox, gain), 1))();
+
+/**
+ * One axis of the blur that builds the chain, with the equirect distortion compensated.
+ *
+ * A row near a pole covers far less solid angle than one at the equator, so a blur of constant
+ * TEXEL width is a blur of wildly varying ANGLE — the poles smear into streaks while the middle
+ * barely moves. Dividing the horizontal step by sin(theta) makes the kernel angular instead, which
+ * is the only version of it that means anything on a sphere. The vertical pass runs uncompensated:
+ * the correction is for rows covering different solid angles, and applying it down the columns
+ * pulls the poles apart rather than tightening them.
+ *
+ * Five taps reconstructing nine, by landing each off-centre fetch between two texels and letting
+ * the bilinear unit do the pairing.
+ */
+const ENV_BLUR_TAPS: [number, number][] = [
+  [1.3846153846, 0.3162162162],
+  [3.2307692308, 0.0702702703],
+];
+
+/**
+ * `src` is a texture NODE, not a texture, and that is what lets one compiled material walk the
+ * whole chain: every level swaps `src.value` and redraws, where taking a `Texture` would mean a
+ * fresh shader compile for each of the fourteen draws a bake performs.
+ */
+export const envBlurPass = (src: Vec, texel: Vec, direction: Vec, radius: Vec, compensate: Vec) =>
+  Fn(() => {
+    const p = uv();
+    const sinTheta = TSL.sin(p.y.mul(Math.PI)).max(0.15);
+    const scale = mix(float(1), sinTheta.reciprocal(), compensate);
+    const step = direction.mul(texel).mul(radius).mul(scale).toVar();
+    const sum = src.sample(p).mul(0.227027027).toVar();
+    for (const [offset, weight] of ENV_BLUR_TAPS) {
+      sum.addAssign(src.sample(p.add(step.mul(offset))).mul(weight));
+      sum.addAssign(src.sample(p.sub(step.mul(offset))).mul(weight));
+    }
+    return sum;
+  })();
+
 /** A straight copy. Used to move a blurred scratch target into one mip of the environment. */
-export const blitPass = (src: Texture) => Fn(() => texture(src, uv()))();
+export const blitPass = (src: Texture | Vec) =>
+  Fn(() => (src.isTextureNode ? src.sample(uv()) : texture(src as Texture, uv())))();
 
 /**
  * Threshold the highlights, and DOWNSAMPLE while doing it.

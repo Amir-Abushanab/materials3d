@@ -238,6 +238,72 @@ export const envLod = Fn(([cone, ddxR, ddyR, texelAngle, levels]: [Vec, Vec, Vec
 // Noise and surface
 // ---------------------------------------------------------------------------
 
+/**
+ * The room, either analytic or baked — the twin of GLASS_CHUNK's `studio()`.
+ *
+ * A function of the mode UNIFORM rather than a JavaScript branch, because the bake pass and every
+ * material that falls back to the analytic room have to agree about what the room contains. Two
+ * spellings of it would be a difference nobody would think to attribute to this switch.
+ */
+export const studioRoom = Fn(([rd, softbox, gain]: [Vec, Vec, Vec]) =>
+  select(softbox.greaterThan(0.5), studioSoftbox(rd).mul(gain), studioGradient(rd)),
+);
+
+/**
+ * Sample the baked chain, with the texel centres smoothstepped toward each other.
+ *
+ * A plain bilinear fetch on an equirect map shows its grid as soft diamonds wherever the room is
+ * nearly flat, and this room is nearly flat almost everywhere. Warping the fractional part by
+ * 3f²-2f³ makes the interpolation C1 across texel boundaries at no extra fetch.
+ *
+ * The level is EXPLICIT, never a bias. A bias is applied on top of whatever the hardware derives
+ * from the fragment's own footprint, which for a reflection is meaningless — the footprint of the
+ * DIRECTION is exactly what `envLod` already accounted for.
+ */
+export const sampleEnv = (map: Vec, size: Vec) =>
+  Fn(([dir, lod]: [Vec, Vec]) => {
+    const levelSize = size.div(lod.exp2()).max(vec2(2));
+    const texel = equirectUv(dir).mul(levelSize).sub(0.5);
+    const corner = texel.floor();
+    const f = texel.fract();
+    const p = corner
+      .add(f.mul(f).mul(float(3).sub(f.mul(2))))
+      .add(0.5)
+      .div(levelSize);
+    return TSL.texture(map, p).level(lod).rgb;
+  });
+
+export interface RoomUniforms {
+  /** 1 once a chain is baked; below that the analytic room answers. */
+  envOn: Vec;
+  map: Vec;
+  /** Level 0, in texels. */
+  size: Vec;
+  /** Radians per texel at level 0. */
+  texelAngle: Vec;
+  levels: Vec;
+  softbox: Vec;
+  gain: Vec;
+}
+
+/**
+ * The room as a surface actually sees it: sharp for a mirror, a wider cone as it roughens.
+ *
+ * `select` is a ternary, not a branch, so both sides are evaluated — which is what makes the
+ * derivatives here safe. Taking `dFdx` inside a real conditional is undefined where the quad
+ * diverges, and a reflection off a curved surface diverges constantly.
+ */
+export const studioCone = (u: RoomUniforms) => {
+  const sample = sampleEnv(u.map, u.size);
+  return Fn(([rd, roughness]: [Vec, Vec]) =>
+    select(
+      u.envOn.greaterThan(0.5),
+      sample(rd, envLod(roughness, TSL.dFdx(rd), TSL.dFdy(rd), u.texelAngle, u.levels)),
+      studioRoom(rd, u.softbox, u.gain),
+    ),
+  );
+};
+
 export const hash21 = Fn(([p]: [Vec]) => p.dot(vec2(127.1, 311.7)).sin().mul(43758.5453).fract());
 
 /** Value noise on the unit lattice, smoothstepped between corners. */

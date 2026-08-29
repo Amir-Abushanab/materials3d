@@ -600,6 +600,21 @@ export const GLASS_FRAG = /* glsl */ `
     // every fragment of a draw takes the same side — so the transmissive path pays nothing for
     // this beyond the program being larger.
     if (uKind > 3.5){
+      // DEV PROBE for the opaque families, recomputing the few terms worth comparing rather than
+      // threading them out of shadeOpaque. Dev-only, so the duplicated arithmetic costs nothing.
+      if (uProbe > 0.5 && uPass > 0.5){
+        vec3 R = reflect(-V, N);
+        vec4 env = backplate(vW, R);
+        vec4 behind = backplate(vW, -N);
+        vec3 dbg = vec3(0.0);
+        if (uProbe < 8.5) dbg = studioCone(R, uRough);
+        else if (uProbe < 9.5) dbg = env.rgb;
+        else if (uProbe < 10.5) dbg = vec3(env.a);
+        else if (uProbe < 11.5) dbg = mix(vec3(0.92), behind.rgb, behind.a * 0.6);
+        else dbg = vec3(0.5);
+        gl_FragColor = vec4(dbg, 1.0);
+        return;
+      }
       vec3 oc = shadeOpaque(N, V, ndv);
       oc = mix(vec3(dot(oc, vec3(0.3333))), oc, uSat);
       oc = (oc - 0.5) * 1.04 + 0.5;

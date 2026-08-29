@@ -74,7 +74,7 @@ import {
   simpleTransmission,
   transmittedHue,
 } from "./nodes/transmissive";
-import { studioCone, studioRoom } from "./nodes/common";
+import { studioCone, studioGradient, studioRoom } from "./nodes/common";
 
 /** Mirrors {@link MaterialRendererOptions}; the shell hands the same object to either engine. */
 export interface NodeMaterialRendererOptions {
@@ -641,7 +641,28 @@ export class NodeMaterialRenderer implements Engine {
         })(normal, view, ndv);
         const grey: Vec = vec3(shaded.dot(vec3(1 / 3)));
         const desaturated = blend(grey, shaded, u.saturation);
-        return vec4(desaturated.add(vec3(u.emission).mul(0.5)), plateAlpha);
+        // The same contrast expansion the transmissive branch ends with. The two families have to
+        // agree on it, or a scene reads as two renderers standing side by side.
+        const shaped = desaturated.sub(0.5).mul(1.04).add(0.5);
+        // The twin of GLASS_FRAG's opaque probe — same terms, same main-pass-only rule.
+        const mirrorR = TSL.reflect(view.negate(), normal);
+        const envR = plate(mirrorR);
+        const behindN = plate(normal.negate());
+        const opaqueProbe: Record<string, Vec> = {
+          roomR: room(mirrorR, u.roughness),
+          plateR: envR.rgb,
+          plateCover: vec3(envR.a),
+          fill: blend(vec3(0.92), behindN.rgb, behindN.a.mul(0.6)),
+          gradR: studioGradient(mirrorR),
+          opaqueGrey: vec3(0.5),
+          grey: vec3(0.5),
+        };
+        const opaqueAsked = devProbe();
+        const opaqueWanted = opaqueAsked ? opaqueProbe[opaqueAsked] : undefined;
+        const opaqueOut = shaped.add(vec3(u.emission).mul(0.5));
+        if (opaqueWanted !== undefined)
+          return vec4(select(this.passIndex.greaterThan(0.5), opaqueWanted, opaqueOut), plateAlpha);
+        return vec4(opaqueOut, plateAlpha);
       }
       // A REAL branch, not a `select`: a select is a ternary and evaluates both sides, which would
       // cost eleven plate lookups on every scene that asked for three. `transmission` is a scene

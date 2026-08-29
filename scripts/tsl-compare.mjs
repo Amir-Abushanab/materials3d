@@ -94,7 +94,20 @@ const result = await page.evaluate(
 
     host.replaceChildren();
     // The GLSL twin of the node engine's probe, so both sides can be asked the same question.
-    const GLSL_PROBES = ["", "trans", "lit", "hue", "chord", "base", "amt", "grey"];
+    const GLSL_PROBES = [
+      "",
+      "trans",
+      "lit",
+      "hue",
+      "chord",
+      "base",
+      "amt",
+      "grey",
+      "roomR",
+      "plateR",
+      "plateCover",
+      "fill",
+    ];
     globalThis["__glslProbe"] = Math.max(0, GLSL_PROBES.indexOf(probeName));
     const a = new gl.MaterialRenderer(host, cfg, {
       respectReducedMotion: false,

@@ -131,6 +131,31 @@ export const coneTransmission = (u: ConeUniforms) =>
     return TSL.vec4(spectrum.div(weightSum.max(vec3(1e-4))), cover.div(u.samples));
   });
 
+export interface SimpleUniforms {
+  ior: Vec;
+  dispersion: Vec;
+  /** Samples the field behind the surface along a direction. */
+  plate: (dir: Vec) => Vec;
+}
+
+/**
+ * Three rays at three indices — the DEFAULT transmission, and the twin of the `else` branch in
+ * GLASS_FRAG.
+ *
+ * Each channel is taken from its own ray rather than from a weighted mean across a sweep, so the
+ * dispersion is three bins wide. That is visibly cruder than the cone on a faceted solid, where
+ * the refraction moves faster than the bins — but it is three plate lookups against eleven, and it
+ * is what every scene gets unless it asks for `transmission: "cone"`.
+ */
+export const simpleTransmission = (u: SimpleUniforms) =>
+  Fn(([view, normal]: [Vec, Vec]) => {
+    const e0 = float(1).div(u.ior);
+    const r = u.plate(bendDir(view, normal, e0.sub(u.dispersion)));
+    const g = u.plate(bendDir(view, normal, e0));
+    const b = u.plate(bendDir(view, normal, e0.add(u.dispersion)));
+    return TSL.vec4(vec3(r.r, g.g, b.b), r.a.add(g.a).add(b.a).div(3));
+  });
+
 /**
  * Colour as LIGHT rather than pigment: take the field's chroma and keep the brightness of what is
  * behind.

@@ -58,7 +58,15 @@ export function createTargets(width: number, height: number, hdr: boolean): Pass
     samples: hdr ? 4 : 0,
   };
   return {
-    back: makeTarget(width, height, { ...base, type: THREE.UnsignedByteType }),
+    // NEAREST, not linear. The two-channel packing splits depth across r and g, and a blend of the
+    // LOW byte of two different depths decodes to a distance that is in neither of them — which
+    // shows up as wedges of wrong thickness wherever depth changes fast, meaning every silhouette.
+    back: makeTarget(width, height, {
+      ...base,
+      type: THREE.UnsignedByteType,
+      minFilter: THREE.NearestFilter,
+      magFilter: THREE.NearestFilter,
+    }),
     plate: makeTarget(width, height, scene),
     color: makeTarget(width, height, scene),
     bloom: BLOOM_DIVISORS.map((d) => ({

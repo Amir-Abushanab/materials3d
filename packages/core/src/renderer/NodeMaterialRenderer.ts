@@ -65,8 +65,15 @@ import {
   platePass,
   prismExit,
 } from "./nodes/glass";
+import { glitter, thinFilm } from "./nodes/brdf";
 import { shadeOpaque } from "./nodes/opaque";
-import { bendDir, coneTransmission, transmittedHue } from "./nodes/transmissive";
+import {
+  bendDir,
+  coneTransmission,
+  rotateHue,
+  simpleTransmission,
+  transmittedHue,
+} from "./nodes/transmissive";
 import { studioCone, studioRoom } from "./nodes/common";
 
 /** Mirrors {@link MaterialRendererOptions}; the shell hands the same object to either engine. */
@@ -126,6 +133,16 @@ const envScratch = (w: number, h: number) =>
     wrapT: THREE.ClampToEdgeWrapping,
     depthBuffer: false,
   });
+
+/**
+ * The two studio key directions the transmissive specular lobe looks for.
+ *
+ * Constants, not uniforms — they are the studio's own geometry, shared by every material, and
+ * GLASS_FRAG declares them the same way. Normalized here so the graph carries the same numbers the
+ * GLSL does rather than re-deriving them per fragment.
+ */
+const KEY = TSL.vec3(...new THREE.Vector3(-0.3, 0.86, 0.42).normalize().toArray());
+const KEY_FILL = TSL.vec3(...new THREE.Vector3(0.42, 0.16, 0.89).normalize().toArray());
 
 /** Level 0 of the baked room, in texels. The height is half this — an equirect map is 2:1. */
 const ENV_WIDTH = 512;
@@ -206,6 +223,8 @@ export class NodeMaterialRenderer implements Engine {
   private readonly aspect = uniform(1);
   private placeholder?: THREE.DataTexture;
   private readonly measuredThickness = uniform(0);
+  /** 1 for `transmission: "cone"`, 0 for the three-ray default. */
+  private readonly coneMode = uniform(0);
   /**
    * Back-face linear depth, as an override material.
    *
@@ -215,6 +234,7 @@ export class NodeMaterialRenderer implements Engine {
    * already see, which is zero.
    */
   private depthMaterial?: THREE.NodeMaterial;
+  private plateSource?: Vec;
   private debugBlit?: THREE.NodeMaterial;
   private debugEnv?: THREE.NodeMaterial;
   private beamMesh?: THREE.Mesh;
@@ -301,6 +321,14 @@ export class NodeMaterialRenderer implements Engine {
       antialias: true,
       alpha: true,
     });
+    // NO OUTPUT ENCODE. The post pass already ends in the display transfer function — it is a
+    // faithful port of POST_FRAG, which does the same — so leaving three's output colour management
+    // on encodes the frame a second time. That is not a subtle error: a mid grey leaves the shader
+    // at 0.5 and reaches the canvas at 188 rather than 128, which lifts every dark value, compresses
+    // every bright one, and reads as a washed-out picture with roughly half the chroma of the WebGL
+    // engine's. The WebGL renderer never applied it here because a hand-written `gl_FragColor`
+    // shader bypasses three's injected colorspace conversion.
+    this.renderer.outputColorSpace = THREE.LinearSRGBColorSpace;
     // `preserveDrawingBuffer` is a WebGL context attribute and the node renderer takes no such
     // option, so the shell's poster capture relies on `captureImage` drawing immediately before it
     // reads the canvas rather than on the buffer surviving a present.
@@ -527,6 +555,17 @@ export class NodeMaterialRenderer implements Engine {
       dispersion: uniform(m.dispersion),
       emission: uniform(m.emission),
       saturation: uniform(m.saturation),
+      iridescence: uniform(m.iridescence),
+      filmNm: uniform(m.filmNm),
+      sparkle: uniform(m.sparkle),
+      sparkleScale: uniform(m.sparkleScale),
+      hueShift: uniform(m.hueShift),
+      tint: uniform(vec3(...rgb(m.tint || "#ffffff"))),
+      useTint: uniform(m.tint ? 1 : 0),
+      absorb: uniform(
+        m.absorption ? vec3(m.absorption.x, m.absorption.y, m.absorption.z) : vec3(0, 0, 0),
+      ),
+      useAbsorb: uniform(m.absorption ? 1 : 0),
       /** 1 when this item's interior is traced against real planes rather than offset in screen space. */
       prism: uniform(0),
       planeCount: uniform(0, "int"),
@@ -604,17 +643,40 @@ export class NodeMaterialRenderer implements Engine {
         const desaturated = blend(grey, shaded, u.saturation);
         return vec4(desaturated.add(vec3(u.emission).mul(0.5)), plateAlpha);
       }
-      const cone = coneTransmission({
-        samples: 11,
-        ior: u.ior,
-        dispersion: u.dispersion,
-        roughness: u.roughness,
-        plate,
-      })(view, normal, TSL.screenCoordinate);
-      // The RAW cone result. `transmittedHue` is applied once, below — running it here as well
+      // A REAL branch, not a `select`: a select is a ternary and evaluates both sides, which would
+      // cost eleven plate lookups on every scene that asked for three. `transmission` is a scene
+      // uniform, so the whole draw takes one side and the branch stays coherent — the same reason
+      // GLASS_FRAG spells it as an `if`.
+      const cone = TSL.vec4(0).toVar();
+      TSL.If(this.coneMode.greaterThan(0.5), () => {
+        cone.assign(
+          coneTransmission({
+            samples: 11,
+            ior: u.ior,
+            dispersion: u.dispersion,
+            roughness: u.roughness,
+            plate,
+          })(view, normal, TSL.screenCoordinate),
+        );
+      }).Else(() => {
+        cone.assign(
+          simpleTransmission({ ior: u.ior, dispersion: u.dispersion, plate })(view, normal),
+        );
+      });
+      // The RAW field. `transmittedHue` is applied once, below — running it here as well
       // normalizes an already-normalized colour and drains the chroma the lamps provide.
-      const lit = cone.rgb;
-      const amt = cone.a;
+      //
+      // A shape can carry its own colour instead of borrowing the lamps behind it, and a tinted
+      // one is fully covered by definition — otherwise the tint would fade wherever no lamp
+      // reaches, which is the opposite of what authoring a colour means.
+      const lit = blend(cone.rgb, u.tint, u.useTint).toVar();
+      const amt = blend(cone.a, TSL.float(1), u.useTint).toVar();
+      // Hue rotation moves ONLY the transmitted light, so everything derived from it — the
+      // absorption hue, the emission glow — shifts together while reflections keep the true lamp
+      // colours. A real branch: a resting shape should pay nothing for a knob it does not use.
+      TSL.If(u.hueShift.abs().greaterThan(0.0005), () => {
+        lit.assign(rotateHue(lit, u.hueShift));
+      });
 
       // BASE: what is genuinely behind this fragment. On the main pass that is the plate pass's
       // own frame, displaced in screen space — which is what lets glass refract other glass. The
@@ -651,7 +713,7 @@ export class NodeMaterialRenderer implements Engine {
       const offset = select(traced, hitUv.sub(screenUv), lensOffset);
 
       const plateUv = screenUv.add(offset).clamp(0.002, 0.998);
-      const smp: Vec = TSL.texture(this.plateTexture(), plateUv);
+      const smp: Vec = this.plateSampler().sample(plateUv);
       // DEPTH VALIDATION. The plate pass stored linear depth in alpha; reject any sample NEARER
       // than this fragment, or a shape picks up the silhouette of whatever stands in front of it
       // and the whole cluster gains a ghost outline. This is what buys the high blend weight.
@@ -680,20 +742,87 @@ export class NodeMaterialRenderer implements Engine {
       const trans = TSL.float(1).sub(u.density.mul(chord).negate().exp()).mul(amt);
       const hue = transmittedHue(lit);
       const col = base.mul(blend(vec3(1), hue, trans)).toVar();
+      // ABSORPTION overrides that where a material asks for one. The model above gives glass no
+      // colour of its own — it borrows chroma from whatever lamps sit behind it — and an authored
+      // absorption is the opposite: a per-channel Beer-Lambert over the path this fragment really
+      // traversed, owing nothing to the lamp field.
+      TSL.If(u.useAbsorb.greaterThan(0.5), () => {
+        col.assign(base.mul(blend(vec3(1), u.absorb.mul(chord).negate().exp(), amt)));
+      });
       col.addAssign(lit.mul(trans).mul(u.emission));
 
       // The reflection layer. Where the mirror ray misses the plate it lands on the ROOM rather
       // than a flat constant: a shape over a dark backdrop has nothing to reflect otherwise, and
       // comes out a silhouette with no faces.
       const f = TSL.float(0.04).add(TSL.float(0.96).mul(TSL.float(1).sub(ndv).pow(5)));
-      const mirror = TSL.reflect(view.negate(), normal);
+      const mirror = TSL.reflect(view.negate(), normal).toVar();
       const rf = plate(mirror);
+      // The film tints what the surface REFLECTS — reflection, rim and specular — never what it
+      // transmits: interference happens to the bounced wave, and colouring the transmission too
+      // reads as dye rather than as a coating.
+      const film = thinFilm(ndv, u.ior, u.filmNm, u.iridescence).toVar();
       // The ANALYTIC room here, not the cone — matching GLASS_FRAG, which reads `studio(R)` at this
       // one site. Glass takes a mirror reflection whatever its roughness, because the roughness of
       // a transmissive surface is already spent scattering the cone that goes THROUGH it.
       const rfCol = blend(studioRoom(mirror, this.studioMode, this.studioGain), rf.rgb, rf.a);
-      const reflW = f.mul(0.16);
-      col.assign(blend(col, rfCol, reflW));
+      // The reflection carries FAR more weight under a softbox. 0.16 is tuned for a bright plate
+      // behind the glass, where the reflection garnishes an already-lit shape; in a dark room it is
+      // the only thing describing the solid, and at 0.16 a prism stays a silhouette.
+      const softbox = this.studioMode.greaterThan(0.5);
+      const reflW = f.mul(
+        select(softbox, u.iridescence.mul(0.38).add(0.62), u.iridescence.mul(0.9).add(0.16)),
+      );
+      const reflected = select(softbox, rfCol, blend(vec3(0.97), rf.rgb, rf.a));
+      col.assign(blend(col, reflected.mul(film), reflW));
+
+      // The RIM window. 0.62 means the last ~68 degrees before edge-on, which sounds generous and
+      // is not: on a smooth convex surface N·V collapses fast, so even this only paints a band. At
+      // the 0.90 it used to be, `rim` was measurably inert on eight of the eleven shape kinds.
+      col.assign(
+        blend(
+          col,
+          film,
+          // `x.smoothstep(edge0, edge1)` — the VALUE is the receiver, not the edge. Written the
+          // other way round it compiles and returns a plausible ramp of the wrong thing.
+          TSL.float(1)
+            .sub(ndv)
+            .smoothstep(blend(TSL.float(0.62), TSL.float(0.42), u.iridescence), TSL.float(1))
+            .mul(u.rim),
+        ),
+      );
+      col.mulAssign(TSL.float(1).sub(TSL.float(1).sub(ndv).smoothstep(0.62, 0.86).mul(0.1)));
+
+      // The specular lobe. 40 is tight enough to read as a hard studio highlight and wide enough to
+      // FIND the key light — at the 140 it used to be, `specular` was dead on seven of eleven
+      // kinds, because the term it multiplies was exactly zero.
+      const lobe = mirror
+        .dot(KEY)
+        .max(0)
+        .pow(40)
+        .add(mirror.dot(KEY_FILL).max(0).pow(40).mul(0.55));
+      col.addAssign(lobe.mul(u.spec).mul(blend(vec3(1), film, u.iridescence)));
+
+      // GLITTER, for the one kind that asks for it — a field of tiny mirrors, only the few facing
+      // the key light firing at any moment. That flicker IS the effect.
+      if (kindIndex === 2) {
+        const footprint = TSL.fwidth(TSL.positionWorld.x).add(TSL.fwidth(TSL.positionWorld.y));
+        col.addAssign(
+          glitter(
+            TSL.positionWorld,
+            normal,
+            view,
+            KEY,
+            footprint.max(1e-4),
+            u.sparkleScale,
+            u.sparkle,
+          ),
+        );
+      }
+
+      // Saturation and the contrast expansion, exactly as the opaque branch applies them — the two
+      // families have to agree, or a scene reads as two different renderers side by side.
+      col.assign(blend(vec3(col.dot(vec3(0.3333))), col, u.saturation));
+      col.assign(col.sub(0.5).mul(1.04).add(0.5));
       // DEV PROBES, for the harnesses in `scripts/`. Two rules make them trustworthy, and both
       // were learnt by getting a dozen readings that described a frame which did not exist:
       //
@@ -703,6 +832,12 @@ export class NodeMaterialRenderer implements Engine {
       // And they carry `plateAlpha`, not 1. The plate stores linear depth there and the main pass
       // validates against it, so a probe returning 1 disables the very guard it is measuring.
       const probe: Record<string, Vec> = {
+        // A flag colour, for answering `is this shape drawn into that target at all`.
+        red: vec3(1, 0, 0),
+        grey: vec3(0.5),
+        // The plate's stored depth against this fragment's own, both scaled to the same range.
+        plateDepth: vec3(smp.a.mul(FAR).div(4)),
+        viewDepth: vec3(TSL.positionView.z.negate().div(4)),
         view: view.mul(0.5).add(0.5),
         ndv: vec3(ndv),
         normal: normal.mul(0.5).add(0.5),
@@ -714,10 +849,16 @@ export class NodeMaterialRenderer implements Engine {
         lit,
         trans: vec3(trans),
       };
+      // `plate:<name>` substitutes on BOTH passes and pairs with the plate dump in `draw`, which is
+      // how a plate-pass intermediate is inspected — the main pass would otherwise overwrite it.
       const asked = devProbe();
-      const wanted = asked ? probe[asked] : undefined;
+      const onPlate = asked?.startsWith("plate:") ?? false;
+      const wanted = asked ? probe[onPlate ? asked.slice(6) : asked] : undefined;
       if (wanted !== undefined)
-        return vec4(select(this.passIndex.greaterThan(0.5), wanted, col), plateAlpha);
+        return vec4(
+          onPlate ? wanted : select(this.passIndex.greaterThan(0.5), wanted, col),
+          plateAlpha,
+        );
       return vec4(col, plateAlpha);
     })();
     return { material, uniforms: u, planes };
@@ -932,10 +1073,30 @@ export class NodeMaterialRenderer implements Engine {
     return this.targets?.back.texture ?? this.placeholder;
   }
 
-  private plateTexture(): THREE.Texture {
+  /**
+   * The plate, as ONE texture node every item material samples — and whose value is swapped
+   * between passes.
+   *
+   * It has to be swapped because the plate pass renders INTO the plate while these materials are
+   * bound to it, which is a feedback loop: the driver refuses the draw and the shapes are silently
+   * missing from the plate the main pass then refracts. GLSL sidesteps it by guarding the fetch
+   * behind `uPass`, but a node graph binds the texture whether the branch reads it or not, so the
+   * binding itself is what has to go away.
+   *
+   * A node rather than a texture for the same reason the environment blur takes one: the value can
+   * change without recompiling a single material.
+   */
+  private plateSampler(): Vec {
     this.placeholder ??= new THREE.DataTexture(new Uint8Array([0, 0, 0, 255]), 1, 1);
     this.placeholder.needsUpdate = true;
-    return this.targets?.plate.texture ?? this.placeholder;
+    this.plateSource ??= TSL.texture(this.placeholder);
+    return this.plateSource;
+  }
+
+  /** Point every item's plate fetch at the real plate, or at a 1x1 stand-in during the plate pass. */
+  private bindPlate(live: boolean): void {
+    if (!this.plateSource) return;
+    this.plateSource.value = live && this.targets ? this.targets.plate.texture : this.placeholder;
   }
 
   private applyConfig(): void {
@@ -987,6 +1148,7 @@ export class NodeMaterialRenderer implements Engine {
     // The room's own uniforms, read by BOTH the analytic fallback and the bake — the two have to
     // describe the same room, or a scene shading one material through each disagrees about what is
     // reflected in it.
+    this.coneMode.value = c.transmission === "cone" ? 1 : 0;
     this.studioMode.value = c.studio === "softbox" ? 1 : 0;
     this.studioGain.value = c.studioGain;
   }
@@ -1220,6 +1382,7 @@ export class NodeMaterialRenderer implements Engine {
 
     // 1. Plate — the backdrop and every shape, un-refracted. What the main pass refracts.
     this.passIndex.value = 0;
+    this.bindPlate(false);
     this.renderer.setRenderTarget(t.plate);
     await this.renderer.renderAsync(this.scene, this.camera);
 
@@ -1229,6 +1392,7 @@ export class NodeMaterialRenderer implements Engine {
 
     // 2. Main — the same frame again, now refracting the plate. Tubes refracting tubes.
     this.passIndex.value = 1;
+    this.bindPlate(true);
     this.renderer.setRenderTarget(t.color);
     await this.renderer.renderAsync(this.scene, this.camera);
 
@@ -1245,8 +1409,8 @@ export class NodeMaterialRenderer implements Engine {
       await this.quad.blit(this.renderer, this.debugEnv, null);
       return;
     }
-    if (dump === "plate" || dump === "back") {
-      const src = dump === "plate" ? t.plate.texture : t.back.texture;
+    if (dump === "plate" || dump === "back" || dump?.startsWith("plate:")) {
+      const src = dump === "back" ? t.back.texture : t.plate.texture;
       // Alpha forced to one: the plate stores linear DEPTH there, and letting it reach the canvas
       // composites the whole frame away at about one percent opacity.
       this.debugBlit ??= passMaterial(

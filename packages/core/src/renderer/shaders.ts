@@ -279,6 +279,8 @@ export const GLASS_FRAG = /* glsl */ `
   uniform vec2  uPlateScale, uPlateOffset;
   uniform float uDisp, uLens, uSigma, uAspect, uPath, uPass, uIOR, uPlaneZ;
   uniform float uConeTransmission;
+  /** 0 in production; a dev harness sets it to dump one intermediate. See the probe below. */
+  uniform float uProbe;
   /** Per-channel Beer-Lambert absorption, and whether to use it instead of lamp-derived hue. */
   uniform vec3  uAbsorb;
   uniform float uUseAbsorb;
@@ -821,6 +823,23 @@ export const GLASS_FRAG = /* glsl */ `
 
     col = mix(vec3(dot(col, vec3(0.3333))), col, uSat);
     col = (col - 0.5) * 1.04 + 0.5;
+
+    // DEV PROBE, the twin of the one in NodeMaterialRenderer's glass graph. Substituted on the
+    // MAIN pass only, and carrying the same alpha as the real path — the plate is drawn by this
+    // same program, so a probe that returned unconditionally would rewrite the plate the main pass
+    // then samples, and every reading taken through it would describe a frame that never existed.
+    if (uProbe > 0.5 && uPass > 0.5){
+      vec3 dbg = vec3(0.0);
+      if (uProbe < 1.5) dbg = vec3(trans);
+      else if (uProbe < 2.5) dbg = lit;
+      else if (uProbe < 3.5) dbg = hue;
+      else if (uProbe < 4.5) dbg = vec3(chord / 3.0);
+      else if (uProbe < 5.5) dbg = base;
+      else if (uProbe < 6.5) dbg = vec3(amt);
+      else dbg = vec3(0.5);   // a constant, for comparing the two output paths alone
+      gl_FragColor = vec4(dbg, 1.0);
+      return;
+    }
 
     // Alpha does two different jobs. On the PLATE pass it carries linear depth, which is what the
     // main pass validates its samples against. On the MAIN pass nothing reads depth back, so it

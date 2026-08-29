@@ -93,12 +93,16 @@ const result = await page.evaluate(
     };
 
     host.replaceChildren();
+    // The GLSL twin of the node engine's probe, so both sides can be asked the same question.
+    const GLSL_PROBES = ["", "trans", "lit", "hue", "chord", "base", "amt", "grey"];
+    globalThis["__glslProbe"] = Math.max(0, GLSL_PROBES.indexOf(probeName));
     const a = new gl.MaterialRenderer(host, cfg, {
       respectReducedMotion: false,
       preserveDrawingBuffer: true,
     });
     a.setOutputSize({ width: w, height: h });
     const glCanvas = await grab(a);
+    globalThis["__glslProbe"] = 0;
     a.dispose();
 
     host.replaceChildren();

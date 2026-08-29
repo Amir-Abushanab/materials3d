@@ -758,6 +758,7 @@ export class MaterialRenderer {
         uUseEdge: { value: 0 },
         uAspect: { value: 1 },
         uConeTransmission: { value: this.config.transmission === "cone" ? 1 : 0 },
+        uProbe: { value: 0 },
       },
       // Eleven, the reference's count. It is a compile-time constant rather than a uniform because
       // GLSL ES 1.00 wants a constant loop bound, and because a scene has no reason to change it
@@ -1417,6 +1418,9 @@ export class MaterialRenderer {
       pushMaterialUniforms(u, m, c.loopSeconds);
       u.uThick.value = c.measuredThickness ? 1 : 0;
       if (u.uConeTransmission) u.uConeTransmission.value = c.transmission === "cone" ? 1 : 0;
+      // Dev only; see the probe in GLASS_FRAG. Never set outside a harness.
+      if (u.uProbe)
+        u.uProbe.value = Number((globalThis as Record<string, unknown>)["__glslProbe"] ?? 0);
       this.baseMaterials.set(item, m);
     }
     // AFTER the loop: footprints are read off the meshes, which only carry the authored pose once

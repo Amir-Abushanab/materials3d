@@ -11,6 +11,18 @@
  * comparison is over the whole frame rather than a sampled subset.
  *
  *   node scripts/tsl-parity.mjs
+ *
+ * EVERY GLSL REFERENCE HERE MUST BE TRANSCRIBED FROM `shaders.ts`, NEVER WRITTEN FROM THE PORT.
+ *
+ * That sounds obvious and is the one mistake this file actually made. `studioGradient` was copied
+ * from the TSL version rather than the shipping shader, so the case compared the port against
+ * itself and reported a clean match while the two engines were computing different functions — a
+ * neutral 0.55-to-1.02 ramp in the renderer against a blue 0.05-to-0.9 one in the port. It cost
+ * every metal in the library its correct reflection, and the harness said nothing, because a test
+ * whose expectation is derived from the implementation can only ever pass.
+ *
+ * Renaming a parameter or turning a uniform into an argument is fine and unavoidable — the harness
+ * cannot pull in the whole shader. Retyping the BODY from memory is not.
  */
 import { chromium } from "playwright";
 import { createServer } from "node:http";
@@ -246,8 +258,8 @@ const results = await page.evaluate(
       studioGradient: {
         glsl: `
         vec3 studioGradient(vec3 rd){
-          float t = rd.y * 0.5 + 0.5;
-          return mix(vec3(0.05, 0.055, 0.07), vec3(0.9, 0.93, 1.0), smoothstep(0.0, 1.0, t));
+          float t = clamp(rd.y * 0.5 + 0.5, 0.0, 1.0);
+          return mix(vec3(0.55), vec3(1.02), smoothstep(0.20, 0.88, t));
         }
         void main(){
           vec3 rd = normalize(vec3(vUvIn * 2.0 - 1.0, 0.6));

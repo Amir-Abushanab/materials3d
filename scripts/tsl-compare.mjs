@@ -107,6 +107,8 @@ const result = await page.evaluate(
       "plateR",
       "plateCover",
       "fill",
+      "opaqueGrey",
+      "gradR",
     ];
     globalThis["__glslProbe"] = Math.max(0, GLSL_PROBES.indexOf(probeName));
     const a = new gl.MaterialRenderer(host, cfg, {

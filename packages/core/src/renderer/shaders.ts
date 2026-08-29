@@ -611,7 +611,8 @@ export const GLASS_FRAG = /* glsl */ `
         else if (uProbe < 9.5) dbg = env.rgb;
         else if (uProbe < 10.5) dbg = vec3(env.a);
         else if (uProbe < 11.5) dbg = mix(vec3(0.92), behind.rgb, behind.a * 0.6);
-        else dbg = vec3(0.5);
+        else if (uProbe < 12.5) dbg = vec3(0.5);
+        else dbg = studioGradient(R);
         gl_FragColor = vec4(dbg, 1.0);
         return;
       }

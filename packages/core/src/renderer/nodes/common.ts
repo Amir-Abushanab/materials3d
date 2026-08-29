@@ -136,9 +136,16 @@ export const tonemapNeutral = Fn(([value]: [Vec]) => {
 // The room
 // ---------------------------------------------------------------------------
 
-/** Bright ceiling, dark floor — the ramp metals fall back on when no room is configured. */
+/**
+ * Bright ceiling, dimmer floor — the ramp a surface falls back on when no room is configured.
+ *
+ * NEUTRAL and narrow: 0.55 to 1.02 over the middle of the sweep, not a tinted ramp from near-black.
+ * It stands in for a room whose walls are all lit, so a metal reflecting it reads as being indoors
+ * rather than as floating over a void, and the endpoints are close enough together that the
+ * reflection describes the shape rather than painting a horizon across it.
+ */
 export const studioGradient = Fn(([rd]: [Vec]) =>
-  mix(vec3(0.05, 0.055, 0.07), vec3(0.9, 0.93, 1.0), rd.y.mul(0.5).add(0.5).smoothstep(0, 1)),
+  mix(vec3(0.55), vec3(1.02), rd.y.mul(0.5).add(0.5).clamp(0, 1).smoothstep(0.2, 0.88)),
 );
 
 /**

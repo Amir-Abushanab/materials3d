@@ -87,12 +87,17 @@ hides a missing method, only the fact that the two classes share no nominal base
 difference over the whole frame, out of 255:
 
     assembly 1.1   reactions 1.4   materials 2.1   slimes 7.7
-    skewer  10.4   staircase 11.2  cascade  16.4   prism   29.9
+    skewer  10.4   staircase 11.2  cascade  13.7   prism   20.1
 
 On `assembly` and `reactions` fewer than 5% of pixels differ by more than one 8-bit level. The two
-dark scenes are the outliers, and their gap is dominated by a low-level glow the WebGL engine has
-across the whole frame which this one does not — not bloom, haze or the backdrop, all of which have
-been ruled out by measurement, and not yet explained.
+dark scenes remain the widest, and what is left there is diffuse rather than any one defect: strip
+`prism` of its post chain and it is 12.4; strip the solid as well and it is 5.5.
+
+Both had looked much worse, and for a reason worth recording. They set
+`backgroundMode: "wall"`, so until the backdrop's branches were ported this engine painted a flat
+colour where the reference painted a lit surface — which reads as the WebGL engine having a
+mysterious low-level glow across the whole frame. It was a missing feature wearing the costume of a
+calibration problem. Stripped to a bare backdrop the two now agree to within 0.004.
 
 **Every defect this port surfaced was found by measuring, not by reading.** The list is worth
 keeping because the same shapes will recur:

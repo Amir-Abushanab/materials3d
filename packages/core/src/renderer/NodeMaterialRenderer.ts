@@ -60,7 +60,15 @@ import type { ItemConfig } from "../config/model";
 import type { MaterialItem } from "./item";
 import { buildShape, defaultPath } from "./shapes";
 import { frameFov, resolveItems, type AddOptions } from "./MaterialRenderer";
-import { InteractionController, interactionActive } from "./interaction";
+import {
+  InteractionController,
+  interactionActive,
+  ITEM_APPLIERS,
+  LAMP_APPLIERS,
+  SCENE_APPLIERS,
+  type ItemApplyArgs,
+  type SceneApplyArgs,
+} from "./interaction";
 import { applyMotions } from "./motions";
 import {
   aimBeam,
@@ -123,6 +131,46 @@ const rgb = (hex: string): [number, number, number] => parseHex(hex) as [number,
 /** One texel of a target, in uv — the step every separable blur walks by. */
 const texel = (target: THREE.RenderTarget) =>
   TSL.vec2(1 / Math.max(target.width, 1), 1 / Math.max(target.height, 1));
+
+/**
+ * A settable uniform, structurally.
+ *
+ * `three/webgpu` does not re-export `IUniform`, and the appliers only ever assign `.value`, so the
+ * shape is what matters rather than the nominal type from the other build.
+ */
+interface UniformCell {
+  value: unknown;
+}
+
+/**
+ * This engine's item uniforms under the GLSL engine's names.
+ *
+ * The interaction appliers in `./interaction` are shared by both renderers and address uniforms by
+ * the GLSL engine's names. Reusing them is deliberate: binding semantics — which target reads which
+ * authored base, how a value is clamped — are exactly the kind of thing that drifts if written
+ * twice, and a scene whose reactions behave differently depending on the engine is worse than one
+ * that has none. So the names are adapted here rather than the table being duplicated.
+ *
+ * `uRipple` has no counterpart: the liquid ripple is not ported to this engine yet, and a binding
+ * that targets it would otherwise throw on a missing uniform. It is given an inert cell so the
+ * rest of a scene's reactions still work — see the note in `buildItemMaterial`.
+ */
+const bindingUniforms = (
+  u: Record<string, ReturnType<typeof uniform>>,
+): Record<string, UniformCell> => ({
+  uSigma: u.density,
+  uIOR: u.ior,
+  uDisp: u.dispersion,
+  uLens: u.lens,
+  uRim: u.rim,
+  uSpec: u.spec,
+  uSat: u.saturation,
+  uHue: u.hueShift,
+  uEmis: u.emission,
+  uIrid: u.iridescence,
+  uFilm: u.filmNm,
+  uRipple: { value: 0 },
+});
 
 /** Plane slots per traced solid. Matches the GLSL `uPrismPlanes[6]` — see `buildItemMaterial`. */
 const PRISM_PLANES = 6;
@@ -205,6 +253,10 @@ export class NodeMaterialRenderer implements Engine {
    */
   private drawing: Promise<void> | null = null;
   private time = 0;
+  /** `performance.now()` at the previous frame — the clock the scene actually advances on. */
+  private lastFrame = 0;
+  /** Eases accumulation in over the first second, so a scene does not snap into motion. */
+  private introRamp = 0;
   private ready: Promise<void>;
   private targets?: PassTargets;
   private readonly quad = new FullScreenQuad();
@@ -293,6 +345,32 @@ export class NodeMaterialRenderer implements Engine {
   private readonly planeNormal = new THREE.Vector3();
   private readonly projectScratch = new THREE.Vector3();
   private interaction?: InteractionController;
+  /**
+   * Interaction state, mirroring the GLSL engine field for field.
+   *
+   * The controller was already being CREATED here, which is what made this look wired up: it
+   * tracked the pointer, smoothed its sources and answered `bindingValue` correctly. Nothing ever
+   * asked it. No `update`, no applier pass, no read-back — so every reaction in every scene was
+   * inert on this engine while looking, from the config's side, entirely present.
+   */
+  /** Set around `captureImage`: exports render the interaction REST state, never live input. */
+  private capturing = false;
+  private interactionTime = 0;
+  private interactionZoom = 1;
+  private readonly interactionSceneOut = {
+    timeOffset: 0,
+    zoom: 1,
+    beamIncidence: 0,
+    beamEntry: 0.5,
+    orbitYaw: 0,
+    orbitPitch: 0,
+  };
+  /** The resolved item list the controller indexes into — scatter included. */
+  private resolvedItems: ItemConfig[] = [];
+  private readonly hoverNdc = new THREE.Vector2();
+  private readonly hoverCandidates: THREE.Object3D[] = [];
+  /** What the beam mesh was last traced from, so an unchanged pointer does not retrace it. */
+  private beamTracedFrom: { incidence: number; entry: number } | null = null;
   private scrollPreview: number | null = null;
   /** Backdrop uniforms beyond the derived ramp — the palette, the image and the wall. */
   private readonly bgMode = uniform(0, "int");
@@ -405,6 +483,11 @@ export class NodeMaterialRenderer implements Engine {
     uniforms: Record<string, ReturnType<typeof uniform>>;
     /** World-space `(normal, offset)` per bounding face; zeroed until `applyPrismPlanes` fills it. */
     planes: THREE.Vector4[];
+    /** The resolved material and the GLSL-named uniform view — both only for the interaction
+     *  appliers; see `bindingUniforms`. Absent on items added through `add()`, which carry no
+     *  authored material config for a binding to read a base from. */
+    base?: ReturnType<typeof resolveMaterial>;
+    bound?: Record<string, UniformCell>;
     config?: ItemConfig;
     motion: ItemConfig["motion"];
     phase: number;
@@ -899,6 +982,10 @@ export class NodeMaterialRenderer implements Engine {
     material: THREE.NodeMaterial;
     uniforms: Record<string, ReturnType<typeof uniform>>;
     planes: THREE.Vector4[];
+    /** The resolved material — every interaction applier reads its authored base from this. */
+    base: ReturnType<typeof resolveMaterial>;
+    /** The same uniforms under the GLSL engine's names; see `bindingUniforms`. */
+    bound: Record<string, UniformCell>;
   } {
     const m = resolveMaterial({ path: defaultPath(item.shape), ...item.material });
     const kindIndex = MATERIAL_KINDS.indexOf(m.kind);
@@ -1261,7 +1348,7 @@ export class NodeMaterialRenderer implements Engine {
         );
       return vec4(col, plateAlpha);
     })();
-    return { material, uniforms: u, planes };
+    return { material, uniforms: u, planes, base: m, bound: bindingUniforms(u) };
   }
 
   /**
@@ -1284,7 +1371,17 @@ export class NodeMaterialRenderer implements Engine {
       this.causticMesh = undefined;
     }
     const beam = this.config.beam;
-    if (!beam) return;
+    if (!beam) {
+      this.beamTracedFrom = null;
+      return;
+    }
+    // Recorded HERE rather than left for the first retrace to discover: starting from "unknown"
+    // makes frame one look like a moved beam and rebuilds a mesh that was already correct, which
+    // is not free and — because it lands after the targets and passes are built — does not come
+    // back identical.
+    // The SAME defaults `seedInteractionOut` applies. Recording the raw fields instead compares an
+    // undefined `entry` against a seeded 0.5 and retraces the beam on every single frame.
+    this.beamTracedFrom = { incidence: beam.incidence ?? 0, entry: beam.entry ?? 0.5 };
 
     const targets = (beam.targets ?? [])
       .map((name) => resolveItems(this.config).find((i) => i.name === name))
@@ -1427,8 +1524,11 @@ export class NodeMaterialRenderer implements Engine {
     }
     // `resolveItems` rather than `config.items`: a scatter scene describes its shapes generatively
     // and has an empty item list, so reading the list directly renders an empty frame.
-    this.items = resolveItems(this.config).map((item) => {
-      const { material, uniforms, planes } = this.buildItemMaterial(item);
+    // Kept because the interaction controller's item indices are positions in THIS list, not in
+    // `config.items` — which a scatter scene leaves empty.
+    this.resolvedItems = resolveItems(this.config);
+    this.items = this.resolvedItems.map((item) => {
+      const { material, uniforms, planes, base, bound } = this.buildItemMaterial(item);
       const mesh = new THREE.Mesh(buildShape(item.shape), material);
       mesh.position.set(item.position.x, item.position.y, item.position.z);
       mesh.rotation.set(item.rotation.x, item.rotation.y, item.rotation.z);
@@ -1441,6 +1541,8 @@ export class NodeMaterialRenderer implements Engine {
         mesh,
         uniforms,
         planes,
+        base,
+        bound,
         config: item,
         motion: item.motion,
         phase: item.phase ?? 0,
@@ -2003,6 +2105,184 @@ export class NodeMaterialRenderer implements Engine {
     );
   }
 
+  // ----------------------------------------------------------- interaction ---
+
+  /** The shared post/lamp uniforms under the names the scene appliers use. */
+  private sceneApplyArgs(): SceneApplyArgs {
+    return {
+      post: {
+        uAperture: this.aperture,
+        uBloom: this.bloomAmount,
+        uHaze: this.haze,
+        uVignette: this.vignette,
+        uGrain: this.grain,
+        uCaustics: this.caustics,
+      } as unknown as SceneApplyArgs["post"],
+      lamps: { uLampGain: this.lampGain } as unknown as SceneApplyArgs["lamps"],
+      out: this.interactionSceneOut,
+    };
+  }
+
+  /** Seed the out-params from config. Read unconditionally afterwards — the beam retrace consults
+   *  them every frame — so a scene with no bindings must still find its authored values here. */
+  private seedInteractionOut(): void {
+    const c = this.config;
+    this.interactionSceneOut.timeOffset = c.timeOffset;
+    this.interactionSceneOut.zoom = 1;
+    this.interactionSceneOut.beamIncidence = c.beam?.incidence ?? 0;
+    this.interactionSceneOut.beamEntry = c.beam?.entry ?? 0.5;
+    this.interactionSceneOut.orbitYaw = 0;
+    this.interactionSceneOut.orbitPitch = 0;
+  }
+
+  /**
+   * Per-frame binding write. No-op without a controller.
+   *
+   * While CAPTURING it writes the rest state — every bound parameter at its authored base — rather
+   * than skipping the write. Skipping would leave whatever hover or scroll state the previous
+   * frame put in the uniforms, so the same config would export a different image depending on
+   * where the pointer happened to be.
+   */
+  private applyInteraction(): void {
+    this.seedInteractionOut();
+    if (!this.interaction) {
+      this.interactionTime = 0;
+      this.interactionZoom = 1;
+      return;
+    }
+    this.applyBindings(this.capturing ? null : this.interaction);
+  }
+
+  /**
+   * value = mix(from ?? authored base, to, smoothed source) — the same evaluation the GLSL engine
+   * runs, through the same applier tables.
+   *
+   * A null controller is the REST state: every binding takes its AUTHORED base. Note that this is
+   * NOT the same as evaluating the mix at zero — that yields `from`, which is the far end of the
+   * reaction's travel and usually nowhere near what the scene was authored at. Prism's beam is
+   * authored at -60 degrees and its incidence binding starts at -75, so the shortcut silently
+   * exported every capture with the beam pointing somewhere the config never asked for.
+   */
+  private applyBindings(ic: InteractionController | null): void {
+    const c = this.config;
+    this.seedInteractionOut();
+    const sceneArgs = this.sceneApplyArgs();
+    for (const b of c.interaction?.bindings ?? []) {
+      const applier = SCENE_APPLIERS[b.target];
+      const value = ic
+        ? THREE.MathUtils.lerp(b.from ?? applier.base(c), b.to, ic.bindingValue(b))
+        : applier.base(c);
+      applier.apply(value, sceneArgs);
+    }
+    const lampCount = Math.min(c.lamps.length, MAX_LAMPS);
+    for (let i = 0; i < lampCount; i++) {
+      const bindings = c.lamps[i].bindings;
+      if (!bindings?.length) continue;
+      const args = { vec: this.lampData[i] };
+      for (const b of bindings) {
+        const applier = LAMP_APPLIERS[b.target];
+        const value = ic
+          ? THREE.MathUtils.lerp(b.from ?? applier.base(c.lamps[i]), b.to, ic.bindingValue(b))
+          : applier.base(c.lamps[i]);
+        applier.apply(value, args);
+      }
+    }
+    for (const item of this.items) {
+      const bindings = item.config?.interaction?.bindings;
+      if (!bindings?.length || !item.bound || !item.base) continue;
+      const args = {
+        u: item.bound as unknown as ItemApplyArgs["u"],
+        mesh: item.mesh,
+        home: item.home,
+      };
+      for (const b of bindings) {
+        const applier = ITEM_APPLIERS[b.target];
+        const value = ic
+          ? THREE.MathUtils.lerp(
+              b.from ?? applier.base(item.base, item.home),
+              b.to,
+              ic.bindingValue(b),
+            )
+          : applier.base(item.base, item.home);
+        applier.apply(value, args);
+      }
+    }
+    // A time offset is a DELTA over the authored one; zoom is a plain multiplier.
+    this.interactionTime = this.interactionSceneOut.timeOffset - c.timeOffset;
+    this.interactionZoom = this.interactionSceneOut.zoom;
+  }
+
+  /** Resolve `hoverSelf` / `pressSelf` against the meshes that actually bind them. */
+  private updateItemHover(ic: InteractionController): void {
+    if (this.collectHitCandidates("hoverSelf")) {
+      ic.setHoverItem(this.resolveItemHit(ic.pointerTarget()));
+    }
+    // A pending press must ALWAYS be consumed, even when nothing binds it, or it waits forever.
+    const pressNdc = ic.pendingPress();
+    if (pressNdc) {
+      this.collectHitCandidates("pressSelf");
+      ic.setPressItem(this.resolveItemHit(pressNdc));
+    }
+  }
+
+  private collectHitCandidates(source: "hoverSelf" | "pressSelf"): boolean {
+    const candidates = this.hoverCandidates;
+    candidates.length = 0;
+    for (const item of this.items) {
+      if (item.config?.interaction?.bindings?.some((b) => b.source === source)) {
+        candidates.push(item.mesh);
+      }
+    }
+    return candidates.length > 0;
+  }
+
+  /** The nearest hit's index into the RESOLVED item list — the controller's index space. */
+  private resolveItemHit(ndc: { x: number; y: number } | null): number | null {
+    if (!ndc || this.hoverCandidates.length === 0) return null;
+    this.hoverNdc.set(ndc.x, ndc.y);
+    this.scene.updateMatrixWorld(true);
+    this.raycaster.setFromCamera(this.hoverNdc, this.camera);
+    const hit = this.raycaster.intersectObjects(this.hoverCandidates, false)[0];
+    if (!hit) return null;
+    const item = this.items.find((entry) => entry.mesh === hit.object);
+    const index = item?.config ? this.resolvedItems.indexOf(item.config) : -1;
+    return index >= 0 ? index : null;
+  }
+
+  /**
+   * Retrace the beam when a binding has moved it.
+   *
+   * A beam's path is decided on the CPU — Snell at each face, per wavelength — so no uniform can
+   * bend it; the mesh has to be rebuilt. Compared against what the current mesh was traced from so
+   * a pointer sitting still does not rebuild it every frame for an identical answer.
+   */
+  private retraceBeamIfMoved(): void {
+    const beam = this.config.beam;
+    if (!beam) return;
+    // Only a scene that BINDS the beam can move it. Without this the retrace is reachable on
+    // scenes that have no interaction at all, where rebuilding the mesh mid-frame is pure risk for
+    // an answer that cannot have changed.
+    const bound = (this.config.interaction?.bindings ?? []).some(
+      (b) => b.target === "beamIncidence" || b.target === "beamEntry",
+    );
+    if (!bound) return;
+    const want = {
+      incidence: this.interactionSceneOut.beamIncidence,
+      entry: this.interactionSceneOut.beamEntry,
+    };
+    const from = this.beamTracedFrom;
+    if (from && from.incidence === want.incidence && from.entry === want.entry) return;
+    const authored = { incidence: beam.incidence, entry: beam.entry };
+    beam.incidence = want.incidence;
+    beam.entry = want.entry;
+    this.buildBeam();
+    beam.incidence = authored.incidence;
+    beam.entry = authored.entry;
+    // `buildBeam` recorded the AUTHORED pair it was handed; correct it to what was actually
+    // traced, or the next frame sees a mismatch and rebuilds again for the same answer.
+    this.beamTracedFrom = want;
+  }
+
   pick(clientX: number, clientY: number): MaterialItem | null {
     const ndc = this.toNdc(clientX, clientY);
     if (!ndc) return null;
@@ -2100,7 +2380,10 @@ export class NodeMaterialRenderer implements Engine {
       uniforms,
       planes,
       // No config: an item added in code is not a prism the tracer can walk, and
-      // `applyPrismPlanes` uses exactly this to decide that.
+      // `applyPrismPlanes` uses exactly this to decide that. Nothing can bind to it either, which
+      // is why it carries no `base`/`bound`.
+      base: undefined,
+      bound: undefined,
       config: undefined,
       motion: normalizeMotion(options.motion),
       phase: options.phase ?? 0,
@@ -2163,12 +2446,14 @@ export class NodeMaterialRenderer implements Engine {
 
   private updateCamera(): void {
     const cam = this.config.camera;
-    const d = this.distance || cam.distance;
-    this.camera.position.set(
-      Math.sin(this.yaw) * d,
-      cam.height + this.pitch * d * 0.5,
-      Math.cos(this.yaw) * d,
-    );
+    // The zoom binding is a multiplier over the authored distance (2 = twice as close); the orbit
+    // ones are degrees ADDED to the drag-orbit, so a scene can have both and they compose rather
+    // than fight over the same variable.
+    const d = (this.distance || cam.distance) / Math.max(this.interactionZoom, 0.05);
+    const yaw = this.yaw + THREE.MathUtils.degToRad(this.interactionSceneOut.orbitYaw);
+    const pitch =
+      this.pitch + 2 * Math.tan(THREE.MathUtils.degToRad(this.interactionSceneOut.orbitPitch));
+    this.camera.position.set(Math.sin(yaw) * d, cam.height + pitch * d * 0.5, Math.cos(yaw) * d);
     this.camera.lookAt(cam.lookAt.x, cam.lookAt.y, cam.lookAt.z);
     if (cam.roll) this.camera.rotateZ((cam.roll * Math.PI) / 180);
   }
@@ -2262,13 +2547,24 @@ export class NodeMaterialRenderer implements Engine {
       await this.renderer.renderAsync(this.scene, this.camera);
       return;
     }
-    this.timeUniform.value = this.time;
+    // The bindings write into live uniforms, so they run before anything reads them. Also seeds
+    // the beam's wanted incidence/entry, which the retrace below consults.
+    this.applyInteraction();
+    this.retraceBeamIfMoved();
+    this.updateCamera();
+    // A `timeOffset` binding scrubs the clock that the motions and the ripple read — as a DELTA,
+    // so the authored timeline is untouched and removing the binding restores it.
+    this.timeUniform.value = this.time + this.interactionTime;
     // Per-item motion, from the SAME module the WebGL engine drives. It reads and writes only the
     // mesh and the authored pose, so the two engines animate identically rather than by two
     // implementations that agree until they do not. Every item carries a `phase`, so even a frame
     // at time zero is posed — leaving this out gave the node engine a visibly different LAYOUT,
     // not just a different animation.
-    applyMotions(this.items as unknown as MaterialItem[], this.time, this.config.loopSeconds);
+    applyMotions(
+      this.items as unknown as MaterialItem[],
+      this.time + this.interactionTime,
+      this.config.loopSeconds,
+    );
     // The traced planes are world-space, so they follow the pose and have to be recomputed after it.
     for (const entry of this.items) this.applyPrismPlanes(entry);
     // The wall's contact shadows follow the poses too.
@@ -2474,10 +2770,31 @@ export class NodeMaterialRenderer implements Engine {
   start(): this {
     if (this.running) return this;
     this.running = true;
-    const loop = () => {
+    // Seeded HERE, not at construction: the gap between the two is however long the device
+    // negotiation took, and feeding that in as the first delta jumps the scene forward.
+    this.lastFrame = performance.now();
+    const loop = (now: number) => {
       if (!this.running) return;
       this.frame = requestAnimationFrame(loop);
-      if (!this.config.paused) this.time += 1 / 60;
+      // WALL CLOCK, not a fixed 1/60. The frame callback fires at the display's refresh rate, so a
+      // fixed step runs a 120Hz screen at exactly double speed and a 144Hz one at 2.4x — the scene
+      // is simply faster on better hardware, which is not something anyone would attribute to the
+      // renderer. Capped at 50ms so a backgrounded tab resumes where it left off instead of
+      // teleporting through however long it was away.
+      const delta = Math.min((now - this.lastFrame) / 1000, 0.05);
+      this.lastFrame = now;
+      if (!this.config.paused) {
+        // The ramp scales ACCUMULATION, never the clock itself: `seek` still sets an absolute
+        // time, so captures and posters stay reproducible.
+        if (this.introRamp < 1) this.introRamp = Math.min(1, this.introRamp + delta);
+        this.time += delta * (this.config.introRamp ? this.introRamp : 1);
+      }
+      if (this.interaction) {
+        // Hover BEFORE the sources advance, so `hoverSelf` resolves against the pointer position
+        // this frame rather than the smoothed value from the last one.
+        this.updateItemHover(this.interaction);
+        this.interaction.update(delta); // the SAME delta the scene advanced by
+      }
       void this.drawGuarded();
     };
     this.frame = requestAnimationFrame(loop);
@@ -2575,7 +2892,12 @@ export class NodeMaterialRenderer implements Engine {
     // Waits rather than skipping: a capture has to reflect the time it was asked for, so returning
     // whatever frame happened to be in flight would hand back the previous one.
     await this.exclusive(() => undefined);
-    await this.drawGuarded();
+    this.capturing = true;
+    try {
+      await this.drawGuarded();
+    } finally {
+      this.capturing = false;
+    }
     return new Promise<Blob>((resolve, reject) => {
       this.canvas.toBlob(
         (blob) => (blob ? resolve(blob) : reject(new Error("captureImage produced no blob"))),

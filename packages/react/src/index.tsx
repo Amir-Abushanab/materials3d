@@ -8,10 +8,11 @@ import type {
   SceneConfig,
   MaterialHandle,
   MaterialOptions,
-  MaterialRenderer,
   LampConfig,
   MotionConfig,
   PosterFit,
+  RendererKind,
+  EngineFor,
   PostConfig,
   ScatterConfig,
 } from "@materials3d/core";
@@ -36,7 +37,7 @@ interface FlatProps {
   paused?: boolean;
 }
 
-export interface Materials3DProps extends FlatProps {
+export interface Materials3DProps<R extends RendererKind = "webgl"> extends FlatProps {
   /** A preset: a function (tree-shakeable) or a name string (lazy-imports the presets chunk). */
   preset?: string | (() => Partial<SceneConfig>);
   /** Escape hatch: a full/partial config, applied last.
@@ -47,6 +48,14 @@ export interface Materials3DProps extends FlatProps {
   posterFit?: PosterFit;
   lazy?: boolean;
   webgl?: "auto" | "force" | "off";
+  /**
+   * Which engine build to fetch. Default `"webgl"`.
+   *
+   * `"webgpu"` fetches a separate, larger bundle — three's node renderer and TSL — and is the only
+   * way to reach a WebGPU backend. It selects the ENGINE, not the backend: it still runs on WebGL
+   * where the browser has no WebGPU. See `MaterialOptions.renderer`.
+   */
+  renderer?: R;
   respectReducedMotion?: boolean;
   /** Stay a poster below this container size in CSS pixels. Four passes at phone DPR is real
    *  work, and a still frame of glass loses less than a still frame of most things. */
@@ -55,7 +64,7 @@ export interface Materials3DProps extends FlatProps {
   style?: CSSProperties;
   /** Custom SSR poster markup, e.g. `<img data-materials3d-poster src="…" />` — the shell adopts it. */
   children?: ReactNode;
-  onReady?: (renderer: MaterialRenderer) => void;
+  onReady?: (renderer: EngineFor<R>) => void;
   onFallback?: (reason: FallbackReason) => void;
 }
 
@@ -78,7 +87,10 @@ function syncBase(preset: Materials3DProps["preset"]): SceneConfig {
 }
 
 /** Apply the flat props (and the config escape hatch) onto a full base config. */
-function buildConfig(base: SceneConfig, props: Materials3DProps): Partial<SceneConfig> {
+function buildConfig(
+  base: SceneConfig,
+  props: Materials3DProps<RendererKind>,
+): Partial<SceneConfig> {
   if (props.lamps !== undefined) base.lamps = props.lamps;
   if (props.lampGain !== undefined) base.lampGain = props.lampGain;
   if (props.background !== undefined) base.background = props.background;
@@ -120,7 +132,7 @@ function presetKey(preset: Materials3DProps["preset"]): string | undefined {
 }
 
 /** A stable string that changes whenever the resolved config would — keys the update effect. */
-function configKey(props: Materials3DProps): string {
+function configKey(props: Materials3DProps<RendererKind>): string {
   const flat: Record<string, unknown> = {};
   const keys = [
     "lamps",
@@ -149,12 +161,14 @@ function configKey(props: Materials3DProps): string {
  * `<img data-materials3d-poster>` child for a server-rendered poster) and, on the client, mounts the
  * shell — poster-first, lazy, WebGL/reduced-motion/save-data aware, with the engine code-split out.
  */
-export function Materials3D(props: Materials3DProps): ReactElement {
+export function Materials3D<R extends RendererKind = "webgl">(
+  props: Materials3DProps<R>,
+): ReactElement {
   const { className, style, children } = props;
   const containerRef = useRef<HTMLDivElement>(null);
-  const handleRef = useRef<MaterialHandle | null>(null);
+  const handleRef = useRef<MaterialHandle<R> | null>(null);
   // Keep the latest callbacks in a ref so they never force a remount.
-  const cbRef = useRef<Pick<Materials3DProps, "onReady" | "onFallback">>({});
+  const cbRef = useRef<Pick<Materials3DProps<R>, "onReady" | "onFallback">>({});
   cbRef.current.onReady = props.onReady;
   cbRef.current.onFallback = props.onFallback;
 
@@ -164,17 +178,22 @@ export function Materials3D(props: Materials3DProps): ReactElement {
     const container = containerRef.current;
     if (!container) return;
     let cancelled = false;
-    const options: MaterialOptions = {
+    const options: MaterialOptions<R> = {
       poster: props.poster,
       posterFit: props.posterFit,
       lazy: props.lazy,
       webgl: props.webgl,
+      renderer: props.renderer,
       respectReducedMotion: props.respectReducedMotion,
       minSizeForWebGL: props.minSizeForWebGL,
       onReady: (r) => cbRef.current.onReady?.(r),
       onFallback: (reason) => cbRef.current.onFallback?.(reason),
     };
-    const handle = createMaterials(container, buildConfig(syncBase(props.preset), props), options);
+    const handle = createMaterials<R>(
+      container,
+      buildConfig(syncBase(props.preset), props),
+      options,
+    );
     handleRef.current = handle;
     // A string preset resolves asynchronously; stage the real config once it loads.
     if (typeof props.preset === "string") {
@@ -214,7 +233,6 @@ export default Materials3D;
 export type {
   SceneConfig,
   MaterialHandle,
-  MaterialRenderer,
   FallbackReason,
   SnapshotOptions,
 } from "@materials3d/core";

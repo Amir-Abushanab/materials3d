@@ -1,10 +1,11 @@
 import { createMaterials } from "@materials3d/core";
 import type {
+  EngineFor,
+  RendererKind,
   FallbackReason,
   SceneConfig,
   MaterialHandle,
   MaterialOptions,
-  MaterialRenderer,
 } from "@materials3d/core";
 
 const OBSERVED = [
@@ -95,19 +96,22 @@ export class Materials3DElement extends ElementBase {
     const config = await this.#buildConfig();
     if (id !== this.#mountId || !this.isConnected) return; // superseded while the config resolved
     const minSize = Number(this.getAttribute("min-size"));
-    const options: MaterialOptions = {
+    const options: MaterialOptions<RendererKind> = {
       poster: this.getAttribute("poster") ?? undefined,
       posterFit: (this.getAttribute("poster-fit") as MaterialOptions["posterFit"]) ?? undefined,
       lazy: this.#boolAttr("lazy"),
       webgl: (this.getAttribute("webgl") as MaterialOptions["webgl"]) ?? undefined,
       minSizeForWebGL: Number.isFinite(minSize) && minSize > 0 ? minSize : undefined,
       paused: this.#boolAttr("paused"),
-      onReady: (renderer: MaterialRenderer) =>
+      // `renderer="webgpu"` fetches the node-renderer build. Anything else, including absent, is
+      // the default WebGL engine — the option is opt-in precisely because it is a second bundle.
+      renderer: this.getAttribute("renderer") === "webgpu" ? "webgpu" : undefined,
+      onReady: (renderer: EngineFor<RendererKind>) =>
         this.dispatchEvent(new CustomEvent("materials3d-ready", { detail: renderer })),
       onFallback: (reason: FallbackReason) =>
         this.dispatchEvent(new CustomEvent("materials3d-fallback", { detail: reason })),
     };
-    this.#handle = createMaterials(this, config, options);
+    this.#handle = createMaterials<RendererKind>(this, config, options);
   }
 
   /** default ← preset ← src JSON ← config attribute ← config property. */
@@ -176,7 +180,6 @@ register();
 export type {
   SceneConfig,
   MaterialHandle,
-  MaterialRenderer,
   FallbackReason,
   SnapshotOptions,
 } from "@materials3d/core";

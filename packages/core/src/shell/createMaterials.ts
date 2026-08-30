@@ -1,5 +1,6 @@
 import type { SceneConfig } from "../config/model";
 import type { MaterialRenderer, MaterialRendererOptions } from "../renderer/MaterialRenderer";
+import type { NodeMaterialRenderer } from "../renderer/NodeMaterialRenderer";
 import { hasWebGL, minSide, prefersReducedData, prefersReducedMotion } from "./probe";
 import { ensurePositioned, setupPoster, type Poster, type PosterFit } from "./poster";
 
@@ -27,7 +28,25 @@ export type MaterialState = "poster" | "loading" | "running" | "fallback";
  */
 type CoreModule = typeof import("../core-loader");
 
-export interface MaterialOptions {
+/** Which engine build to fetch. */
+export type RendererKind = "webgl" | "webgpu";
+
+/**
+ * The class `onReady` actually hands back, given the engine that was asked for.
+ *
+ * A conditional type rather than a widened one, so a consumer keeps the concrete class both today
+ * and after the split: `"webgpu"` really does construct a `NodeMaterialRenderer`, and typing it as
+ * the WebGL class was the one place this API said something untrue.
+ *
+ * `import type` — erased at compile time, so naming the node renderer here costs a default build
+ * nothing. The two engines are separate three builds and must stay that way; see
+ * `core-loader-webgpu`.
+ */
+export type EngineFor<R extends RendererKind> = R extends "webgpu"
+  ? NodeMaterialRenderer
+  : MaterialRenderer;
+
+export interface MaterialOptions<R extends RendererKind = "webgl"> {
   /** Poster URL / data-URI. Defaults to adopting the container's `<img data-materials3d-poster>` (SSR). */
   poster?: string;
   /** Poster `object-fit`. Default `"fill"` — matches the canvas, so a poster captured at the
@@ -57,7 +76,7 @@ export interface MaterialOptions {
   fadeMs?: number;
   /** Start paused. */
   paused?: boolean;
-  onReady?(renderer: MaterialRenderer): void;
+  onReady?(renderer: EngineFor<R>): void;
   onFallback?(reason: FallbackReason): void;
   onStateChange?(state: MaterialState): void;
   /**
@@ -72,7 +91,7 @@ export interface MaterialOptions {
    * back to a WebGL backend on its own — so this selects the ENGINE, not the backend. What it
    * actually buys is TSL and whatever a WebGPU backend adds where the browser has one.
    */
-  renderer?: "webgl" | "webgpu";
+  renderer?: R;
   /** Seam for the standalone/CDN build to supply the core synchronously (three already bundled). */
   loadCore?(): Promise<CoreModule>;
 }
@@ -87,9 +106,9 @@ export interface SnapshotOptions {
   time?: number;
 }
 
-export interface MaterialHandle {
+export interface MaterialHandle<R extends RendererKind = "webgl"> {
   readonly state: MaterialState;
-  readonly renderer: MaterialRenderer | null;
+  readonly renderer: EngineFor<R> | null;
   /** Capture the current live frame as an image Blob. Resolves `null` until the scene is running
    *  — wait for {@link MaterialOptions.onReady} (or the element's `materials3d-ready` event) first. */
   snapshot(options?: SnapshotOptions): Promise<Blob | null>;
@@ -106,12 +125,12 @@ export interface MaterialHandle {
  * standalone/CDN build can pass a synchronous core and NOT bundle the dynamic-import path — its
  * output stays a single file. The public {@link createMaterials} supplies the dynamic-import default.
  */
-export function createMaterialsImpl(
+export function createMaterialsImpl<R extends RendererKind = "webgl">(
   loadCore: () => Promise<CoreModule>,
   container: HTMLElement,
   config: Partial<SceneConfig>,
-  options: MaterialOptions,
-): MaterialHandle {
+  options: MaterialOptions<R>,
+): MaterialHandle<R> {
   const {
     lazy = true,
     rootMargin = "200px",
@@ -195,7 +214,10 @@ export function createMaterialsImpl(
     canvas.addEventListener("webglcontextrestored", onContextRestored, false);
     renderer.start();
     setState("running");
-    options.onReady?.(renderer);
+    // The one cast, and it is the same nominal gap `core-loader-webgpu` bridges: the value really
+    // is a `NodeMaterialRenderer` when `"webgpu"` was asked for, because that loader constructed
+    // it — only the local binding is typed as the WebGL class.
+    options.onReady?.(renderer as unknown as EngineFor<R>);
 
     if (poster) {
       // Crossfade only after two frames, so the scene has definitely painted first.
@@ -243,12 +265,12 @@ export function createMaterialsImpl(
     }
   }
 
-  const handle: MaterialHandle = {
+  const handle: MaterialHandle<R> = {
     get state() {
       return state;
     },
     get renderer() {
-      return renderer;
+      return renderer as unknown as EngineFor<R> | null;
     },
     snapshot(opts = {}) {
       if (!renderer) return Promise.resolve(null);
@@ -298,12 +320,12 @@ export function createMaterialsImpl(
  *
  * No static three import: the engine arrives via a dynamic import, so the shell stays tiny.
  */
-export function createMaterials(
+export function createMaterials<R extends RendererKind = "webgl">(
   container: HTMLElement,
   config: Partial<SceneConfig> = {},
-  options: MaterialOptions = {},
-): MaterialHandle {
-  return createMaterialsImpl(
+  options: MaterialOptions<R> = {} as MaterialOptions<R>,
+): MaterialHandle<R> {
+  return createMaterialsImpl<R>(
     options.loadCore ??
       // Two separate dynamic imports, not one parameterized by a variable: a bundler can only
       // code-split a literal import specifier, so folding these into `import(path)` would defeat

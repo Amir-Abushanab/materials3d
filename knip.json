@@ -25,5 +25,6 @@
     "unlisted",
     "binaries",
     "unresolved"
-  ]
+  ],
+  "ignore": ["packages/core/src/shell/__typetest/**"]
 }

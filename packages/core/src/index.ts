@@ -13,6 +13,8 @@ export type { RGB } from "./util/color";
 export { createMaterials, mountMaterials } from "./shell/createMaterials";
 export type {
   MaterialOptions,
+  RendererKind,
+  EngineFor,
   MaterialHandle,
   MaterialState,
   FallbackReason,

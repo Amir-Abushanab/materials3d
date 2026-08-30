@@ -35,6 +35,7 @@ import {
   type PostConfig,
   type ScatterConfig,
 } from "../config/model";
+import type { Engine } from "../engine";
 import { parseHex } from "../util/color";
 import { makeRng } from "../util/math";
 import type { FrameCallback, MaterialItem } from "./item";
@@ -266,7 +267,7 @@ export function frameFov(
   return THREE.MathUtils.radToDeg(2 * Math.atan(k * Math.tan(THREE.MathUtils.degToRad(fov) / 2)));
 }
 
-export class MaterialRenderer {
+export class MaterialRenderer implements Engine {
   readonly renderer: THREE.WebGLRenderer;
   readonly scene = new THREE.Scene();
   readonly camera: THREE.PerspectiveCamera;

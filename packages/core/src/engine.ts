@@ -8,17 +8,73 @@
  * site. Naming the surface instead keeps the two interchangeable and states exactly what a new
  * engine would have to provide.
  */
-import type { SceneConfig } from "./config/model";
+import type * as THREE from "three";
+import type { ItemConfig, LampConfig, MotionConfig, PostConfig, SceneConfig } from "./config/model";
 
+/**
+ * The renderer-agnostic part of an item.
+ *
+ * Deliberately WITHOUT the material: the two engines hold different material classes from
+ * different three builds, and naming either here would pull that build into the other's bundle and
+ * defeat the code split. Everything the shell and the studio actually reach for — the mesh, the
+ * config it came from, its motion and its authored pose — is renderer-agnostic anyway.
+ */
+export interface EngineItem {
+  readonly mesh: THREE.Mesh;
+  readonly config: ItemConfig | null | undefined;
+  motion: MotionConfig;
+  phase: number;
+  readonly home: THREE.Vector3;
+  readonly homeRotation: THREE.Euler;
+  readonly homeScale: THREE.Vector3;
+}
+
+/**
+ * The full engine surface.
+ *
+ * Both classes declare `implements Engine`, which is what makes `core-loader-webgpu`'s assertion
+ * safe rather than merely asserted: the compiler checks each engine against this, so a method that
+ * went missing from one of them fails the build instead of failing at a call site.
+ */
 export interface Engine {
   readonly canvas: HTMLCanvasElement;
   start(): unknown;
   stop(): unknown;
   dispose(): void;
   refreshPlayback(): void;
+  seek(time: number): void;
+  renderOnce(): void;
   getConfig(): SceneConfig;
   setConfig(config: Partial<SceneConfig>): void;
+  setLamps(lamps: LampConfig[]): unknown;
+  setPost(post: Partial<PostConfig>): unknown;
   captureImage(mime?: string, quality?: number, time?: number): Promise<Blob>;
+  captureStream(fps?: number): MediaStream;
+
+  resize(): void;
+  setOutputSize(size?: { width: number; height: number }): void;
+  refresh(): void;
+  rebuild(): void;
+  resetCamera(): void;
+  onFrame(callback: ((time: number) => void) | null): unknown;
+
+  getItems(): readonly EngineItem[];
+  remove(item: never): void;
+  clear(): void;
+
+  pick(clientX: number, clientY: number): EngineItem | null;
+  projectBounds(item: never): { x: number; y: number; width: number; height: number } | null;
+  pointOnDragPlane(
+    clientX: number,
+    clientY: number,
+    through: THREE.Vector3,
+    out?: THREE.Vector3,
+  ): THREE.Vector3 | null;
+  viewDirection(out?: THREE.Vector3): THREE.Vector3;
+
+  setInteractionInput(name: string, value: number): unknown;
+  setScrollPreview(value: number | null): unknown;
+  setScrollTestProgress(value: number): unknown;
 }
 
 export interface EngineOptions {

@@ -31,6 +31,8 @@ export interface PassTargets {
   plate: THREE.RenderTarget;
   /** The composed frame, before post. Half-float when a tone map is in play. */
   color: THREE.RenderTarget;
+  /** Where post writes when the finish pass is going to run over it. */
+  finish: THREE.RenderTarget;
   /** Bloom pyramid, two targets per level for the separable blur. */
   bloom: { a: THREE.RenderTarget; b: THREE.RenderTarget }[];
 }
@@ -83,6 +85,7 @@ export function createTargets(width: number, height: number, hdr: boolean): Pass
     }),
     plate: makeTarget(width, height, scene),
     color: makeTarget(width, height, scene),
+    finish: makeTarget(width, height, scene),
     bloom: BLOOM_DIVISORS.map((d) => ({
       a: makeTarget(width / d, height / d, {
         ...base,
@@ -105,6 +108,7 @@ export function resizeTargets(t: PassTargets, width: number, height: number): vo
   t.back.setSize(w, h);
   t.plate.setSize(w, h);
   t.color.setSize(w, h);
+  t.finish.setSize(w, h);
   BLOOM_DIVISORS.forEach((d, i) => {
     t.bloom[i].a.setSize(Math.max(1, Math.floor(w / d)), Math.max(1, Math.floor(h / d)));
     t.bloom[i].b.setSize(Math.max(1, Math.floor(w / d)), Math.max(1, Math.floor(h / d)));
@@ -116,6 +120,7 @@ export function disposeTargets(t: PassTargets): void {
   t.back.dispose();
   t.plate.dispose();
   t.color.dispose();
+  t.finish.dispose();
   for (const level of t.bloom) {
     level.a.dispose();
     level.b.dispose();

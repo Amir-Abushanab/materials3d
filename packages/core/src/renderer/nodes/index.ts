@@ -15,4 +15,5 @@ export * from "./opaque";
 export * from "./transmissive";
 export * from "./backdrop";
 export * from "./beam";
+export * from "./finish";
 export * from "./pipeline";

@@ -67,6 +67,7 @@ import {
   prismCrossSection,
 } from "./lightSheet";
 import { backdropPass, GROUND_SLOTS } from "./nodes/backdrop";
+import { finishPass } from "./nodes/finish";
 import { beamPass, dustPass, dustVertex, outsideSection } from "./nodes/beam";
 import {
   backGlassPass,
@@ -311,6 +312,29 @@ export class NodeMaterialRenderer implements Engine {
   private readonly ground = TSL.uniformArray(this.groundData);
   private readonly groundPhase = TSL.uniformArray(this.groundPhaseData, "float");
   private readonly groundCount = uniform(0, "int");
+
+  /**
+   * The finish pass — print effects over the composed frame.
+   *
+   * Skipped entirely when none is on, which is the usual case: the post pass then draws straight
+   * to the screen and the extra target is never allocated.
+   */
+  private finishMaterial?: THREE.NodeMaterial;
+  private finishSource?: Vec;
+  private readonly fnInner = uniform(0);
+  private readonly fnInnerDensity = uniform(0.5);
+  private readonly fnInnerDecay = uniform(0.94);
+  private readonly fnInnerCentre = uniform(TSL.vec2(0.5, 0.15));
+  private readonly fnDither = uniform(0);
+  private readonly fnDitherScale = uniform(2);
+  private readonly fnDitherSteps = uniform(4);
+  private readonly fnHalftone = uniform(0);
+  private readonly fnHalftoneCell = uniform(6);
+  private readonly fnHalftoneAngle = uniform(0.4);
+  private readonly fnCmyk = uniform(0);
+  private readonly fnCmykCell = uniform(6);
+  private readonly fnPaper = uniform(0);
+  private readonly fnPaperScale = uniform(2);
   /**
    * The dust field, drawn additively over the FINISHED frame.
    *
@@ -1523,6 +1547,42 @@ export class NodeMaterialRenderer implements Engine {
     this.groundCount.value = count;
   }
 
+  /** Whether any finish-pass effect is on. When none is, the post pass draws straight out. */
+  private needsFinish(): boolean {
+    const p = this.config.post;
+    return (
+      p.innerLight > 0.001 ||
+      p.dither > 0.001 ||
+      p.halftone > 0.001 ||
+      p.halftoneCmyk > 0.001 ||
+      p.paperTexture > 0.001
+    );
+  }
+
+  private buildFinishMaterial(source: THREE.Texture): THREE.NodeMaterial {
+    this.finishSource ??= TSL.texture(source);
+    return passMaterial(
+      finishPass({
+        source: this.finishSource,
+        res: this.resolution,
+        inner: this.fnInner,
+        innerDensity: this.fnInnerDensity,
+        innerDecay: this.fnInnerDecay,
+        innerCentre: this.fnInnerCentre,
+        dither: this.fnDither,
+        ditherScale: this.fnDitherScale,
+        ditherSteps: this.fnDitherSteps,
+        halftone: this.fnHalftone,
+        halftoneCell: this.fnHalftoneCell,
+        halftoneAngle: this.fnHalftoneAngle,
+        cmyk: this.fnCmyk,
+        cmykCell: this.fnCmykCell,
+        paper: this.fnPaper,
+        paperScale: this.fnPaperScale,
+      }),
+    );
+  }
+
   private applyConfig(): void {
     const c = this.config;
     const [r, g, b] = parseHex(c.background);
@@ -1572,6 +1632,21 @@ export class NodeMaterialRenderer implements Engine {
     // The room's own uniforms, read by BOTH the analytic fallback and the bake — the two have to
     // describe the same room, or a scene shading one material through each disagrees about what is
     // reflected in it.
+    const fp = c.post;
+    this.fnInner.value = fp.innerLight;
+    this.fnInnerDensity.value = fp.innerLightDensity;
+    this.fnInnerDecay.value = fp.innerLightDecay;
+    (this.fnInnerCentre.value as THREE.Vector2).set(fp.innerLightX, fp.innerLightY);
+    this.fnDither.value = fp.dither;
+    this.fnDitherScale.value = fp.ditherScale;
+    this.fnDitherSteps.value = fp.ditherSteps;
+    this.fnHalftone.value = fp.halftone;
+    this.fnHalftoneCell.value = fp.halftoneCell;
+    this.fnHalftoneAngle.value = fp.halftoneAngle;
+    this.fnCmyk.value = fp.halftoneCmyk;
+    this.fnCmykCell.value = fp.halftoneCmykCell;
+    this.fnPaper.value = fp.paperTexture;
+    this.fnPaperScale.value = fp.paperTextureScale;
     this.applyBackground();
     this.coneMode.value = c.transmission === "cone" ? 1 : 0;
     this.studioMode.value = c.studio === "softbox" ? 1 : 0;
@@ -1979,9 +2054,18 @@ export class NodeMaterialRenderer implements Engine {
       return;
     }
     // 4. Post — to the screen.
-    await this.quad.blit(this.renderer, this.passes.post, null);
+    // 5. Post, and then the FINISH pass if any of its effects is on. When none is — the usual
+    //    case — post draws straight to the screen and the extra target is never touched.
+    if (this.needsFinish()) {
+      this.finishMaterial ??= this.buildFinishMaterial(t.finish.texture);
+      if (this.finishSource) this.finishSource.value = t.finish.texture;
+      await this.quad.blit(this.renderer, this.passes.post, t.finish);
+      await this.quad.blit(this.renderer, this.finishMaterial, null);
+    } else {
+      await this.quad.blit(this.renderer, this.passes.post, null);
+    }
 
-    // 5. Dust — additively over the FINISHED frame, in display space.
+    // 6. Dust — additively over the FINISHED frame, in display space.
     //
     // After the bloom for the obvious reason that the bloom is what tells each grain whether any
     // light reaches it, and after the TONE MAP for a less obvious one: a mote is a point of light

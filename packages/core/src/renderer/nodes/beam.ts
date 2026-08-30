@@ -6,6 +6,7 @@
  * shape what the tracer already decided. That is why so little of the optics appears here.
  */
 import { TSL } from "three/webgpu";
+import { valueNoise } from "./common";
 
 type Vec = any;
 
@@ -307,3 +308,76 @@ export const dustVertex = (u: DustVertexUniforms) => {
     opacity: TSL.varying(lifePhase.smoothstep(0, fadeFraction)),
   };
 };
+
+export interface CausticUniforms {
+  edgeFalloff: Vec;
+  falloffRate: Vec;
+  falloffPower: Vec;
+  strength: Vec;
+  coverage: Vec;
+  farDesat: Vec;
+  farBright: Vec;
+  travelScale: Vec;
+  rateScale: Vec;
+  powerScale: Vec;
+  normalInfluence: Vec;
+  normalElevation: Vec;
+  wallScale: Vec;
+  wallNormal: Vec;
+  beamDir: Vec;
+}
+
+/**
+ * The CAUSTIC — the twin of CAUSTIC_FRAG.
+ *
+ * The same traced geometry as the beam, drawn a second time and lying on the wall rather than
+ * hanging in the air: what the sheet deposits where it lands. It reads the wall's own relief, so
+ * the pool brightens where the surface tilts into the light and dims where it turns away, which is
+ * what stops it reading as a decal.
+ *
+ * `step(0, wave)` is the near/far discriminator the tracer sets per vertex. Without it the pool
+ * draws on both sides of the sheet and the far half shows through the near one.
+ */
+export const causticPass = (u: CausticUniforms) =>
+  Fn(([color, profile, travel, wave, world]: [Vec, Vec, Vec, Vec, Vec]) => {
+    const r = profile.abs();
+    const radial = u.edgeFalloff
+      .negate()
+      .mul(r)
+      .mul(r)
+      .exp()
+      .mul(float(1).sub(r.smoothstep(0.55, 1)));
+    const distance = travel.div(u.travelScale.max(0.001)).clamp(0, 1);
+    const outgoing = float(1).div(
+      float(1)
+        .add(u.falloffRate.max(0).mul(u.rateScale.max(0)).mul(travel.max(0)))
+        .pow(u.falloffPower.mul(u.powerScale.max(0)).max(0.0001)),
+    );
+
+    // The wall's fine octave alone. The caustic sits ON that surface, so what tilts it is the
+    // relief the surface actually has, not a second invented one.
+    const e = float(0.02);
+    const m0 = valueNoise(world.mul(u.wallScale).mul(3.7));
+    const mx = valueNoise(world.add(TSL.vec2(e, 0)).mul(u.wallScale).mul(3.7));
+    const my = valueNoise(world.add(TSL.vec2(0, e)).mul(u.wallScale).mul(3.7));
+    const N: Vec = TSL.normalize(
+      TSL.vec3(m0.sub(mx).mul(u.wallNormal) as Vec, m0.sub(my).mul(u.wallNormal) as Vec, 1),
+    );
+    const elev = u.normalElevation.clamp(1, 89).mul(0.01745329252);
+    const incident: Vec = TSL.normalize(
+      TSL.vec3(TSL.normalize(u.beamDir).mul(elev.cos()) as Vec, elev.sin() as Vec),
+    );
+    // Normalized against the response a FLAT wall would give, so the influence knob scales a
+    // deviation from one rather than the absolute dot product — which would darken everything.
+    const flat0 = incident.z.max(0.05);
+    const relative = N.dot(incident).max(0).div(flat0).clamp(0, 2.5);
+    const surface = mix(float(1), relative, u.normalInfluence.clamp(0, 1));
+
+    const energy = color.r.max(color.g).max(color.b).max(0).mul(radial).mul(outgoing);
+    const bounded = float(1).sub(energy.mul(u.strength.max(0)).negate().exp());
+    const farMix = distance.smoothstep(0.16, 0.92).mul(u.farDesat);
+    const neutral = vec3(color.r.max(color.g).max(color.b).add(u.farBright.mul(distance)));
+    const tint = mix(color, neutral, farMix).mul(bounded.mul(0.68).add(0.62)).clamp(0, 1.45);
+    const cover = bounded.mul(u.coverage).clamp(0, 1);
+    return vec4(tint.mul(cover).mul(surface).mul(float(0).step(wave)), 0);
+  });

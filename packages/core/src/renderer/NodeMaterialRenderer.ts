@@ -68,7 +68,7 @@ import {
 } from "./lightSheet";
 import { backdropPass, GROUND_SLOTS } from "./nodes/backdrop";
 import { finishPass } from "./nodes/finish";
-import { beamPass, dustPass, dustVertex, outsideSection } from "./nodes/beam";
+import { beamPass, causticPass, dustPass, dustVertex, outsideSection } from "./nodes/beam";
 import {
   backGlassPass,
   backplate,
@@ -360,6 +360,14 @@ export class NodeMaterialRenderer implements Engine {
   private readonly dustSectionB = uniform(TSL.vec2(0, 0));
   private readonly dustSectionC = uniform(TSL.vec2(0, 0));
   private beamMesh?: THREE.Mesh;
+  /** The caustic draws the SAME traced geometry a second time, lying on the wall. */
+  private causticMesh?: THREE.Mesh;
+  private readonly causticEdge = uniform(16);
+  private readonly causticStrength = uniform(1.9);
+  private readonly causticCoverage = uniform(0.86);
+  private readonly causticNormalInfluence = uniform(1);
+  private readonly causticNormalElevation = uniform(35);
+  private readonly causticBeamDir = uniform(TSL.vec2(1, 0));
   private readonly beamReveal = uniform(1);
   /** One entry per configured item; rebuilt when the shapes change, not per frame. */
   private items: {
@@ -1240,6 +1248,11 @@ export class NodeMaterialRenderer implements Engine {
       (this.beamMesh.material as THREE.Material).dispose();
       this.beamMesh = undefined;
     }
+    if (this.causticMesh) {
+      this.scene.remove(this.causticMesh);
+      (this.causticMesh.material as THREE.Material).dispose();
+      this.causticMesh = undefined;
+    }
     const beam = this.config.beam;
     if (!beam) return;
 
@@ -1312,8 +1325,54 @@ export class NodeMaterialRenderer implements Engine {
 
     this.beamMesh = new THREE.Mesh(geometry, material);
     this.beamMesh.frustumCulled = false;
+    // After everything else, which with depth testing off is what makes the beam composite OVER
+    // the glass rather than under it.
     this.beamMesh.renderOrder = 10;
     this.scene.add(this.beamMesh);
+
+    // The caustic: the SAME geometry again, lying on the wall — what the sheet deposits where it
+    // lands, rather than the sheet itself. Just under the beam in render order.
+    const caustic = new THREE.NodeMaterial();
+    caustic.fragmentNode = causticPass({
+      edgeFalloff: this.causticEdge,
+      falloffRate: uniform(beam.falloffRate),
+      falloffPower: uniform(beam.falloffPower),
+      strength: this.causticStrength,
+      coverage: this.causticCoverage,
+      farDesat: uniform(0.04),
+      farBright: uniform(0.02),
+      travelScale: uniform(1),
+      rateScale: uniform(0.12),
+      powerScale: uniform(0.5),
+      normalInfluence: this.causticNormalInfluence,
+      normalElevation: this.causticNormalElevation,
+      wallScale: this.wallScale,
+      wallNormal: this.wallNormal,
+      beamDir: this.causticBeamDir,
+    })(
+      TSL.attribute("aColor", "vec3"),
+      TSL.attribute("aProfile", "float"),
+      TSL.attribute("aTravel", "float"),
+      TSL.attribute("aWavelength", "float"),
+      TSL.positionGeometry.xy,
+    ) as never;
+    caustic.transparent = true;
+    caustic.blending = THREE.CustomBlending;
+    caustic.blendSrc = THREE.OneFactor;
+    caustic.blendDst = THREE.OneFactor;
+    caustic.blendSrcAlpha = THREE.ZeroFactor;
+    caustic.blendDstAlpha = THREE.OneFactor;
+    caustic.side = THREE.DoubleSide;
+    caustic.depthTest = false;
+    caustic.depthWrite = false;
+    this.causticMesh = new THREE.Mesh(geometry, caustic);
+    this.causticMesh.frustumCulled = false;
+    this.causticMesh.renderOrder = 9;
+    (this.causticBeamDir.value as THREE.Vector2).set(
+      Math.cos(beam.rotation),
+      Math.sin(beam.rotation),
+    );
+    this.scene.add(this.causticMesh);
   }
 
   /**
@@ -1962,6 +2021,7 @@ export class NodeMaterialRenderer implements Engine {
     const beamWasVisible0 = this.beamMesh?.visible ?? false;
     if (this.backdrop) this.backdrop.visible = false;
     if (this.beamMesh) this.beamMesh.visible = false;
+    if (this.causticMesh) this.causticMesh.visible = false;
     this.scene.overrideMaterial = this.frontDepthMaterial;
     this.renderer.setClearColor(this.depthClear, 1);
     this.renderer.setRenderTarget(t.front);
@@ -1970,6 +2030,7 @@ export class NodeMaterialRenderer implements Engine {
     this.renderer.setClearColor(previousClear0, previousClearAlpha0);
     if (this.backdrop) this.backdrop.visible = backdropWasVisible0;
     if (this.beamMesh) this.beamMesh.visible = beamWasVisible0;
+    if (this.causticMesh) this.causticMesh.visible = beamWasVisible0;
 
     this.depthMaterial ??= this.buildDepthMaterial();
     this.scene.overrideMaterial = this.depthMaterial;
@@ -1982,6 +2043,7 @@ export class NodeMaterialRenderer implements Engine {
     const beamWasVisible = this.beamMesh?.visible ?? false;
     if (this.backdrop) this.backdrop.visible = false;
     if (this.beamMesh) this.beamMesh.visible = false;
+    if (this.causticMesh) this.causticMesh.visible = false;
     // CLEARED TO BLACK, not to the scene background. A pixel with no back face must come out with
     // no thickness, and zero minus the front depth clamps to exactly that; clearing to anything
     // else gives empty space an optical path.
@@ -2003,6 +2065,7 @@ export class NodeMaterialRenderer implements Engine {
     this.renderer.setRenderTarget(t.plate);
     await this.renderer.renderAsync(this.scene, this.camera);
     if (this.beamMesh) this.beamMesh.visible = beamWasVisible;
+    if (this.causticMesh) this.causticMesh.visible = beamWasVisible;
 
     // 1b. The solids' INNER interfaces, added into the plate — light that bounced its way back out
     //     of a far face, so the near faces have something to show other than the backdrop.

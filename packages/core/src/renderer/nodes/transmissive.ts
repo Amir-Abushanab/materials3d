@@ -7,6 +7,7 @@
  * pass state rather than only on the surface.
  */
 import { TSL } from "three/webgpu";
+import { sq } from "./common";
 
 type Vec = any;
 
@@ -75,10 +76,13 @@ export const coneDirection = (samples: number) =>
 
 /** Three overlapping Gaussians across the sample sweep — the reference's spectral weights. */
 export const spectralWeight = Fn(([t]: [Vec]) =>
+  // `sq`, not `.pow(2)`: `t` is below each centre for part of the sweep, and this Fn is inlined
+  // into an unrolled loop where `t` is a literal — so a negative base reaches Tint as a constant
+  // expression and it rejects the module outright. See `sq` in ./common.
   vec3(
-    t.sub(0.05).div(0.45).pow(2).negate().exp(),
-    t.sub(0.5).div(0.38).pow(2).negate().exp(),
-    t.sub(0.95).div(0.45).pow(2).negate().exp(),
+    sq(t.sub(0.05).div(0.45)).negate().exp(),
+    sq(t.sub(0.5).div(0.38)).negate().exp(),
+    sq(t.sub(0.95).div(0.45)).negate().exp(),
   ),
 );
 

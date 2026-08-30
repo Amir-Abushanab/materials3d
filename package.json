@@ -32,6 +32,7 @@
     "tsl:compare": "pnpm --filter @materials3d/core build && node scripts/tsl-compare.mjs",
     "tsl:parity": "pnpm --filter @materials3d/core build && node scripts/tsl-parity.mjs",
     "tsl:smoke": "pnpm --filter @materials3d/core build && node scripts/tsl-engine-smoke.mjs",
+    "tsl:chrome": "node scripts/real-chrome-smoke.mjs",
     "typecheck": "pnpm -r typecheck",
     "version": "changeset version"
   },

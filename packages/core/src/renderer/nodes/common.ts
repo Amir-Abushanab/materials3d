@@ -71,6 +71,26 @@ const sin = (v: Vec): Vec => TSL.sin(v);
  * different function — 500 comes back as 2.6 million — and anything that then blurs it spreads a
  * number that size across the frame. Above one the value is already radiance and passes through.
  */
+/**
+ * Square a value. `x.mul(x)`, never `x.pow(2)`.
+ *
+ * WGSL leaves `pow(e1, e2)` undefined for a negative `e1`, and Tint does not merely return NaN for
+ * it: when both operands fold to constants — which they do whenever the expression sits in an
+ * UNROLLED loop over literal indices — it rejects the whole shader module at parse time with
+ * "cannot be represented as 'abstract-float'". One such expression takes down every pipeline built
+ * from that material, so the scene renders as nothing at all.
+ *
+ * It is invisible in testing on a software adapter: SwiftShader's WGSL front end accepts the same
+ * expression that a Metal- or Vulkan-backed Chrome refuses, so this only ever fails on a real GPU.
+ * That is the whole reason it is a named helper rather than a note — grep for `.pow(2)` before
+ * believing a shader is fine.
+ *
+ * No `.toVar()`: this is called from inside `Fn` bodies AND from graph-building helpers that run
+ * without an assign stack, and a `.toVar()` in the latter warns and drops the assignment. Reusing
+ * the node reference is the same thing the surrounding code already does for `m.mul(m)`.
+ */
+export const sq = (x: Vec): Vec => x.mul(x);
+
 export const srgbToLinear = Fn(([c]: [Vec]) => {
   const v = c.max(vec3(0));
   const clamped = v.min(vec3(1));

@@ -16,7 +16,7 @@
  * error, both naming nothing. `() => { x.assign(y); }` returns undefined and none of it happens.
  */
 import { TSL } from "three/webgpu";
-import { srgbToLinear } from "./common";
+import { sq, srgbToLinear } from "./common";
 
 type Vec = any;
 
@@ -134,7 +134,9 @@ export const prismExitNormal = (planes: Vec, count: Vec) =>
  * so deriving it keeps the reflection and the refraction describing the same material.
  */
 export const dielectricFresnel = Fn(([ior, facing]: [Vec, Vec]) => {
-  const f0 = ior.sub(1).div(ior.add(1)).pow(2);
+  // `sq`, not `.pow(2)` — an ior below 1 makes the base negative, where WGSL's `pow` is
+  // undefined. See `sq` in ./common.
+  const f0 = sq(ior.sub(1).div(ior.add(1)));
   const m = float(1).sub(facing.clamp(0, 1));
   const m2 = m.mul(m);
   return f0.add(float(1).sub(f0).mul(m2).mul(m2).mul(m));

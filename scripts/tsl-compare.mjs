@@ -48,6 +48,14 @@ const at = flag("at", "");
 const fmt = (v) => `(${v.map((n) => (n / 255).toFixed(3)).join(", ")})`;
 /** How many frames to render before capturing. Two by default, so a first-frame bake settles. */
 const frames = Number(flag("frames", 2));
+/**
+ * Run the node engine's rAF loop before capturing, instead of only awaited draws.
+ *
+ * The two are not the same test. `captureImage` awaits each draw; the loop fires them without
+ * waiting, so anything `draw` mutates across an `await` can interleave between frames. That is a
+ * failure mode this harness could not see until it could start the loop.
+ */
+const loop = args.includes("--loop");
 
 /** A short filesystem-safe name for a preset name or an inline JSON scene. */
 const gl_label = (s) => (s.trim().startsWith("{") ? "scene" : s.replace(/[^a-z0-9_-]/gi, ""));
@@ -88,7 +96,7 @@ page.on("console", (m) => {
 await page.goto(url);
 
 const result = await page.evaluate(
-  async ([base, sceneArg, w, h, probeName, cropSpec, label, atSpec, frameCount]) => {
+  async ([base, sceneArg, w, h, probeName, cropSpec, label, atSpec, frameCount, runLoop]) => {
     const gl = await import(base + "bundle.js");
     const { NodeMaterialRenderer } = await import(base + "dist/renderer/NodeMaterialRenderer.js");
     const host = document.getElementById("host");
@@ -148,7 +156,12 @@ const result = await page.evaluate(
     // Two frames. The first may bake the room and rebuild the item materials; the second is drawn
     // through the finished state, which is what a consumer actually sees.
     for (let i = 1; i < frameCount; i++) await b.captureImage("image/png", 0.92, 0);
+    if (runLoop) {
+      b.start();
+      await new Promise((done) => setTimeout(done, 600));
+    }
     const tslCanvas = await grab(b);
+    if (runLoop) b.stop();
     globalThis["__tslDebug"] = undefined;
     b.dispose();
 
@@ -212,7 +225,7 @@ const result = await page.evaluate(
       samples,
     };
   },
-  [url, scene, width, height, probe, crop, gl_label(scene), at, frames],
+  [url, scene, width, height, probe, crop, gl_label(scene), at, frames, loop],
 );
 
 console.log(result.stats);

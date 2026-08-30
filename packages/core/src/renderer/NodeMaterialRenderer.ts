@@ -59,7 +59,7 @@ import {
 import type { ItemConfig } from "../config/model";
 import type { MaterialItem } from "./item";
 import { buildShape, defaultPath } from "./shapes";
-import { resolveItems, type AddOptions } from "./MaterialRenderer";
+import { frameFov, resolveItems, type AddOptions } from "./MaterialRenderer";
 import { InteractionController, interactionActive } from "./interaction";
 import { applyMotions } from "./motions";
 import {
@@ -190,6 +190,20 @@ export class NodeMaterialRenderer implements Engine {
   private config: SceneConfig;
   private frame = 0;
   private running = false;
+  /**
+   * The draw in flight, if any — this renderer's ONE piece of concurrency control.
+   *
+   * `draw()` is async and yields at every `renderAsync`, and it mutates shared state across those
+   * yields: `passIndex`, the plate binding, the clear colour, `scene.overrideMaterial` and the
+   * visibility of the backdrop and beam. Firing it from `requestAnimationFrame` without awaiting
+   * therefore lets two draws interleave, and the damage latches: the second draw reads the flags
+   * the first has already cleared, saves `false` as "was visible", and restores that — so the
+   * backdrop and beam stay hidden for every frame afterwards.
+   *
+   * It never reproduced under a software adapter, where those awaits resolve almost immediately.
+   * It shows up on a real GPU, where they do not.
+   */
+  private drawing: Promise<void> | null = null;
   private time = 0;
   private ready: Promise<void>;
   private targets?: PassTargets;
@@ -2185,8 +2199,12 @@ export class NodeMaterialRenderer implements Engine {
   }
 
   resize(): void {
-    const w = this.outputSize?.width ?? this.container.clientWidth ?? 1;
-    const h = this.outputSize?.height ?? this.container.clientHeight ?? 1;
+    // `||`, NOT `??`. `clientWidth` returns 0 for an element that is hidden or not yet laid out,
+    // and `0 ?? 1` is 0 — which makes `camera.aspect` 0/0, and a NaN projection matrix renders
+    // nothing at all. Nothing about the failure points back here: the canvas is present, the
+    // passes run, and every pixel comes out empty.
+    const w = this.outputSize?.width || this.container.clientWidth || 1;
+    const h = this.outputSize?.height || this.container.clientHeight || 1;
     // An explicit output size is a request for EXACTLY that many pixels — a headless render must
     // not be silently doubled by the display's ratio.
     const ratio = this.outputSize ? 1 : Math.min(globalThis.devicePixelRatio || 1, 2);
@@ -2194,6 +2212,11 @@ export class NodeMaterialRenderer implements Engine {
     this.renderer.setSize(w, h, this.ownsCanvas);
     this.camera.aspect = w / h;
     this.aspect.value = w / h;
+    // Re-derived here, not once in the constructor: `fit` and `minVisibleWidth` are answers to a
+    // question only the live aspect can ask, so a camera posed at construction ignores both and
+    // every preset authored for anything but 16:9 frames differently from the WebGL engine.
+    const cam = this.config.camera;
+    this.camera.fov = frameFov(cam.fov, this.camera.aspect, cam.fit, cam.minVisibleWidth);
     this.camera.updateProjectionMatrix();
 
     // Size the backdrop the way the WebGL engine does — an oversized plane, never below the
@@ -2275,8 +2298,15 @@ export class NodeMaterialRenderer implements Engine {
     this.depthClear.setRGB(focal - focalLow / 255, focalLow, 0);
     const previousClear0 = this.renderer.getClearColor(new THREE.Color());
     const previousClearAlpha0 = this.renderer.getClearAlpha();
-    const backdropWasVisible0 = this.backdrop?.visible ?? false;
-    const beamWasVisible0 = this.beamMesh?.visible ?? false;
+    // Derived from the CONFIG, not read back off the meshes. Reading the live flag makes each
+    // frame's restore depend on the previous frame's, so a single interleaved draw hides the
+    // backdrop and the beam permanently — there is nothing that ever puts them back. It is also
+    // the only place `transparentBackground` was being honoured on this engine, which is to say
+    // it was not: the WebGL engine hides the backdrop for it and this one never did.
+    const showBackdrop = !this.config.transparentBackground;
+    const showBeam = true;
+    const backdropWasVisible0 = showBackdrop;
+    const beamWasVisible0 = showBeam;
     if (this.backdrop) this.backdrop.visible = false;
     if (this.beamMesh) this.beamMesh.visible = false;
     if (this.causticMesh) this.causticMesh.visible = false;
@@ -2297,8 +2327,8 @@ export class NodeMaterialRenderer implements Engine {
     // backdrop's would blanket the frame in false thickness; the beam is a sheet of quads lying
     // across the scene, so it would hand every pixel it covers a near exit surface and make the
     // glass behind it read as paper-thin.
-    const backdropWasVisible = this.backdrop?.visible ?? false;
-    const beamWasVisible = this.beamMesh?.visible ?? false;
+    const backdropWasVisible = showBackdrop;
+    const beamWasVisible = showBeam;
     if (this.backdrop) this.backdrop.visible = false;
     if (this.beamMesh) this.beamMesh.visible = false;
     if (this.causticMesh) this.causticMesh.visible = false;
@@ -2406,8 +2436,39 @@ export class NodeMaterialRenderer implements Engine {
     this.renderPending();
   }
 
+  /**
+   * Draw, unless one is already in flight.
+   *
+   * A request arriving mid-draw is DROPPED rather than queued. This is a render loop: a backlog of
+   * frames computed against state that has since moved on is worse than a skipped frame, and
+   * queueing them would let the backlog grow without bound whenever a frame costs more than 16ms.
+   */
+  private drawGuarded(): Promise<void> {
+    if (this.drawing) return this.drawing;
+    const run = this.draw().finally(() => {
+      if (this.drawing === run) this.drawing = null;
+    });
+    this.drawing = run;
+    return run;
+  }
+
+  /**
+   * Wait for any in-flight draw, then run `work` before another can start.
+   *
+   * Anything that REPLACES scene objects has to go through here. A rebuild landing between two of
+   * `draw`'s awaits swaps the meshes out from under a pass that has already hidden them and is
+   * about to restore them, which leaves the new objects in whatever state the old ones were in.
+   *
+   * `work` is synchronous on purpose: `requestAnimationFrame` fires as a task, so nothing can start
+   * a draw between this resuming and `work` returning — but only for as long as `work` never yields.
+   */
+  private async exclusive<T>(work: () => T): Promise<T> {
+    while (this.drawing) await this.drawing.catch(() => undefined);
+    return work();
+  }
+
   renderOnce(): void {
-    void this.draw();
+    void this.drawGuarded();
   }
 
   start(): this {
@@ -2417,7 +2478,7 @@ export class NodeMaterialRenderer implements Engine {
       if (!this.running) return;
       this.frame = requestAnimationFrame(loop);
       if (!this.config.paused) this.time += 1 / 60;
-      void this.draw();
+      void this.drawGuarded();
     };
     this.frame = requestAnimationFrame(loop);
     return this;
@@ -2443,10 +2504,58 @@ export class NodeMaterialRenderer implements Engine {
     return this.config;
   }
 
+  /**
+   * Adopt a new scene.
+   *
+   * `applyConfig` alone is not enough, and that gap is the whole reason this is not a one-liner: it
+   * pushes uniform VALUES, while the item list, the beam and the render targets are OBJECTS built
+   * once from the config. Changing preset without rebuilding them left the previous scene's meshes
+   * on screen wearing the new scene's uniforms — every studio preset drew as one leftover shape,
+   * which reads as "WebGPU is broken" rather than as a stale mesh list.
+   *
+   * The structural test mirrors `MaterialRenderer.setConfig` deliberately: the two engines have to
+   * agree on when a change is structural, or a scene rebuilds under one and not the other.
+   *
+   * The rebuild is chained onto `ready` because this renderer negotiates a device asynchronously —
+   * a `setConfig` arriving before that resolves would otherwise build items against a renderer
+   * that cannot yet allocate anything.
+   */
   setConfig(config: Partial<SceneConfig>): void {
-    this.config = ensureSceneConfig({ ...this.config, ...config });
-    this.applyConfig();
-    this.renderOnce();
+    const previous = this.config;
+    // A REPLACE, not a merge — matching the WebGL engine. Spreading the old config underneath
+    // would let a key the new scene deliberately omits survive from the old one.
+    const next = ensureSceneConfig(config);
+    const structural =
+      next.quality !== previous.quality ||
+      next.post.toneMap !== previous.post.toneMap ||
+      JSON.stringify(next.scatter) !== JSON.stringify(previous.scatter) ||
+      JSON.stringify(next.items) !== JSON.stringify(previous.items) ||
+      // The beam is geometry built from these, not a uniform read per frame.
+      JSON.stringify(next.beam) !== JSON.stringify(previous.beam);
+
+    this.config = next;
+    // Only when the SCENE asks for a different distance: this field also holds however far the
+    // viewer has orbited out to, and overwriting it on every edit would snap their view back.
+    if (next.camera.distance !== previous.camera.distance) this.distance = next.camera.distance;
+
+    if (!structural) {
+      this.refresh();
+      this.resize();
+      this.refreshPlayback();
+      return;
+    }
+    void this.ready.then(() =>
+      // EXCLUSIVE: this replaces the item meshes, the beam and the render targets, and a draw
+      // holding references to the old ones is almost certainly in flight.
+      this.exclusive(() => {
+        this.rebuild();
+        // AFTER `rebuild`: `resize` inside it re-derives the fov from the new camera config, and
+        // `updateCamera` has to run against that rather than the previous scene's framing.
+        this.updateCamera();
+        this.refreshPlayback();
+        this.renderOnce();
+      }),
+    );
   }
 
   setLamps(lamps: LampConfig[]): this {
@@ -2463,7 +2572,10 @@ export class NodeMaterialRenderer implements Engine {
 
   async captureImage(mime = "image/webp", quality?: number, time?: number): Promise<Blob> {
     if (time !== undefined) this.time = time;
-    await this.draw();
+    // Waits rather than skipping: a capture has to reflect the time it was asked for, so returning
+    // whatever frame happened to be in flight would hand back the previous one.
+    await this.exclusive(() => undefined);
+    await this.drawGuarded();
     return new Promise<Blob>((resolve, reject) => {
       this.canvas.toBlob(
         (blob) => (blob ? resolve(blob) : reject(new Error("captureImage produced no blob"))),

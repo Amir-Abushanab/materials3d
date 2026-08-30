@@ -45,7 +45,15 @@ import {
   resizeTargets,
   type PassTargets,
 } from "./nodes/pipeline";
-import { FAR, MATERIAL_KINDS, MAX_LAMPS, resolveMaterial } from "../config/model";
+import {
+  BACKGROUND_MODES,
+  FAR,
+  MATERIAL_KINDS,
+  MAX_LAMPS,
+  MAX_MESH_POINTS,
+  MAX_STOPS,
+  resolveMaterial,
+} from "../config/model";
 import type { ItemConfig } from "../config/model";
 import { buildShape, defaultPath } from "./shapes";
 import { resolveItems } from "./MaterialRenderer";
@@ -58,6 +66,7 @@ import {
   crossSectionFor,
   prismCrossSection,
 } from "./lightSheet";
+import { backdropPass, GROUND_SLOTS } from "./nodes/backdrop";
 import { beamPass, dustPass, dustVertex, outsideSection } from "./nodes/beam";
 import {
   backGlassPass,
@@ -92,7 +101,7 @@ export interface NodeMaterialRendererOptions {
   preserveDrawingBuffer?: boolean;
 }
 
-const { Fn, vec3, vec4, uniform, uv, mix } = TSL;
+const { Fn, vec3, vec4, uniform, uv } = TSL;
 
 /**
  * Which intermediate a dev harness has asked to see instead of the composed frame.
@@ -254,6 +263,54 @@ export class NodeMaterialRenderer implements Engine {
   private debugEnv?: THREE.NodeMaterial;
   private debugAlpha?: THREE.NodeMaterial;
   private backdrop?: THREE.Mesh;
+  /** Backdrop uniforms beyond the derived ramp — the palette, the image and the wall. */
+  private readonly bgMode = uniform(0, "int");
+  private readonly bgGradType = uniform(0, "int");
+  private readonly bgAngle = uniform(0);
+  private readonly bgShow = uniform(0);
+  private readonly bgSize = uniform(TSL.vec2(160, 110));
+  private readonly bgFrame = uniform(TSL.vec2(1, 1));
+  private readonly bgStopData = Array.from({ length: MAX_STOPS }, () => new THREE.Vector4());
+  private readonly bgStops = TSL.uniformArray(this.bgStopData);
+  private readonly bgStopCount = uniform(0, "int");
+  private readonly bgMeshData = Array.from({ length: MAX_MESH_POINTS }, () => new THREE.Vector4());
+  private readonly bgMeshColorData = Array.from(
+    { length: MAX_MESH_POINTS },
+    () => new THREE.Vector3(),
+  );
+  private readonly bgMesh = TSL.uniformArray(this.bgMeshData);
+  private readonly bgMeshColors = TSL.uniformArray(this.bgMeshColorData);
+  private readonly bgMeshCount = uniform(0, "int");
+  private readonly bgMeshSoft = uniform(0.55);
+  private readonly bgHasImage = uniform(0, "int");
+  private readonly bgImageFit = uniform(0, "int");
+  private readonly bgImageZoom = uniform(1);
+  private readonly bgImageAspect = uniform(1);
+  private readonly bgImageOffset = uniform(TSL.vec2(0.5, 0.5));
+  private bgImageTexture?: THREE.Texture;
+  private bgImageNode?: Vec;
+  // The wall. Every one of these is authored, and the defaults are the reference's.
+  private readonly wallExtent = uniform(TSL.vec2(1, 1));
+  private readonly wallLightUv = uniform(TSL.vec2(0.62, 0.34));
+  private readonly wallLightDir = uniform(vec3(-0.45, 0.5, 0.74));
+  private readonly wallScale = uniform(1 / 2.4);
+  private readonly wallNormal = uniform(0.22);
+  private readonly wallMicroFreq = uniform(7);
+  private readonly wallMicroNormal = uniform(1.05);
+  private readonly wallGamma = uniform(0.65);
+  private readonly wallContrast = uniform(6.85);
+  private readonly wallPivot = uniform(0.9);
+  private readonly wallFloor = uniform(0.87);
+  private readonly wallHighlight = uniform(3.31);
+  private readonly wallAmbient = uniform(0.42);
+  private readonly wallAmbientLight = uniform(0.1);
+  private readonly wallShadow = uniform(0.55);
+  private readonly wallGrounding = uniform(0.85);
+  private readonly groundData = Array.from({ length: GROUND_SLOTS }, () => new THREE.Vector4());
+  private readonly groundPhaseData = Array.from({ length: GROUND_SLOTS }, () => 0);
+  private readonly ground = TSL.uniformArray(this.groundData);
+  private readonly groundPhase = TSL.uniformArray(this.groundPhaseData, "float");
+  private readonly groundCount = uniform(0, "int");
   /**
    * The dust field, drawn additively over the FINISHED frame.
    *
@@ -686,24 +743,66 @@ export class NodeMaterialRenderer implements Engine {
   }
 
   private buildBackdrop(): THREE.Mesh {
-    const shade = Fn(() => {
-      // LINEAR, where BACKDROP_FRAG applies `smoothstep(0, 1, vUv.y)` — and that is deliberate.
-      // Its backdrop is a world-space plane sized well beyond the frame (see `uFrame`), so the
-      // visible screen covers only a middle slice of that smoothstep, which is close to linear.
-      // This quad is exactly the frame, so a full-range smoothstep here shapes the ramp far more
-      // than the reference does: measured, it costs about 0.2 of a level on every scene.
-      const base = mix(this.bottom, this.top, uv().y);
-      // NO TONE MAP HERE. The post pass maps the whole frame, and BACKDROP_FRAG writes its colour
-      // straight — mapping it twice compresses the background against a curve it has already been
-      // through, which on an ACES scene visibly lifts and flattens it.
-      return vec4(base, 1);
-    });
     const material = new THREE.NodeMaterial();
-    material.fragmentNode = shade();
-    // CLIP SPACE directly, bypassing the model-view-projection. Without this the quad is a two-unit
-    // plane sitting at the world origin, which a perspective camera renders as a small square in
-    // the middle of the scene rather than as a backdrop — and the "background" you then see is the
-    // renderer's clear colour, not the gradient at all.
+    material.fragmentNode = backdropPass({
+      mode: this.bgMode,
+      gradType: this.bgGradType,
+      top: this.top,
+      bottom: this.bottom,
+      stops: this.bgStops,
+      stopCount: this.bgStopCount,
+      maxStops: MAX_STOPS,
+      angle: this.bgAngle,
+      mesh: this.bgMesh,
+      meshColors: this.bgMeshColors,
+      meshCount: this.bgMeshCount,
+      meshSoft: this.bgMeshSoft,
+      maxMeshPoints: MAX_MESH_POINTS,
+      frame: this.bgFrame,
+      size: this.bgSize,
+      hasImage: this.bgHasImage,
+      image: (node: Vec) => this.backgroundImage().sample(node),
+      imageFit: this.bgImageFit,
+      imageZoom: this.bgImageZoom,
+      imageAspect: this.bgImageAspect,
+      imageOffset: this.bgImageOffset,
+      wall: {
+        extent: this.wallExtent,
+        lightUv: this.wallLightUv,
+        lightDir: this.wallLightDir,
+        scale: this.wallScale,
+        normal: this.wallNormal,
+        microFreq: this.wallMicroFreq,
+        microNormal: this.wallMicroNormal,
+        gamma: this.wallGamma,
+        contrast: this.wallContrast,
+        pivot: this.wallPivot,
+        floorLevel: this.wallFloor,
+        highlight: this.wallHighlight,
+        ambient: this.wallAmbient,
+        ambientLight: this.wallAmbientLight,
+        shadow: this.wallShadow,
+        grounding: this.wallGrounding,
+        ground: this.ground,
+        groundPhase: this.groundPhase,
+        groundCount: this.groundCount,
+      },
+      lamps: platePass({
+        lamps: this.lampArray,
+        colors: this.lampColorArray,
+        count: this.lampCount,
+        gain: this.lampGain,
+        lo: this.lampLo,
+        hi: this.lampHi,
+        maxLamps: MAX_LAMPS,
+      }),
+      plateScale: this.plateScale,
+      plateOffset: this.plateOffset,
+      show: this.bgShow,
+    })(uv()) as never;
+    // CLIP SPACE directly, bypassing the model-view-projection. Without this the quad is a
+    // two-unit plane at the world origin, which a perspective camera draws as a small square in
+    // the middle of the scene — and the "background" you then see is the renderer's clear colour.
     material.vertexNode = vec4(TSL.positionGeometry.xy, 0, 1) as never;
     material.depthWrite = false;
     material.depthTest = false;
@@ -711,6 +810,19 @@ export class NodeMaterialRenderer implements Engine {
     mesh.frustumCulled = false;
     mesh.renderOrder = -1000;
     return mesh;
+  }
+
+  /**
+   * The background image, as a swappable texture node.
+   *
+   * A node so the picture can change without recompiling the backdrop, and a 1x1 stand-in until
+   * one is loaded — a null sampler is a validation error rather than a blank.
+   */
+  private backgroundImage(): Vec {
+    this.placeholder ??= new THREE.DataTexture(new Uint8Array([0, 0, 0, 255]), 1, 1);
+    this.placeholder.needsUpdate = true;
+    this.bgImageNode ??= TSL.texture(this.bgImageTexture ?? this.placeholder);
+    return this.bgImageNode;
   }
 
   /**
@@ -1341,6 +1453,76 @@ export class NodeMaterialRenderer implements Engine {
     this.plateSource.value = live && this.targets ? this.targets.plate.texture : this.placeholder;
   }
 
+  /**
+   * Feed the backdrop's uniforms — everything beyond the derived ramp.
+   *
+   * All of it every frame rather than only the active branch: the mode is a uniform, so a scene
+   * that switches from a gradient to a wall has to find the wall's numbers already there.
+   */
+  private applyBackground(): void {
+    const c = this.config;
+    this.bgMode.value = Math.max(0, BACKGROUND_MODES.indexOf(c.backgroundMode));
+    this.bgShow.value = c.backdropLamps;
+    if (c.backgroundMode === "wall") {
+      const extent = this.beamWallExtent(c.beam?.z ?? 0);
+      (this.wallExtent.value as THREE.Vector2).copy(extent);
+    }
+
+    const stopCount = Math.min(c.backgroundPalette.length, MAX_STOPS);
+    for (let i = 0; i < stopCount; i++) {
+      const stop = c.backgroundPalette[i];
+      const [sr, sg, sb] = parseHex(stop.color);
+      this.bgStopData[i].set(sr, sg, sb, stop.position);
+    }
+    this.bgStopCount.value = stopCount;
+
+    const types = ["linear", "radial", "conic", "mesh"];
+    this.bgGradType.value = Math.max(0, types.indexOf(c.backgroundGradientType));
+    this.bgAngle.value = c.backgroundGradientAngle;
+
+    const meshCount = Math.min(c.backgroundMeshPoints.length, MAX_MESH_POINTS);
+    for (let i = 0; i < meshCount; i++) {
+      const point = c.backgroundMeshPoints[i];
+      this.bgMeshData[i].set(point.x, point.y, 0, 0);
+      const [mr, mg, mb] = parseHex(point.color);
+      this.bgMeshColorData[i].set(mr, mg, mb);
+    }
+    this.bgMeshCount.value = meshCount;
+    this.bgMeshSoft.value = c.backgroundMeshSoftness;
+
+    this.bgImageFit.value =
+      c.backgroundImageFit === "contain" ? 1 : c.backgroundImageFit === "stretch" ? 2 : 0;
+    this.bgImageZoom.value = c.backgroundImageZoom;
+    (this.bgImageOffset.value as THREE.Vector2).set(
+      c.backgroundImagePosition.x,
+      c.backgroundImagePosition.y,
+    );
+
+    this.applyGrounding();
+  }
+
+  /**
+   * Hand the wall the footprint of every shape standing on it.
+   *
+   * Position and apothem, not the circumradius: the shadow's edge follows the FACES, and using the
+   * corner distance inflates a triangle's footprint by a factor of two.
+   */
+  private applyGrounding(): void {
+    let count = 0;
+    for (const item of this.items) {
+      if (count >= GROUND_SLOTS) break;
+      const shape = item.config?.shape;
+      if (!shape) continue;
+      const faceted = shape.kind === "prism" || shape.kind === "hex";
+      const sides = shape.kind === "hex" ? 6 : faceted ? Math.max(3, shape.sides) : 0;
+      const apothem = faceted ? shape.r * Math.cos(Math.PI / sides) : shape.r;
+      this.groundData[count].set(item.mesh.position.x, item.mesh.position.y, apothem, sides);
+      this.groundPhaseData[count] = Math.PI / 2 + item.mesh.rotation.z;
+      count++;
+    }
+    this.groundCount.value = count;
+  }
+
   private applyConfig(): void {
     const c = this.config;
     const [r, g, b] = parseHex(c.background);
@@ -1390,6 +1572,7 @@ export class NodeMaterialRenderer implements Engine {
     // The room's own uniforms, read by BOTH the analytic fallback and the bake — the two have to
     // describe the same room, or a scene shading one material through each disagrees about what is
     // reflected in it.
+    this.applyBackground();
     this.coneMode.value = c.transmission === "cone" ? 1 : 0;
     this.studioMode.value = c.studio === "softbox" ? 1 : 0;
     this.studioGain.value = c.studioGain;
@@ -1621,6 +1804,23 @@ export class NodeMaterialRenderer implements Engine {
     this.aspect.value = w / h;
     this.camera.updateProjectionMatrix();
 
+    // Size the backdrop the way the WebGL engine does — an oversized plane, never below the
+    // authored 160x110, with the visible fraction recorded. The vertical ramp is calibrated
+    // against that span, so a plane sized to the frame pulls the whole ramp into view and reads as
+    // a far stronger gradient than the scene asked for.
+    const backdropZ = this.config.plate.z - 14;
+    const dist =
+      Math.abs(this.camera.position.z) + Math.abs(this.config.camera.lookAt.z - backdropZ);
+    const need = 2 * dist * Math.tan((this.camera.fov * Math.PI) / 360) * 1.35;
+    const bh = Math.max(110, need);
+    const bw = Math.max(160, need * this.camera.aspect);
+    (this.bgSize.value as THREE.Vector2).set(bw, bh);
+    const visibleH = need / 1.35;
+    (this.bgFrame.value as THREE.Vector2).set(
+      Math.min(1, (visibleH * this.camera.aspect) / bw),
+      Math.min(1, visibleH / bh),
+    );
+
     const pw = Math.max(1, Math.floor(w * ratio));
     const ph = Math.max(1, Math.floor(h * ratio));
     (this.resolution.value as THREE.Vector2).set(pw, ph);
@@ -1656,6 +1856,8 @@ export class NodeMaterialRenderer implements Engine {
     applyMotions(this.items as unknown as MaterialItem[], this.time, this.config.loopSeconds);
     // The traced planes are world-space, so they follow the pose and have to be recomputed after it.
     for (const entry of this.items) this.applyPrismPlanes(entry);
+    // The wall's contact shadows follow the poses too.
+    if (this.config.backgroundMode === "wall") this.applyGrounding();
     // The room, baked before anything samples it. Cheap after the first call — it returns on an
     // unchanged key — but a fresh target invalidates every graph that captured the texture, which
     // is why the rebuild is driven from its return rather than from the config change.

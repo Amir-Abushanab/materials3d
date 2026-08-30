@@ -24,7 +24,6 @@ import {
 } from "../config/model";
 import { parseHex } from "../util/color";
 import type { Engine } from "../engine";
-import { tonemapAces, tonemapNeutral } from "./nodes/common";
 import {
   blitPass,
   particleDownPass,
@@ -688,17 +687,16 @@ export class NodeMaterialRenderer implements Engine {
 
   private buildBackdrop(): THREE.Mesh {
     const shade = Fn(() => {
+      // LINEAR, where BACKDROP_FRAG applies `smoothstep(0, 1, vUv.y)` — and that is deliberate.
+      // Its backdrop is a world-space plane sized well beyond the frame (see `uFrame`), so the
+      // visible screen covers only a middle slice of that smoothstep, which is close to linear.
+      // This quad is exactly the frame, so a full-range smoothstep here shapes the ramp far more
+      // than the reference does: measured, it costs about 0.2 of a level on every scene.
       const base = mix(this.bottom, this.top, uv().y);
-      // The same three-way tone map the post pass applies, so the backdrop matches its twin
-      // rather than being the one surface that ignores the scene's curve.
-      const neutral = tonemapNeutral(base);
-      const aces = tonemapAces(base);
-      const mapped = select(
-        this.toneMode.equal(2),
-        aces,
-        select(this.toneMode.equal(1), neutral, base),
-      );
-      return vec4(mapped, 1);
+      // NO TONE MAP HERE. The post pass maps the whole frame, and BACKDROP_FRAG writes its colour
+      // straight — mapping it twice compresses the background against a curve it has already been
+      // through, which on an ACES scene visibly lifts and flattens it.
+      return vec4(base, 1);
     });
     const material = new THREE.NodeMaterial();
     material.fragmentNode = shade();

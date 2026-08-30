@@ -274,6 +274,39 @@ button:hover {
   border-color: rgb(27 26 31 / 28%);
 }
 
+#control-search {
+  flex: none;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--hair);
+}
+
+#control-search-input {
+  width: 100%;
+  padding: 6px 9px;
+  border: 1px solid var(--hair);
+  border-radius: 6px;
+  background: var(--tp-button-background-color, #fff);
+  color: inherit;
+  font: inherit;
+  font-size: 11px;
+}
+
+#control-search-input::placeholder {
+  color: var(--tp-container-foreground-color, #46434d);
+  opacity: 0.6;
+}
+
+#control-search-input:focus-visible {
+  border-color: var(--tp-container-foreground-color, #46434d);
+  outline: none;
+}
+
+/* Hidden by the filter rather than removed: Tweakpane owns this DOM and rebuilds it, so the
+   panel must not restructure it — it may only decide what shows. */
+#pane .tp-search-hidden {
+  display: none !important;
+}
+
 #pane {
   flex: 1;
   min-height: 0;

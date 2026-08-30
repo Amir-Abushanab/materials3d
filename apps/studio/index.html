@@ -179,6 +179,18 @@
         </div>
         <div id="history-slot"></div>
       </div>
+      <!-- Sits OUTSIDE #pane: the panel disposes and rebuilds its Tweakpane wholesale when the
+           shape list changes, and anything inside that container goes with it. -->
+      <div id="control-search">
+        <input
+          id="control-search-input"
+          type="search"
+          placeholder="Search controls"
+          aria-label="Search controls"
+          autocomplete="off"
+          spellcheck="false"
+        />
+      </div>
       <div id="pane"></div>
     </aside>
 

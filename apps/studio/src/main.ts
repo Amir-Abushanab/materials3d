@@ -668,6 +668,7 @@ function boot(): void {
       history.commit(config(), presetName, label);
     },
   });
+  panel.bindSearch(byId<HTMLInputElement>("control-search-input"));
 
   syncTransparency(config().transparentBackground);
 

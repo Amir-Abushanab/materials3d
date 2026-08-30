@@ -11,6 +11,7 @@
  */
 
 import { Pane } from "tweakpane";
+import { applySearch, clearSearch } from "./controlSearch";
 import type { FolderApi } from "@tweakpane/core";
 import { flashButtonError, flashButtonSuccess } from "./buttonFeedback";
 import { GradientEditor } from "./GradientEditor";
@@ -575,6 +576,47 @@ export class ControlPanel {
     }
   }
 
+  /**
+   * Filter the panel to what `query` matches. The matching itself lives in `controlSearch`, which
+   * is testable on its own; what stays here is the Tweakpane part — opening the folders a match
+   * was found in, and putting the panel back the way it was when the search is cleared.
+   */
+  private applySearch(query: string): void {
+    if (!query.trim()) {
+      clearSearch(this.host);
+      // Restore what was open BEFORE the search, so searching is something you can back out of
+      // rather than something that quietly rearranges the panel.
+      if (this.viewBeforeSearch) {
+        this.restoreView(this.viewBeforeSearch);
+        this.viewBeforeSearch = undefined;
+      }
+      return;
+    }
+    this.viewBeforeSearch ??= this.captureView();
+    // Outside in: a member's own toggle does nothing while its group is collapsed.
+    for (const folder of applySearch(this.host, query)) this.revealFolder(folder);
+  }
+
+  /** Re-apply the active filter — the panel's DOM is replaced wholesale on a rebuild. */
+  private reapplySearch(): void {
+    if (this.searchQuery) this.applySearch(this.searchQuery);
+  }
+
+  /** Wire an external search input to this panel. */
+  bindSearch(input: HTMLInputElement): void {
+    input.addEventListener("input", () => {
+      this.searchQuery = input.value;
+      this.applySearch(this.searchQuery);
+    });
+    // Escape clears, as it does in every other search field on the platform.
+    input.addEventListener("keydown", (event) => {
+      if (event.key !== "Escape" || !input.value) return;
+      input.value = "";
+      this.searchQuery = "";
+      this.applySearch("");
+    });
+  }
+
   /** Re-read the preset thumbnail cache once background generation has filled it. */
   refreshPresetThumbs(): void {
     this.presets?.refreshThumbs();
@@ -590,6 +632,10 @@ export class ControlPanel {
     this.pane.dispose();
   }
 
+  private searchQuery = "";
+  /** What was open before a search started, so clearing it puts the panel back. */
+  private viewBeforeSearch?: ReturnType<ControlPanel["captureView"]>;
+
   private rebuild(): void {
     hideControlHint();
     const view = this.captureView();
@@ -597,6 +643,7 @@ export class ControlPanel {
     this.pane.dispose();
     this.pane = this.build();
     this.restoreView(view);
+    this.reapplySearch();
   }
 
   /**

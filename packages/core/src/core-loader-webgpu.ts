@@ -16,12 +16,13 @@ import type { MaterialRenderer as WebGLRenderer } from "./renderer/MaterialRende
  * consumers, and narrowing it to the surface both engines share would break every caller in order
  * to describe an engine that is not finished. So this asserts the node renderer into that shape.
  *
- * What the assertion is hiding, concretely: `NodeMaterialRenderer` implements the surface the
- * shell itself uses — construction, `canvas`, `start`/`stop`, `dispose`, `refreshPlayback`,
- * `getConfig`/`setConfig`, `captureImage` — and not yet the rest of the imperative API (`add`,
- * `pick`, `projectBounds`, the interaction inputs). Reaching for one of those through `onReady` on
- * this engine is a runtime error, not a type error, until the port lands. The assertion goes away
- * by making the class complete, never by widening the shell.
+ * The assertion no longer hides a missing API: `NodeMaterialRenderer` now implements the whole
+ * imperative surface — `add`/`remove`/`clear`, `pick`, `projectBounds`, `pointOnDragPlane`,
+ * `viewDirection`, `getItems`, `setOutputSize`, `refresh`, `rebuild`, `resetCamera`, `onFrame`,
+ * `captureStream` and the interaction inputs — against the same renderer-agnostic helpers the
+ * WebGL engine uses. What remains is only that the two classes are nominally unrelated: they share
+ * no base type, so TypeScript cannot see the match. Naming that shared type is what removes this
+ * line; widening the shell is not.
  */
 export const MaterialRenderer = NodeMaterialRenderer as unknown as typeof WebGLRenderer;
 export { createDefaultConfig } from "./config/model";

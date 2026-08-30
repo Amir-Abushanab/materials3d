@@ -144,6 +144,7 @@ const result = await page.evaluate(
     // Set BEFORE construction: the probe is read when the material graph is built.
     globalThis["__tslDebug"] = probeName || undefined;
     const b = new NodeMaterialRenderer(host, cfg, { respectReducedMotion: false });
+    b.setOutputSize({ width: w, height: h });
     // Two frames. The first may bake the room and rebuild the item materials; the second is drawn
     // through the finished state, which is what a consumer actually sees.
     for (let i = 1; i < frameCount; i++) await b.captureImage("image/png", 0.92, 0);

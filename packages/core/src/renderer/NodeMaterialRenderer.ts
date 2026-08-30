@@ -52,13 +52,16 @@ import {
   MAX_LAMPS,
   MAX_MESH_POINTS,
   MAX_STOPS,
+  normalizeMotion,
+  normalizeShape,
   resolveMaterial,
 } from "../config/model";
 import type { ItemConfig } from "../config/model";
-import { buildShape, defaultPath } from "./shapes";
-import { resolveItems } from "./MaterialRenderer";
-import { applyMotions } from "./motions";
 import type { MaterialItem } from "./item";
+import { buildShape, defaultPath } from "./shapes";
+import { resolveItems, type AddOptions } from "./MaterialRenderer";
+import { InteractionController, interactionActive } from "./interaction";
+import { applyMotions } from "./motions";
 import {
   aimBeam,
   aimBeamAtAngle,
@@ -264,6 +267,19 @@ export class NodeMaterialRenderer implements Engine {
   private debugEnv?: THREE.NodeMaterial;
   private debugAlpha?: THREE.NodeMaterial;
   private backdrop?: THREE.Mesh;
+  /** Camera orbit, and the scratch the picking and projection helpers reuse. */
+  private yaw = 0;
+  private pitch = 0;
+  private distance = 0;
+  private outputSize?: { width: number; height: number };
+  private frameCallback: ((time: number) => void) | null = null;
+  private readonly raycaster = new THREE.Raycaster();
+  private readonly pointerNdc = new THREE.Vector2();
+  private readonly dragPlane = new THREE.Plane();
+  private readonly planeNormal = new THREE.Vector3();
+  private readonly projectScratch = new THREE.Vector3();
+  private interaction?: InteractionController;
+  private scrollPreview: number | null = null;
   /** Backdrop uniforms beyond the derived ramp — the palette, the image and the wall. */
   private readonly bgMode = uniform(0, "int");
   private readonly bgGradType = uniform(0, "int");
@@ -1706,6 +1722,20 @@ export class NodeMaterialRenderer implements Engine {
     this.fnCmykCell.value = fp.halftoneCmykCell;
     this.fnPaper.value = fp.paperTexture;
     this.fnPaperScale.value = fp.paperTextureScale;
+    // The interaction controller, when the scene has bindings for it. Renderer-agnostic — it reads
+    // the container and the config — so both engines drive the same one rather than two that agree
+    // until they do not.
+    if (interactionActive(c) && !this.interaction) {
+      this.interaction = new InteractionController(
+        this.container,
+        () => this.config,
+        () => resolveItems(this.config),
+      );
+      this.interaction.scrollOverride = this.scrollPreview;
+    } else if (!interactionActive(c) && this.interaction) {
+      this.interaction.dispose();
+      this.interaction = undefined;
+    }
     this.applyBackground();
     this.coneMode.value = c.transmission === "cone" ? 1 : 0;
     this.studioMode.value = c.studio === "softbox" ? 1 : 0;
@@ -1928,10 +1958,238 @@ export class NodeMaterialRenderer implements Engine {
     // Items, the plate and depth passes, the beam, dust and the post chain are still to port.
   }
 
+  // ------------------------------------------------------------- imperative API ---
+  //
+  // Everything below is renderer-agnostic — raycasting, projection, mesh bookkeeping — which is
+  // why it can be a faithful twin of the WebGL engine's rather than a reinterpretation. It exists
+  // so `core-loader-webgpu`'s type assertion stops hiding anything: a consumer reaching for `pick`
+  // through `onReady` used to get a runtime error on this engine.
+
+  /** Pixel size to render at, overriding the container. Used by the headless renderer. */
+  setOutputSize(size?: { width: number; height: number }): void {
+    this.outputSize = size;
+    this.resize();
+  }
+
+  getItems(): readonly MaterialItem[] {
+    return this.items as unknown as readonly MaterialItem[];
+  }
+
+  viewDirection(out = new THREE.Vector3()): THREE.Vector3 {
+    return this.camera.getWorldDirection(out);
+  }
+
+  /** Pointer position in normalized device coordinates, or null if the canvas has no area yet. */
+  private toNdc(clientX: number, clientY: number): THREE.Vector2 | null {
+    const rect = this.canvas.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) return null;
+    return this.pointerNdc.set(
+      ((clientX - rect.left) / rect.width) * 2 - 1,
+      -((clientY - rect.top) / rect.height) * 2 + 1,
+    );
+  }
+
+  pick(clientX: number, clientY: number): MaterialItem | null {
+    const ndc = this.toNdc(clientX, clientY);
+    if (!ndc) return null;
+    this.scene.updateMatrixWorld(true);
+    this.raycaster.setFromCamera(ndc, this.camera);
+    const meshes = this.items.map((item) => item.mesh);
+    const hit = this.raycaster.intersectObjects(meshes, false)[0];
+    if (!hit) return null;
+    const found = this.items.find((item) => item.mesh === hit.object);
+    return (found as unknown as MaterialItem) ?? null;
+  }
+
+  /**
+   * Where a pointer ray meets the plane through `through` that faces the camera.
+   *
+   * The plane FACES THE CAMERA rather than being axis-aligned, so a drag tracks the pointer at
+   * whatever angle the scene is being viewed from instead of sliding away as the orbit turns.
+   */
+  pointOnDragPlane(
+    clientX: number,
+    clientY: number,
+    through: THREE.Vector3,
+    out = new THREE.Vector3(),
+  ): THREE.Vector3 | null {
+    const ndc = this.toNdc(clientX, clientY);
+    if (!ndc) return null;
+    this.camera.getWorldDirection(this.planeNormal);
+    this.dragPlane.setFromNormalAndCoplanarPoint(this.planeNormal, through);
+    this.raycaster.setFromCamera(ndc, this.camera);
+    return this.raycaster.ray.intersectPlane(this.dragPlane, out);
+  }
+
+  /**
+   * The item's screen rectangle, from all EIGHT corners of its bounding box.
+   *
+   * Projecting the box's own min and max would be wrong under rotation: the extremes of the
+   * projected shape are not the projections of the extremes.
+   */
+  projectBounds(
+    item: MaterialItem,
+  ): { x: number; y: number; width: number; height: number } | null {
+    const geometry = item.mesh.geometry;
+    if (!geometry.boundingBox) geometry.computeBoundingBox();
+    const local = geometry.boundingBox;
+    if (!local) return null;
+    this.scene.updateMatrixWorld(true);
+
+    const rect = this.canvas.getBoundingClientRect();
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (let corner = 0; corner < 8; corner++) {
+      this.projectScratch
+        .set(
+          corner & 1 ? local.max.x : local.min.x,
+          corner & 2 ? local.max.y : local.min.y,
+          corner & 4 ? local.max.z : local.min.z,
+        )
+        .applyMatrix4(item.mesh.matrixWorld)
+        .project(this.camera);
+      const x = rect.left + ((this.projectScratch.x + 1) / 2) * rect.width;
+      const y = rect.top + ((1 - this.projectScratch.y) / 2) * rect.height;
+      minX = Math.min(minX, x);
+      minY = Math.min(minY, y);
+      maxX = Math.max(maxX, x);
+      maxY = Math.max(maxY, y);
+    }
+    return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
+  }
+
+  /**
+   * Add a mesh built in code, outside the scene config.
+   *
+   * It gets the same material graph a configured item does, so an imperatively added shape is
+   * glass or metal in exactly the same sense — there is no second, lesser material path.
+   */
+  add(geometry: THREE.BufferGeometry, options: AddOptions = {}): MaterialItem {
+    const { material, uniforms, planes } = this.buildItemMaterial({
+      shape: normalizeShape(undefined),
+      material: options.material ?? {},
+    } as unknown as ItemConfig);
+    const mesh = new THREE.Mesh(geometry, material);
+    if (options.position) mesh.position.set(...options.position);
+    if (options.rotationOrder) mesh.rotation.order = options.rotationOrder;
+    if (options.rotation) mesh.rotation.set(...options.rotation);
+    if (options.scale !== undefined) {
+      const sc = options.scale;
+      if (typeof sc === "number") mesh.scale.set(sc, sc, sc);
+      else mesh.scale.set(...sc);
+    }
+    this.scene.add(mesh);
+    const entry = {
+      mesh,
+      uniforms,
+      planes,
+      // No config: an item added in code is not a prism the tracer can walk, and
+      // `applyPrismPlanes` uses exactly this to decide that.
+      config: undefined,
+      motion: normalizeMotion(options.motion),
+      phase: options.phase ?? 0,
+      home: mesh.position.clone(),
+      homeRotation: mesh.rotation.clone(),
+      homeScale: mesh.scale.clone(),
+    };
+    this.items.push(entry);
+    return entry as unknown as MaterialItem;
+  }
+
+  remove(item: MaterialItem): void {
+    const index = this.items.findIndex((entry) => entry.mesh === item.mesh);
+    if (index < 0) return;
+    const [entry] = this.items.splice(index, 1);
+    this.scene.remove(entry.mesh);
+    entry.mesh.geometry.dispose();
+    (entry.mesh.material as THREE.Material).dispose();
+  }
+
+  clear(): void {
+    while (this.items.length > 0)
+      this.remove(this.items[this.items.length - 1] as unknown as MaterialItem);
+  }
+
+  setInteractionInput(name: string, value: number): this {
+    this.interaction?.setInput(name, value);
+    return this;
+  }
+
+  setScrollPreview(value: number | null): this {
+    this.scrollPreview = value === null ? null : Math.min(1, Math.max(0, value));
+    if (this.interaction) {
+      this.interaction.scrollOverride = this.scrollPreview;
+      this.interaction.snapScroll();
+      this.renderOnce();
+    }
+    return this;
+  }
+
+  setScrollTestProgress(value: number): this {
+    this.scrollPreview = Math.min(1, Math.max(0, value));
+    if (!this.interaction) return this;
+    this.interaction.scrollOverride = this.scrollPreview;
+    if (!this.running) {
+      this.interaction.snapScroll();
+      this.seek(this.time);
+    }
+    return this;
+  }
+
+  /** Put the camera back where the scene asked for it. Snaps rather than eases — it is a reset. */
+  resetCamera(): void {
+    this.yaw = 0;
+    this.pitch = 0;
+    this.distance = this.config.camera.distance;
+    this.updateCamera();
+    this.renderOnce();
+  }
+
+  private updateCamera(): void {
+    const cam = this.config.camera;
+    const d = this.distance || cam.distance;
+    this.camera.position.set(
+      Math.sin(this.yaw) * d,
+      cam.height + this.pitch * d * 0.5,
+      Math.cos(this.yaw) * d,
+    );
+    this.camera.lookAt(cam.lookAt.x, cam.lookAt.y, cam.lookAt.z);
+    if (cam.roll) this.camera.rotateZ((cam.roll * Math.PI) / 180);
+  }
+
+  /** Push every non-structural config value into the live uniforms. */
+  refresh(): void {
+    this.applyConfig();
+    this.updateCamera();
+    this.renderOnce();
+  }
+
+  /** Rebuild everything a structural change invalidates — the item list, the beam, the targets. */
+  rebuild(): void {
+    this.buildItems();
+    this.buildBeam();
+    this.applyConfig();
+    this.resize();
+    this.renderOnce();
+  }
+
+  onFrame(callback: ((time: number) => void) | null): this {
+    this.frameCallback = callback;
+    return this;
+  }
+
+  captureStream(fps = 60): MediaStream {
+    return this.canvas.captureStream(fps);
+  }
+
   resize(): void {
-    const w = this.container.clientWidth || 1;
-    const h = this.container.clientHeight || 1;
-    const ratio = Math.min(globalThis.devicePixelRatio || 1, 2);
+    const w = this.outputSize?.width ?? this.container.clientWidth ?? 1;
+    const h = this.outputSize?.height ?? this.container.clientHeight ?? 1;
+    // An explicit output size is a request for EXACTLY that many pixels — a headless render must
+    // not be silently doubled by the display's ratio.
+    const ratio = this.outputSize ? 1 : Math.min(globalThis.devicePixelRatio || 1, 2);
     this.renderer.setPixelRatio(ratio);
     this.renderer.setSize(w, h, this.ownsCanvas);
     this.camera.aspect = w / h;
@@ -2144,6 +2402,7 @@ export class NodeMaterialRenderer implements Engine {
       await this.renderer.renderAsync(this.dustScene, this.camera);
       this.renderer.autoClear = wasAutoClear;
     }
+    this.frameCallback?.(this.time);
     this.renderPending();
   }
 
@@ -2216,6 +2475,8 @@ export class NodeMaterialRenderer implements Engine {
 
   dispose(): void {
     this.stop();
+    this.interaction?.dispose();
+    this.interaction = undefined;
     if (this.targets) disposeTargets(this.targets);
     this.envTarget?.dispose();
     this.quad.dispose();

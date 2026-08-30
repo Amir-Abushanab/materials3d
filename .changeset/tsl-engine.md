@@ -75,8 +75,43 @@ node engine. Three things there are worth knowing:
   rewrites the plate the main pass then samples, and every reading taken through it describes a
   frame that does not exist. That cost a dozen measurements before it was spotted.
 
-**Not yet done**: the dust field's vertex stage, the backdrop's remaining branches (gradient
-variants, image, mesh, wall), the prefiltered environment map, and the finish and wireframe
-materials. The two engines are also not yet calibrated — the node engine runs brighter on the same
-preset, most of it the environment lookup the GLSL path has and this one does not.
-`core-loader-webgpu` documents exactly what its type assertion is hiding.
+**The port is complete.** Every GLSL shader has a node twin that the engine actually calls: the
+four scene passes, both depth passes, the bloom pyramid, post, the environment bake and its
+sin(theta)-compensated blur, all four backdrop branches including the lit wall with its contact
+shadows, the beam, the caustic, the dust field with its index-derived vertex stage, the back-glass
+walk, and the finish pass. The imperative API is implemented too, against the same
+renderer-agnostic helpers the WebGL engine uses — so `core-loader-webgpu`'s assertion no longer
+hides a missing method, only the fact that the two classes share no nominal base type.
+
+**How close the two engines are**, measured by `scripts/tsl-compare.mjs` as mean absolute
+difference over the whole frame, out of 255:
+
+    assembly 1.1   reactions 1.4   materials 2.1   slimes 7.7
+    skewer  10.4   staircase 11.2  cascade  16.4   prism   29.9
+
+On `assembly` and `reactions` fewer than 5% of pixels differ by more than one 8-bit level. The two
+dark scenes are the outliers, and their gap is dominated by a low-level glow the WebGL engine has
+across the whole frame which this one does not — not bloom, haze or the backdrop, all of which have
+been ruled out by measurement, and not yet explained.
+
+**Every defect this port surfaced was found by measuring, not by reading.** The list is worth
+keeping because the same shapes will recur:
+
+- A double output encode. The post pass already ends in the display transfer, and three's output
+  colour management ran on top: a mid grey left the shader at 0.5 and reached the canvas at 188.
+- Shapes missing from the plate entirely — the item materials sampled the target they were being
+  drawn into, so the driver dropped the draw.
+- A vertical flip on every plate and depth read, which made each shape refract a mirrored copy of
+  the frame. Invisible on a tall rod, worth 28 levels on `staircase`.
+- A parity case whose GLSL reference had been written from the port rather than transcribed from
+  `shaders.ts`, so it compared the port against itself and passed while the two engines computed
+  different functions.
+- Coordinate conventions, repeatedly: `screenUV` counts down where `gl_FragCoord` counts up, a
+  source lookup needs a target flip where a screen position must not, and GLSL's `mat2` is
+  column-major.
+
+**And the instrumentation was wrong more often than the renderer.** Probe scales that silently
+saturated, an sRGB decode applied to raw bytes, probes read through a post pass that smears them,
+and a mask that counted backdrop pixels as geometry and produced a confident, entirely false
+"13.3% of back faces are missing". `scripts/tsl-compare.mjs` carries `--at` for raw pixel readout
+and states in a comment that its values are `byte/255`.

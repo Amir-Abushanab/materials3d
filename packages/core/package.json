@@ -31,6 +31,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./renderer": "./src/renderer/index.ts",
+    "./renderer-webgpu": "./src/renderer/NodeMaterialRenderer.ts",
     "./presets": "./src/presets.ts",
     "./studio": "./src/studio/index.ts",
     "./standalone": "./src/standalone.ts"

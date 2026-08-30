@@ -20,6 +20,7 @@ import {
   ungroupItems,
 } from "@materials3d/core";
 import { bakeScatter, MaterialRenderer } from "@materials3d/core/renderer";
+import type { RendererKind } from "@materials3d/core";
 import type { MaterialItem } from "@materials3d/core";
 import { PRESETS } from "@materials3d/core/presets";
 import { ControlPanel, type PanelState, type ViewState } from "./ui/ControlPanel";
@@ -77,6 +78,8 @@ const fileInput = byId<HTMLInputElement>("file-input");
 
 let presetName = "skewer";
 let renderer: MaterialRenderer;
+/** Which engine is live. Studio-only state; the scene config says nothing about it. */
+let rendererKind: RendererKind = "webgl";
 let panel: ControlPanel;
 // CodeMirror is ~540kB of the studio bundle and nothing needs it until a dialog opens, so it is
 // fetched on first use. Every dialog entry point is already async-tolerant.
@@ -106,6 +109,7 @@ const view: ViewState = {
   gridTilt: DEFAULT_GRID.tilt,
 };
 const state: PanelState = {
+  renderer: "webgl",
   imageFormat: "webp",
   imageQuality: 0.94,
   videoFormat: "webm",
@@ -567,6 +571,91 @@ function toggleRecord(): void {
     });
 }
 
+/**
+ * (Re)build the overlays that hold a direct reference to the renderer.
+ *
+ * Extracted because switching engines replaces the renderer object, and these two captured the old
+ * one at construction — everything else reaches it through the module-level binding and follows a
+ * reassignment on its own.
+ */
+function buildRendererOverlays(): void {
+  scrollTest?.dispose();
+  selection?.dispose();
+  scrollTest = new ScrollTestOverlay(scene, renderer);
+  selection = new SelectionOverlay(scene, renderer, {
+    onEditStart: () => history.flush(),
+    onTransform: (item) => {
+      syncItemTransform(item);
+      // The panel binds to the config, and a gesture changes it from outside Tweakpane, so the
+      // rows need re-reading — but THROTTLED. A full pane refresh walks every binding and, through
+      // the pane's change handler, triggers a uniform push and a render; doing that once per
+      // pointer event made a drag stutter and could wedge the page outright. Ten times a second is
+      // indistinguishable while dragging, and onEditEnd guarantees the final value lands.
+      const now = performance.now();
+      if (now - lastPanelSync < 100) return;
+      lastPanelSync = now;
+      panel.refresh();
+    },
+    onEditEnd: (label) => {
+      panel.refresh(); // the throttle may have skipped the last move
+      history.commit(config(), presetName, label);
+    },
+    onSelect: (items) => {
+      // The panel follows the PRIMARY selection — the last one added. Revealing every member at
+      // once would scroll the pane somewhere arbitrary and expand a dozen folders.
+      const primary = items[items.length - 1] ?? null;
+      panel.setSelectionCount(items.length);
+      panel.focusItem(primary?.config ? renderer.getItems().indexOf(primary) : null);
+    },
+    prepareSelection: ensureSelectable,
+    onDelete: removeItems,
+    onGroup: (items) => regroup(items, "group"),
+    onUngroup: (items) => regroup(items, "ungroup"),
+    groupName: (id) => {
+      const group = config().groups.find((g) => g.id === id);
+      return group ? groupLabel(config(), group) : id;
+    },
+  });
+}
+
+/**
+ * Swap the live engine, keeping the scene exactly as it is.
+ *
+ * The node engine is fetched on demand rather than imported at the top: it is a second three build
+ * and the studio should not carry it for everyone who never switches. That is the same reason
+ * `createMaterials` splits on a literal specifier — see `core-loader-webgpu`.
+ *
+ * The config object survives the swap. It is the studio's single source of truth and the new
+ * renderer normalizes the same object, so the panel keeps binding to what it was already bound to.
+ */
+async function useRenderer(kind: RendererKind): Promise<void> {
+  if (kind === rendererKind) return;
+  const live = config();
+  const wasPaused = live.paused;
+
+  renderer.stop();
+  renderer.dispose();
+
+  if (kind === "webgpu") {
+    const { NodeMaterialRenderer } = await import("@materials3d/core/renderer-webgpu");
+    // The same nominal gap `core-loader-webgpu` bridges: both classes implement `Engine`, and the
+    // compiler checks that, but they share no base type so it cannot see the match here.
+    renderer = new NodeMaterialRenderer(scene, live, {
+      respectReducedMotion: false,
+    }) as unknown as MaterialRenderer;
+  } else {
+    renderer = new MaterialRenderer(scene, live, { respectReducedMotion: false });
+  }
+  rendererKind = kind;
+  state.renderer = kind;
+
+  renderer.start();
+  buildRendererOverlays();
+  // Re-point the panel at the NEW renderer's config object — same values, different identity.
+  panel.setConfig(config(), presetName);
+  if (wasPaused) renderer.renderOnce();
+}
+
 // ------------------------------------------------------------------- boot ---
 
 function boot(): void {
@@ -577,7 +666,6 @@ function boot(): void {
 
   renderer = new MaterialRenderer(scene, initial, { respectReducedMotion: false });
   renderer.start();
-  scrollTest = new ScrollTestOverlay(scene, renderer);
 
   history = new History({
     getLive: () => config(),
@@ -633,6 +721,14 @@ function boot(): void {
     onPickBackgroundMedia: pickBackgroundMedia,
     onScrollPreview: (value) => renderer.setScrollPreview(value),
     onOpenScrollTest: () => scrollTest.toggle(),
+    onRendererChange: (kind) =>
+      useRenderer(kind).catch((error: Error) => {
+        // Put the control back where the engine actually is, or the panel claims a switch that
+        // did not happen — the second engine is fetched over the network and can fail to arrive.
+        state.renderer = rendererKind;
+        panel.refresh();
+        toast(`Could not switch engine: ${error.message}`);
+      }),
     onExportWallpaper: () => exportWallpaperFolder(config(), exportName(), renderer),
     onPublish: () => publishToGallery(config()),
     onLocateItem: (index) => selection.select(renderer.getItems()[index] ?? null),
@@ -747,40 +843,7 @@ function boot(): void {
 
   grid = new GridOverlay(scene);
   recordingOverlay = new RecordingOverlay(scene);
-  selection = new SelectionOverlay(scene, renderer, {
-    onEditStart: () => history.flush(),
-    onTransform: (item) => {
-      syncItemTransform(item);
-      // The panel binds to the config, and a gesture changes it from outside Tweakpane, so the
-      // rows need re-reading — but THROTTLED. A full pane refresh walks every binding and, through
-      // the pane's change handler, triggers a uniform push and a render; doing that once per
-      // pointer event made a drag stutter and could wedge the page outright. Ten times a second is
-      // indistinguishable while dragging, and onEditEnd guarantees the final value lands.
-      const now = performance.now();
-      if (now - lastPanelSync < 100) return;
-      lastPanelSync = now;
-      panel.refresh();
-    },
-    onEditEnd: (label) => {
-      panel.refresh(); // the throttle may have skipped the last move
-      history.commit(config(), presetName, label);
-    },
-    onSelect: (items) => {
-      // The panel follows the PRIMARY selection — the last one added. Revealing every member at
-      // once would scroll the pane somewhere arbitrary and expand a dozen folders.
-      const primary = items[items.length - 1] ?? null;
-      panel.setSelectionCount(items.length);
-      panel.focusItem(primary?.config ? renderer.getItems().indexOf(primary) : null);
-    },
-    prepareSelection: ensureSelectable,
-    onDelete: removeItems,
-    onGroup: (items) => regroup(items, "group"),
-    onUngroup: (items) => regroup(items, "ungroup"),
-    groupName: (id) => {
-      const group = config().groups.find((g) => g.id === id);
-      return group ? groupLabel(config(), group) : id;
-    },
-  });
+  buildRendererOverlays();
 
   on(dialog, "click", (event) => {
     const action = (event.target as HTMLElement).closest<HTMLElement>("[data-action]")?.dataset

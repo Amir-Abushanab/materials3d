@@ -11,6 +11,7 @@
  */
 
 import { Pane } from "tweakpane";
+import type { RendererKind } from "@materials3d/core";
 import { applySearch, clearSearch } from "./controlSearch";
 import type { FolderApi } from "@tweakpane/core";
 import { flashButtonError, flashButtonSuccess } from "./buttonFeedback";
@@ -99,6 +100,11 @@ export interface ViewState {
 }
 
 export interface PanelState {
+  /**
+   * Which engine to render with. NOT part of the scene: a config describes a picture, and which
+   * renderer draws it is a property of this session, so it neither serializes nor exports.
+   */
+  renderer: RendererKind;
   imageFormat: ImageFormat;
   imageQuality: number;
   videoFormat: RecordFormat;
@@ -121,6 +127,8 @@ export interface PanelHooks {
   onSaveConfig(): void | Promise<void>;
   onLoadConfig(): void;
   onShare(): boolean | Promise<boolean>;
+  /** Switch engines in place, keeping the scene. Async: the second engine is fetched on demand. */
+  onRendererChange(kind: RendererKind): void | Promise<void>;
   /** Bundle the embed + wallpaper-app manifests into one .zip. */
   onExportWallpaper(): void | Promise<void>;
   /** Select this shape in the viewport, so the panel row and the scene agree on which one it is. */
@@ -2127,6 +2135,19 @@ export class ControlPanel {
     this.structural(
       f.addBinding(this.config, "measuredThickness", { label: "measured thickness" }),
     );
+
+    // The ENGINE, not the backend: "webgpu" selects three's node renderer, which still falls back
+    // to a WebGL backend where the browser has no WebGPU. Fetched on demand — it is a second three
+    // build — so the first switch has a moment of load.
+    f.addBinding(this.state, "renderer", {
+      label: "engine",
+      options: { WebGL: "webgl", "WebGPU (TSL)": "webgpu" },
+    }).on("change", (event) => {
+      // Not `structural()`: this replaces the renderer rather than rebuilding it, and the scene
+      // config is untouched — so it must not run the usual change/history path.
+      if (this.syncing) return;
+      void this.hooks.onRendererChange(event.value as RendererKind);
+    });
   }
 
   /** Preview aids. Separate from Scene because none of it is part of the scene — it never

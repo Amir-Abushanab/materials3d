@@ -379,5 +379,7 @@ export const causticPass = (u: CausticUniforms) =>
     const neutral = vec3(color.r.max(color.g).max(color.b).add(u.farBright.mul(distance)));
     const tint = mix(color, neutral, farMix).mul(bounded.mul(0.68).add(0.62)).clamp(0, 1.45);
     const cover = bounded.mul(u.coverage).clamp(0, 1);
-    return vec4(tint.mul(cover).mul(surface).mul(float(0).step(wave)), 0);
+    // `a.step(b)` reads as `a >= b`, so this is GLSL's `step(0, wave)`. Reversed it discards the
+    // near half of the sheet instead of the far one.
+    return vec4(tint.mul(cover).mul(surface).mul(wave.step(0)), 0);
   });

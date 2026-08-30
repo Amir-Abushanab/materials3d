@@ -1370,6 +1370,167 @@ const results = await page.evaluate(
       },
     };
 
+    // ---- the caustic, the backdrop and the finish pass ------------------------
+    // Every GLSL body below is transcribed from `shaders.ts`; see the rule at the top of the file.
+    const backdropNodes = await import(base + "dist/renderer/nodes/backdrop.js");
+    const finishNodes = await import(base + "dist/renderer/nodes/finish.js");
+
+    const NOISE_PRELUDE = `
+      float hash21(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+      float valueNoise(vec2 p){
+        vec2 i = floor(p); vec2 f = fract(p);
+        vec2 u = f * f * (3.0 - 2.0 * f);
+        return mix(mix(hash21(i), hash21(i + vec2(1.0, 0.0)), u.x),
+                   mix(hash21(i + vec2(0.0, 1.0)), hash21(i + vec2(1.0, 1.0)), u.x), u.y);
+      }`;
+
+    cases.caustic = {
+      glsl:
+        NOISE_PRELUDE +
+        `
+      void main(){
+        vec3 vCol = vec3(0.9, 0.75, 0.55);
+        float vProfile = vUvIn.x * 2.0 - 1.0;
+        float vTravel = vUvIn.y;
+        float vWave = 1.0;
+        vec2 vWorld = vUvIn * 4.0 - 2.0;
+        float uEdgeFalloff = 16.0, uFalloffRate = 3.8, uFalloffPower = 3.7;
+        float uStrength = 1.9, uCoverage = 0.86, uFarDesat = 0.04, uFarBright = 0.02;
+        float uTravelScale = 1.0, uRateScale = 0.12, uPowerScale = 0.5;
+        float uNormalInfluence = 1.0, uNormalElevation = 35.0;
+        float uWallScale = 1.0 / 2.4, uWallNormal = 0.22;
+        vec2 uBeamDir = vec2(1.0, 0.0);
+
+        float r = abs(vProfile);
+        float radial = exp(-uEdgeFalloff * r * r) * (1.0 - smoothstep(0.55, 1.0, r));
+        float distance = clamp(vTravel / max(uTravelScale, 0.001), 0.0, 1.0);
+        float outgoing = 1.0 / pow(
+          1.0 + max(uFalloffRate, 0.0) * max(uRateScale, 0.0) * max(vTravel, 0.0),
+          max(uFalloffPower * max(uPowerScale, 0.0), 0.0001));
+
+        float e = 0.02;
+        float m0 = valueNoise(vWorld * uWallScale * 3.7);
+        float mx = valueNoise((vWorld + vec2(e, 0.0)) * uWallScale * 3.7);
+        float my = valueNoise((vWorld + vec2(0.0, e)) * uWallScale * 3.7);
+        vec3 N = normalize(vec3((m0 - mx) * uWallNormal, (m0 - my) * uWallNormal, 1.0));
+        float elev = clamp(uNormalElevation, 1.0, 89.0) * 0.01745329252;
+        vec3 incident = normalize(vec3(normalize(uBeamDir) * cos(elev), sin(elev)));
+        float flat0 = max(incident.z, 0.05);
+        float relative = clamp(max(dot(N, incident), 0.0) / flat0, 0.0, 2.5);
+        float surface = mix(1.0, relative, clamp(uNormalInfluence, 0.0, 1.0));
+
+        float energy = max(max(vCol.r, max(vCol.g, vCol.b)), 0.0) * radial * outgoing;
+        float bounded = 1.0 - exp(-energy * max(uStrength, 0.0));
+        float farMix = smoothstep(0.16, 0.92, distance) * uFarDesat;
+        vec3 spectral = vCol;
+        vec3 neutral = vec3(max(max(spectral.r, spectral.g), spectral.b) + uFarBright * distance);
+        vec3 tint = clamp(mix(spectral, neutral, farMix) * (0.62 + bounded * 0.68), 0.0, 1.45);
+        float coverage = clamp(bounded * uCoverage, 0.0, 1.0);
+        gl_FragColor = vec4(tint * coverage * surface * step(0.0, vWave), 1.0);
+      }`,
+      tsl: () => {
+        const pass = beamNodes.causticPass({
+          edgeFalloff: TSL.float(16),
+          falloffRate: TSL.float(3.8),
+          falloffPower: TSL.float(3.7),
+          strength: TSL.float(1.9),
+          coverage: TSL.float(0.86),
+          farDesat: TSL.float(0.04),
+          farBright: TSL.float(0.02),
+          travelScale: TSL.float(1),
+          rateScale: TSL.float(0.12),
+          powerScale: TSL.float(0.5),
+          normalInfluence: TSL.float(1),
+          normalElevation: TSL.float(35),
+          wallScale: TSL.float(1 / 2.4),
+          wallNormal: TSL.float(0.22),
+          beamDir: TSL.vec2(1, 0),
+        });
+        return TSL.vec4(
+          pass(
+            TSL.vec3(0.9, 0.75, 0.55),
+            TSL.uv().x.mul(2).sub(1),
+            TSL.uv().y,
+            TSL.float(1),
+            TSL.uv().mul(4).sub(2),
+          ).rgb,
+          1,
+        );
+      },
+    };
+
+    cases.shadowContrastCurve = {
+      glsl: `
+      float shadowContrastCurve(float v, float contrast, float pivot){
+        float p = clamp(pivot, 0.001, 0.999);
+        float k = max(contrast, 0.001);
+        return v < p ? p * pow(v / p, k) : 1.0 - (1.0 - p) * pow((1.0 - v) / (1.0 - p), k);
+      }
+      void main(){
+        gl_FragColor = vec4(vec3(shadowContrastCurve(vUvIn.x, 1.0 + vUvIn.y * 8.0, 0.9)), 1.0);
+      }`,
+      tsl: () =>
+        TSL.vec4(
+          TSL.vec3(
+            backdropNodes.shadowContrastCurve(TSL.uv().x, TSL.uv().y.mul(8).add(1), TSL.float(0.9)),
+          ),
+          1,
+        ),
+    };
+
+    cases.softInside = {
+      glsl: `
+      float softInside(float distance, float amplitude){
+        float edge = max(amplitude * 0.5, 0.0001);
+        return 1.0 - smoothstep(-edge, edge, distance);
+      }
+      void main(){
+        gl_FragColor = vec4(vec3(softInside(vUvIn.x * 2.0 - 1.0, vUvIn.y * 1.6)), 1.0);
+      }`,
+      tsl: () =>
+        TSL.vec4(
+          TSL.vec3(backdropNodes.softInside(TSL.uv().x.mul(2).sub(1), TSL.uv().y.mul(1.6))),
+          1,
+        ),
+    };
+
+    cases.dotScreen = {
+      glsl: `
+      float dotScreen(vec2 coord, float value, float angle, float cell){
+        float ca = cos(angle), sa = sin(angle);
+        vec2 r = mat2(ca, sa, -sa, ca) * coord;
+        vec2 c = fract(r / max(cell, 2.0)) - 0.5;
+        float radius = sqrt(clamp(value, 0.0, 1.0)) * 0.5;
+        return smoothstep(radius, radius - 0.06, length(c));
+      }
+      void main(){
+        gl_FragColor = vec4(vec3(dotScreen(vUvIn * 64.0, vUvIn.x, 1.309, 6.0)), 1.0);
+      }`,
+      tsl: () =>
+        TSL.vec4(
+          TSL.vec3(
+            finishNodes.dotScreen(TSL.uv().mul(64), TSL.uv().x, TSL.float(1.309), TSL.float(6)),
+          ),
+          1,
+        ),
+    };
+
+    cases.bayer = {
+      glsl: `
+      const int bayer8x8[64] = int[64](
+        0, 32, 8, 40, 2, 34, 10, 42, 48, 16, 56, 24, 50, 18, 58, 26,
+        12, 44, 4, 36, 14, 46, 6, 38, 60, 28, 52, 20, 62, 30, 54, 22,
+        3, 35, 11, 43, 1, 33, 9, 41, 51, 19, 59, 27, 49, 17, 57, 25,
+        15, 47, 7, 39, 13, 45, 5, 37, 63, 31, 55, 23, 61, 29, 53, 21
+      );
+      float bayer(vec2 uv){
+        ivec2 pos = ivec2(fract(uv / 8.0) * 8.0);
+        return float(bayer8x8[pos.y * 8 + pos.x]) / 64.0;
+      }
+      void main(){ gl_FragColor = vec4(vec3(bayer(vUvIn * 32.0)), 1.0); }`,
+      tsl: () => TSL.vec4(TSL.vec3(finishNodes.bayer(TSL.uv().mul(32))), 1),
+    };
+
     const out = [];
     for (const [name, def] of Object.entries(cases)) {
       try {

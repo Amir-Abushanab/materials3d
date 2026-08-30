@@ -41,7 +41,7 @@ const BAYER_8X8 = [
 ];
 const bayerTable = TSL.uniformArray(BAYER_8X8, "float");
 
-const bayer = (p: Vec): Vec => {
+export const bayer = (p: Vec): Vec => {
   const q = p.div(8).fract().mul(8).floor();
   const cell: Vec = bayerTable.element(q.y.mul(8).add(q.x).toInt());
   return cell.div(64);
@@ -58,7 +58,7 @@ const circle = Fn(([p, lum, baseR]: [Vec, Vec, Vec]) => {
 });
 
 /** One ink's screen: a rotated grid of dots whose radius tracks the value. */
-const dotScreen = Fn(([coord, value, angle, cell]: [Vec, Vec, Vec, Vec]) => {
+export const dotScreen = Fn(([coord, value, angle, cell]: [Vec, Vec, Vec, Vec]) => {
   const ca = angle.cos();
   const sa = angle.sin();
   // GLSL's `mat2(ca, sa, -sa, ca)` is COLUMN-major, so it multiplies as

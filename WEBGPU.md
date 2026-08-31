@@ -27,71 +27,55 @@ Whole-frame mean absolute difference against the WebGL engine, over the eight ga
 
 | preset    | mean\|d\| | preset    | mean\|d\| |
 | --------- | --------: | --------- | --------: |
-| reactions |      0.49 | skewer    |      8.02 |
-| assembly  |      1.14 | staircase |     11.17 |
-| materials |      1.57 | cascade   |     12.41 |
-| slimes    |      2.73 | prism     |     19.41 |
+| reactions |      0.49 | cascade   |      7.60 |
+| assembly  |      1.14 | skewer    |      8.02 |
+| materials |      1.57 | staircase |     11.17 |
+| slimes    |      2.73 | prism     |     16.31 |
 
 Reproduce with `node scripts/tsl-compare.mjs <preset>`, which renders the same scene through both
 engines and writes `compare-<preset>-{glsl,tsl,diff}.png`.
 
 ## What is known to differ
 
-**The specular lobe is weaker.** A rod gains +2.4 brightness from it where the WebGL engine gains
-+4.5. This is most of the remaining spread, and it is not prism-specific — it is simply largest
-where the specular contribution is largest.
+**The bevels and other sub-pixel geometry.** The two rasterizers disagree by about one pixel of
+coverage at a silhouette. Interiors agree exactly — on a validated interior crop of the prism every
+material probe (world position, view vector, mirror vector, N·V, the specular lobe's argument and
+the lobe itself) reads a difference of exactly **zero**. What is left on `prism` is concentrated in
+a thin bright ring on the bevel, a sub-pixel-wide band of steeply-angled faces.
 
-The lobe is `pow(dot(reflect(-V, N), KEY), 40)`. At that exponent a fraction of a degree is a factor
-of two, and on a **flat face** the mirror direction is constant across the whole face, so the face
-either catches the highlight or does not. On a smooth surface the same error only slides the
-highlight slightly. That is why `prism` and `hex` are worst affected and spheres, rods, cones,
-discs, slabs and rings are near-exact, and why the opaque path is unaffected — it reads the room,
-which is smooth in direction and forgiving.
+**The wall backdrop's shading**, in `wall` mode — `prism` and `cascade`. Both engines now receive
+identical wall uniforms, so this is a difference in the shader itself, not in what feeds it. It is
+not the relief: zeroing both relief scales in both engines halves the backdrop-only difference but
+does not touch the prism case. `wallShade` and `footprintDistance` have no parity case yet, which is
+the obvious next step.
 
-Isolated by config A/B: with `specular: 0` the two engines agree (16.2 vs 16.0 on the prism body);
-with it on they are 99.4 vs 47.3.
+**Post amplifies whatever reaches it.** On `prism`, 11.92 with post on against 4.41 with it off,
+spread across bloom (~2.7) and the tone map (~3.7) rather than concentrated in one term.
 
 **`staircase` has a residual that has not been attributed to anything.** It is a bright scene,
-unlike the other two worst cases, so it may well be a different cause rather than more of the same.
+unlike the other worst cases, and has no camera bindings and no wall — so it is likely a different
+cause again.
 
-### The measured chain, and where it stops
+### It was not the specular lobe
 
-On a validated interior crop of the prism (`--crop 500,270,50,50`, where `calib` and `rampX` both
-read `0.00`, so every figure below is real):
-
-| probe     | mean\|d\| | worst | pixels >4 |
-| --------- | --------: | ----: | --------: |
-| `calib`   |      0.00 |     0 |      0.0% |
-| `rampX`   |      0.00 |     0 |      0.0% |
-| `ndvP`    |      2.20 |     4 |      0.0% |
-| `posW`    |      4.13 |     5 |     13.5% |
-| `dotKey`  |      5.84 |     7 |    100.0% |
-| `viewV`   |      7.71 |     8 |    100.0% |
-| `mirrorV` |      7.73 |     8 |    100.0% |
-| `lobe`    |     15.83 |    26 |    100.0% |
-
-`dotKey` is the lobe's argument before the exponent. It differs by about 0.02 — under two degrees —
-and `pow(·, 40)` turns that into the threefold `lobe` difference, which is the specular deficit.
-`chord` (0.05) and the room functions match, so the lobe is the whole story here.
-
-**Where it stops, and the next lead.** `view` is `normalize(cameraPosition - positionWorld)`. Both
-engines compute exactly that; the cameras are byte-identical (position, fov, aspect, quaternion,
-view matrix, projection X/Y). Yet `viewV` differs on 100% of pixels by roughly eight times what the
-measured `posW` difference and an identical camera can account for. One of `cameraPosition` or
-`positionWorld` is therefore not the quantity it is assumed to be on one side. That inconsistency
-is the sharpest remaining lead — and note that swapping `normalWorld` for `normalWorldGeometry`
-changes `lobe` not at all, so the normal is not it.
+An earlier version of this page blamed the specular lobe, on good evidence: it differed threefold,
+and `specular: 0` made the two engines agree. That was a symptom. The cause was that the WebGL
+engine captured from a camera displaced by an interaction binding, and `pow(dot(...), 40)` turns a
+degree of arc into a factor of three. Fixing the camera collapsed the lobe difference to exactly
+zero — along with every other material intermediate. Worth remembering when the next "obviously it
+is term X" presents itself.
 
 ## What has been ruled out
 
 Each of these was compared directly and matches: the traced refraction path, the back-glass pass,
 the plate depth guard, the traced and measured optical chord, the back-face depth, the refracted
 screen-space offset, `clearGlass`, the absorption block, the reflection weight, the studio mode, and
-both studio room functions (which are parity-clean). An **opaque** prism matches exactly (141.9 vs
-142.5), which rules out the geometry and the room together. The camera (position, fov, aspect,
-quaternion, view matrix, projection X/Y), the mesh transforms and the geometry are byte-identical.
+both studio room functions (which are parity-clean). An **opaque** prism matches exactly, which rules
+out the geometry and the room together. The camera, the mesh transforms and the projection are
+byte-identical, and so — on a validated interior crop — is every material intermediate.
 
-Whatever is left in `V` or `N` is below what the current instrumentation can resolve.
+The wall's extent, the `frame`/`size` pair it derives from, and all eighteen wall uniforms match
+exactly, so the wall difference is inside `wallShade` itself.
 
 ## Working on it
 

@@ -1190,12 +1190,10 @@ export class MaterialRenderer implements Engine {
     const c = this.config;
     const bg = this.backdropMaterial.uniforms;
     bg.uMode.value = BACKGROUND_MODES.indexOf(c.backgroundMode);
-    if (c.backgroundMode === "wall") {
-      // The wall spans whatever the camera sees of it, same derivation the beam uses so the two
-      // agree about where the light lands.
-      const extent = this.beamWallExtent(this.config.beam?.z ?? 0);
-      (bg.uWallExtent.value as THREE.Vector2).copy(extent);
-    }
+    // The wall spans whatever the camera sees of it, same derivation the beam uses so the two
+    // agree about where the light lands. Unconditional, and see `refreshWallExtent`: the
+    // derivation reads `camera.aspect`, which is not known until the first resize.
+    this.refreshWallExtent();
 
     const stops = bg.uStop.value as THREE.Vector4[];
     const count = Math.min(c.backgroundPalette.length, MAX_STOPS);
@@ -1442,6 +1440,8 @@ export class MaterialRenderer implements Engine {
   private applyFov(): void {
     const cam = this.config.camera;
     this.camera.fov = frameFov(cam.fov, this.camera.aspect, cam.fit, cam.minVisibleWidth);
+    // The wall's extent is derived from the aspect, so it has to be re-derived here.
+    this.refreshWallExtent();
     this.camera.updateProjectionMatrix();
   }
 
@@ -1667,6 +1667,24 @@ export class MaterialRenderer implements Engine {
    * short would end in a hard edge partway across the picture, and the rays that reach past it
    * would simply stop in mid-air.
    */
+  /**
+   * Re-derive the wall's world extent. Must run after anything that changes the camera's aspect.
+   *
+   * It used to run only from `applyBackground`, which happens once on refresh — before the first
+   * `resize`, when `camera.aspect` is still three's default of 1. `beamWallExtent` takes
+   * `max(aspect, 1)` for the horizontal half-width, so the wall came out SQUARE: its horizontal
+   * extent was short by the whole aspect ratio, 40% on a 16:9 frame. Everything the wall shades
+   * from world position — the relief at both scales, the light falloff, the contact shadows — was
+   * therefore computed on a horizontally compressed surface, and stayed that way through every
+   * resize because nothing recomputed it.
+   */
+  private refreshWallExtent(): void {
+    if (this.config.backgroundMode !== "wall") return;
+    (this.backdropMaterial.uniforms.uWallExtent.value as THREE.Vector2).copy(
+      this.beamWallExtent(this.config.beam?.z ?? 0),
+    );
+  }
+
   private beamWallExtent(z: number): THREE.Vector2 {
     const cam = this.config.camera;
     const dist = Math.abs(this.distance) + Math.abs(cam.lookAt.z - z);

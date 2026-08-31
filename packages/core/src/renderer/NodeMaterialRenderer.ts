@@ -233,9 +233,10 @@ const blend = (a: Vec, b: Vec, t: Vec): Vec => TSL.mix(a, b, t);
  * is close on most of them, but it is NOT pixel-equal to the WebGL engine, which is the reference.
  *
  * `WEBGPU.md` in the repo root is the place to look: it carries the per-preset numbers, what is
- * known to differ (mostly the specular lobe), what has already been ruled out, and how to use the
- * dev probes below — they bypass post, and there are two calibration probes whose job is to prove
- * a crop is trustworthy before anything measured on it is believed.
+ * known to differ, what has already been ruled out, and how to use the dev probes below — they
+ * bypass post, and there are two calibration probes whose job is to prove a crop is trustworthy
+ * before anything measured on it is believed. On a validated interior crop every material
+ * intermediate now matches exactly; what remains is sub-pixel geometry, the wall shader, and post.
  */
 export class NodeMaterialRenderer implements Engine {
   readonly canvas: HTMLCanvasElement;
@@ -1572,10 +1573,35 @@ export class NodeMaterialRenderer implements Engine {
    * the picture is a function of how far the light travels before it stops, so a scene that changes
    * its lens or its distance must not also have to remember to resize the wall.
    */
+  /**
+   * The wall's world extent — the twin of `MaterialRenderer.beamWallExtent`, and it has to stay
+   * one derivation.
+   *
+   * Everything the wall shades from world position reads this: the relief at both scales, the
+   * light falloff and the contact shadows. Two spellings of it put the two engines on differently
+   * sized surfaces, which shows up as a faint diagonal weave over the whole backdrop rather than
+   * as anything anyone would think to attribute to an extent.
+   *
+   * The distance walks from the ORBIT distance and the look-at, not from the camera's z, so a
+   * scene that has been orbited still measures the wall it is actually looking at. `safety` is the
+   * reference's WALL_SAFETY: the wall has to overshoot the frustum or it ends in a hard edge
+   * partway across the picture.
+   */
   private beamWallExtent(z: number): THREE.Vector2 {
-    const distance = Math.abs(this.camera.position.z - z);
-    const halfY = Math.tan((this.camera.fov * Math.PI) / 360) * distance;
-    return new THREE.Vector2(halfY * this.camera.aspect, halfY);
+    const cam = this.config.camera;
+    const dist = Math.abs(this.distance || cam.distance) + Math.abs(cam.lookAt.z - z);
+    const halfHeight = dist * Math.tan((this.camera.fov * Math.PI) / 360);
+    const safety = 1.08;
+    return new THREE.Vector2(
+      halfHeight * Math.max(this.camera.aspect, 1) * safety,
+      halfHeight * safety,
+    );
+  }
+
+  /** Re-derive the wall extent. Must run after anything that changes the camera's aspect. */
+  private refreshWallExtent(): void {
+    if (this.config.backgroundMode !== "wall") return;
+    (this.wallExtent.value as THREE.Vector2).copy(this.beamWallExtent(this.config.beam?.z ?? 0));
   }
 
   /** Rebuild the item meshes from the config. */
@@ -1741,10 +1767,7 @@ export class NodeMaterialRenderer implements Engine {
     const c = this.config;
     this.bgMode.value = Math.max(0, BACKGROUND_MODES.indexOf(c.backgroundMode));
     this.bgShow.value = c.backdropLamps;
-    if (c.backgroundMode === "wall") {
-      const extent = this.beamWallExtent(c.beam?.z ?? 0);
-      (this.wallExtent.value as THREE.Vector2).copy(extent);
-    }
+    this.refreshWallExtent();
 
     const stopCount = Math.min(c.backgroundPalette.length, MAX_STOPS);
     for (let i = 0; i < stopCount; i++) {
@@ -2566,6 +2589,8 @@ export class NodeMaterialRenderer implements Engine {
     const cam = this.config.camera;
     this.camera.fov = frameFov(cam.fov, this.camera.aspect, cam.fit, cam.minVisibleWidth);
     this.camera.updateProjectionMatrix();
+    // The wall's extent is derived from the aspect, so it has to be re-derived here.
+    this.refreshWallExtent();
 
     // Size the backdrop the way the WebGL engine does — an oversized plane, never below the
     // authored 160x110, with the visible fraction recorded. The vertical ramp is calibrated

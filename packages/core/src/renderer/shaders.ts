@@ -876,6 +876,18 @@ export const GLASS_FRAG = /* glsl */ `
       else if (uProbe > 22.5 && uProbe < 23.5) dbg = vec3(ndv);
       else if (uProbe > 23.5 && uProbe < 24.5) dbg = V * 0.5 + 0.5;
       else if (uProbe > 24.5 && uProbe < 25.5) dbg = vW * 2.0 + 0.5;
+      // CALIBRATION. A known constant, so the harness can be checked against itself: both engines
+      // must return exactly this, and any deviation is the instrument, not the renderer.
+      else if (uProbe > 25.5 && uProbe < 26.5) dbg = vec3(0.25, 0.5, 0.75);
+      // The lobe's ARGUMENT, before the exponent. Splits "the reflection vector differs" from
+      // "the power differs" — at 40 the second is invisible in the first.
+      else if (uProbe > 26.5 && uProbe < 27.5) dbg = vec3(max(dot(reflect(-V, N), KEY), 0.0));
+      // CALIBRATION, VARYING. The constant probe cannot expose anything that depends on how a
+      // value is interpolated, resolved or written. This is a horizontal ramp of the fragment's
+      // own x — provably identical in both engines — so whatever difference it shows IS the
+      // instrument's floor for a non-constant quantity, and nothing smaller can be attributed.
+      // (No backticks in this file: it is one big template literal, and they end it.)
+      else if (uProbe > 27.5 && uProbe < 28.5) dbg = vec3(gl_FragCoord.x / 1000.0);
       else dbg = vec3(0.5);   // a constant, for comparing the two output paths alone
       gl_FragColor = vec4(dbg, 1.0);
       return;

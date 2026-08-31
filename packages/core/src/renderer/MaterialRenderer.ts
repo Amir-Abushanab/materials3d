@@ -388,6 +388,9 @@ export class MaterialRenderer implements Engine {
   private introRamp = 0;
   /** One full-screen quad shared by the post and finish passes; owned here so dispose() frees it. */
   private readonly screenQuad = new THREE.PlaneGeometry(2, 2);
+  /** Straight copy of the colour target to the screen, for `probeActive()`. Built on first use. */
+  private probeBlit?: THREE.ShaderMaterial;
+  private probeScene?: THREE.Scene;
   private reducedMotion = false;
   private capturing = false;
   private disposed = false;
@@ -2151,6 +2154,12 @@ export class MaterialRenderer implements Engine {
     renderer.setRenderTarget(previous);
   }
 
+  /** Whether a dev harness has asked for a material intermediate instead of the composed frame.
+   *  Never set in production, where this is false and post runs normally. */
+  private probeActive(): boolean {
+    return Number((globalThis as Record<string, unknown>)["__glslProbe"] ?? 0) > 0;
+  }
+
   /** Copy a scratch target into one mip of the environment texture. */
   private copyIntoLevel(source: THREE.WebGLRenderTarget, level: number): void {
     if (!this.envRT) return;
@@ -2640,6 +2649,39 @@ export class MaterialRenderer implements Engine {
     //     with. The post pass adds the result rather than gathering its own.
     this.applyBeamReveal();
     if (this.bloomLevels) this.renderBloomPyramid();
+
+    // A DEV PROBE BYPASSES POST ENTIRELY.
+    //
+    // A probe substitutes one intermediate into the material's output, and the whole point is to
+    // read the value the material computed. Post is not a window onto that: tone mapping, bloom,
+    // haze, vignette and grain are all non-linear, and a probe pushed through them is a different
+    // number — one that saturates, that shifts by a constant, and that answers identically for two
+    // different probes wherever the shape covers little of the frame. Reading probes through post
+    // is the single most effective way to misread this tool, and it has cost real time.
+    //
+    // The node engine does the same thing at the same point, so the two stay comparable.
+    if (this.probeActive()) {
+      this.probeBlit ??= new THREE.ShaderMaterial({
+        vertexShader: POST_VERT,
+        fragmentShader: BLIT_FRAG,
+        uniforms: { tSrc: { value: null } },
+        depthTest: false,
+        depthWrite: false,
+      });
+      this.probeBlit.uniforms.tSrc.value = this.colorRT.texture;
+      // Its OWN quad, not the bloom one. The bloom quad is set up for reduced-size mip passes, and
+      // borrowing it put the probe image a pixel off from what post produces — which then reads as
+      // a registration difference between the two engines that does not exist in the real frames.
+      this.probeScene ??= (() => {
+        const scene = new THREE.Scene();
+        scene.add(new THREE.Mesh(this.screenQuad, this.probeBlit!));
+        return scene;
+      })();
+      renderer.setRenderTarget(null);
+      renderer.clear();
+      renderer.render(this.probeScene, this.postCamera);
+      return;
+    }
 
     // 4. Post — to the screen, unless a finish effect needs the composited frame as a texture.
     if (this.needsFinish()) {

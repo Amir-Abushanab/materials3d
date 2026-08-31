@@ -233,8 +233,9 @@ const blend = (a: Vec, b: Vec, t: Vec): Vec => TSL.mix(a, b, t);
  * is close on most of them, but it is NOT pixel-equal to the WebGL engine, which is the reference.
  *
  * `WEBGPU.md` in the repo root is the place to look: it carries the per-preset numbers, what is
- * known to differ (mostly the specular lobe) and what has already been ruled out, and — worth
- * reading before you trust a measurement — how the dev probes below mislead.
+ * known to differ (mostly the specular lobe), what has already been ruled out, and how to use the
+ * dev probes below — they bypass post, and there are two calibration probes whose job is to prove
+ * a crop is trustworthy before anything measured on it is believed.
  */
 export class NodeMaterialRenderer implements Engine {
   readonly canvas: HTMLCanvasElement;
@@ -338,6 +339,7 @@ export class NodeMaterialRenderer implements Engine {
   private frontDepthMaterial?: THREE.NodeMaterial;
   private plateSource?: Vec;
   private debugBlit?: THREE.NodeMaterial;
+  private debugColor?: THREE.NodeMaterial;
   private debugEnv?: THREE.NodeMaterial;
   private debugAlpha?: THREE.NodeMaterial;
   private backdrop?: THREE.Mesh;
@@ -1380,6 +1382,14 @@ export class NodeMaterialRenderer implements Engine {
         ndvP: vec3(ndv),
         viewV: view.mul(0.5).add(0.5),
         posW: TSL.positionWorld.mul(2).add(0.5),
+        // CALIBRATION — see the GLSL twin. Both engines must return exactly this.
+        calib: vec3(0.25, 0.5, 0.75),
+        // See the GLSL twin: the lobe's argument, before the exponent.
+        dotKey: vec3(mirror.dot(KEY).max(0)),
+        // See the GLSL twin: a VARYING quantity that must be identical, so the difference it shows
+        // is the instrument's floor. `calib` is constant and cannot expose interpolation, MSAA
+        // resolve or target precision; this can. x only — y carries a flip between the two.
+        rampX: vec3(TSL.screenCoordinate.x.div(1000)),
       };
       // `plate:<name>` substitutes on BOTH passes and pairs with the plate dump in `draw`, which is
       // how a plate-pass intermediate is inspected — the main pass would otherwise overwrite it.
@@ -2745,6 +2755,28 @@ export class NodeMaterialRenderer implements Engine {
       await this.quad.blit(this.renderer, this.debugBlit, null);
       return;
     }
+    // ANY OTHER PROBE IS A MATERIAL INTERMEDIATE, substituted into the main pass — so blit the
+    // colour target straight to the screen rather than composing it.
+    //
+    // Post is not a window onto what the material computed: tone mapping, bloom, haze, vignette and
+    // grain are all non-linear, so a probe pushed through them is a different number — one that
+    // saturates, that shifts by a constant, and that answers identically for two different probes
+    // wherever the shape covers little of the frame. Reading probes through post is the single most
+    // effective way to misread this tool. The WebGL engine bypasses post at the same point, so the
+    // two stay comparable.
+    if (dump) {
+      // NO V-FLIP, unlike the `plate`/`back` dumps above. Those exist to be LOOKED at, and flip so
+      // a human sees the target upright. This one exists to be DIFFED against the WebGL engine's
+      // bypass, which blits through `vUvIn` unflipped — so a flip here mirrors every probe against
+      // its twin. It shows up as a sign flip in any y-bearing quantity and as nothing at all in a
+      // constant, which is why the calibration probe cannot catch it.
+      this.debugColor ??= passMaterial(
+        vec4(TSL.texture(t.color.texture, TSL.vec2(uv().x, TSL.float(1).sub(uv().y))).rgb, 1),
+      );
+      await this.quad.blit(this.renderer, this.debugColor, null);
+      return;
+    }
+
     // 4. Post — to the screen.
     // 5. Post, and then the FINISH pass if any of its effects is on. When none is — the usual
     //    case — post draws straight to the screen and the extra target is never touched.

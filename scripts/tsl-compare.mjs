@@ -44,6 +44,15 @@ const outDir = flag("out", "/tmp");
  * misread this tool, and it produced several confident wrong conclusions before it was noticed.
  */
 const at = flag("at", "");
+/**
+ * Shift the TSL image by `dx,dy` pixels before diffing.
+ *
+ * The two engines do not rasterize to the same pixel grid — measured with a flat probe, the node
+ * engine's silhouette sits one pixel left of the WebGL engine's. That misregistration inflates
+ * every whole-frame number on its own, independently of any shading difference, so it is worth
+ * being able to subtract it and see what is left. `--shift 1,0` is the measured offset.
+ */
+const shift = flag("shift", "");
 /** Raw channel triple, as fractions of full scale. */
 const fmt = (v) => `(${v.map((n) => (n / 255).toFixed(3)).join(", ")})`;
 /** How many frames to render before capturing. Two by default, so a first-frame bake settles. */
@@ -96,7 +105,19 @@ page.on("console", (m) => {
 await page.goto(url);
 
 const result = await page.evaluate(
-  async ([base, sceneArg, w, h, probeName, cropSpec, label, atSpec, frameCount, runLoop]) => {
+  async ([
+    base,
+    sceneArg,
+    w,
+    h,
+    probeName,
+    cropSpec,
+    label,
+    atSpec,
+    frameCount,
+    runLoop,
+    shiftSpec,
+  ]) => {
     const gl = await import(base + "bundle.js");
     const { NodeMaterialRenderer } = await import(base + "dist/renderer/NodeMaterialRenderer.js");
     const host = document.getElementById("host");
@@ -142,6 +163,9 @@ const result = await page.evaluate(
       "ndvP",
       "viewV",
       "posW",
+      "calib",
+      "dotKey",
+      "rampX",
     ];
     globalThis["__glslProbe"] = Math.max(0, GLSL_PROBES.indexOf(probeName));
     const a = new gl.MaterialRenderer(host, cfg, {
@@ -173,7 +197,17 @@ const result = await page.evaluate(
     // Read inline rather than through a helper: this callback is serialized into the page, so it
     // can only reference what it declares itself.
     const A = glCanvas.getContext("2d").getImageData(0, 0, glCanvas.width, glCanvas.height).data;
-    const B = tslCanvas.getContext("2d").getImageData(0, 0, tslCanvas.width, tslCanvas.height).data;
+    let B = tslCanvas.getContext("2d").getImageData(0, 0, tslCanvas.width, tslCanvas.height).data;
+    if (shiftSpec) {
+      // Redraw the TSL image offset by (dx, dy) and read it back, so the diff below compares the
+      // two grids after registration rather than across a one-pixel step.
+      const [dx, dy] = shiftSpec.split(",").map(Number);
+      const moved = document.createElement("canvas");
+      moved.width = tslCanvas.width;
+      moved.height = tslCanvas.height;
+      moved.getContext("2d").drawImage(tslCanvas, dx, dy);
+      B = moved.getContext("2d").getImageData(0, 0, moved.width, moved.height).data;
+    }
     const diff = document.createElement("canvas");
     diff.width = glCanvas.width;
     diff.height = glCanvas.height;
@@ -230,7 +264,7 @@ const result = await page.evaluate(
       samples,
     };
   },
-  [url, scene, width, height, probe, crop, gl_label(scene), at, frames, loop],
+  [url, scene, width, height, probe, crop, gl_label(scene), at, frames, loop, shift],
 );
 
 console.log(result.stats);

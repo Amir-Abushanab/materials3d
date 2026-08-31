@@ -27,52 +27,51 @@ Whole-frame mean absolute difference against the WebGL engine, over the eight ga
 
 | preset    | mean\|d\| | preset    | mean\|d\| |
 | --------- | --------: | --------- | --------: |
-| reactions |      0.49 | staircase |      2.91 |
-| assembly  |      1.14 | cascade   |      7.60 |
-| materials |      1.57 | skewer    |      8.02 |
-| slimes    |      2.73 | prism     |     16.31 |
+| reactions |      0.42 | staircase |      2.91 |
+| assembly  |      1.14 | skewer    |      5.33 |
+| materials |      1.57 | cascade   |      6.88 |
+| slimes    |      2.54 | prism     |     10.86 |
 
 Reproduce with `node scripts/tsl-compare.mjs <preset>`, which renders the same scene through both
 engines and writes `compare-<preset>-{glsl,tsl,diff}.png`.
 
 ## What is known to differ
 
-**The bevels and other sub-pixel geometry.** The two rasterizers disagree by about one pixel of
-coverage at a silhouette. Interiors agree exactly — on a validated interior crop of the prism every
-material probe (world position, view vector, mirror vector, N·V, the specular lobe's argument and
-the lobe itself) reads a difference of exactly **zero**. What is left on `prism` is concentrated in
-a thin bright ring on the bevel, a sub-pixel-wide band of steeply-angled faces.
+**The value-noise hash, and this one is not fixable as written.** Both engines use the classic
+`fract(sin(dot(p, k)) * 43758.5453)`. `sin` of a large argument differs by a few ULPs between the
+WebGL and WebGPU backends, and that multiply amplifies the difference into an unrelated value. It
+shows as a faint diagonal weave over any `wall` backdrop and costs about 4 on the `wallM` probe.
+Making it deterministic would take an integer hash, which would change the wall's texture in both
+engines for no correctness gain.
 
-**The wall backdrop's shading**, in `wall` mode — `prism` and `cascade`. Both engines now receive
-identical wall uniforms, so this is a difference in the shader itself, not in what feeds it. It is
-not the relief: zeroing both relief scales in both engines halves the backdrop-only difference but
-does not touch the prism case. `wallShade` and `footprintDistance` have no parity case yet, which is
-the obvious next step.
+**Post amplifies whatever reaches it.** On `prism`, 10.86 with post on against about 1 for the body
+with it off. Post is not adding error of its own — the bloom and tone-map passes are parity-clean —
+it is magnifying a small input difference. Fixing inputs is what moves this number.
 
-**Post amplifies whatever reaches it.** On `prism`, 11.92 with post on against 4.41 with it off,
-spread across bloom (~2.7) and the tone map (~3.7) rather than concentrated in one term.
+**The beam** contributes about 3 on `prism`. Not investigated.
 
-**`skewer` has a residual that has not been attributed to anything.** None of the three fixes so
-far touched it: it has no camera bindings, no wall, and no `positionY` binding racing a motion — so
-it is a fourth cause. The obvious place to start is that it is the one preset built entirely from
-rods.
+### Cautionary tales
 
-### Two cautionary tales
+Every one of these was stated confidently, with evidence, and was wrong.
 
-**It was not the specular lobe**
+**It was not the specular lobe.** It differed threefold and `specular: 0` made the engines agree.
+That was a symptom: the WebGL engine captured from a camera displaced by an interaction binding,
+and `pow(dot(...), 40)` turns a degree of arc into a factor of three. Fixing the camera collapsed
+the lobe difference to exactly zero, along with every other material intermediate.
 
-An earlier version of this page blamed the specular lobe, on good evidence: it differed threefold,
-and `specular: 0` made the two engines agree. That was a symptom. The cause was that the WebGL
-engine captured from a camera displaced by an interaction binding, and `pow(dot(...), 40)` turns a
-degree of arc into a factor of three. Fixing the camera collapsed the lobe difference to exactly
-zero — along with every other material intermediate. Worth remembering when the next "obviously it
-is term X" presents itself.
+**`staircase` was not a shading difference.** It read as one across a third of the frame and every
+shading probe agreed. The cause was this engine applying interaction bindings BEFORE motions rather
+than after, so every shape sat a tenth of a unit from where the other engine put it. A pose error
+disguised as a shading error, because the measured optical path reads the pose.
 
-**And `staircase` was not a shading difference at all.** It read as one across a third of the frame,
-and every shading probe agreed: the optical path differed, and so did everything downstream of it.
-The cause was that this engine applied interaction bindings BEFORE motions rather than after, so
-every shape sat about a tenth of a unit from where the other engine put it. A pose error, arriving
-entirely disguised as a shading error, because the measured optical path reads the pose.
+**`prism`'s residual was not sub-pixel bevel coverage.** It looked exactly like it — a thin bright
+ring on a sub-pixel-wide band of steeply angled faces. It is byte-identical at 450, 900 and 1800
+pixels wide, which no coverage artefact would be. It was the contact shadow, from a nested `Loop`.
+
+The pattern worth carrying: a difference in term X usually means an input to X is wrong somewhere
+upstream, and the term that _looks_ responsible is the one that amplifies rather than the one that
+causes. Bisect toward the inputs, and check resolution dependence before believing anything about
+rasterisation.
 
 ## What has been ruled out
 

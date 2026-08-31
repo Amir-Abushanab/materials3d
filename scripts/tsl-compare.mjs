@@ -169,6 +169,9 @@ const result = await page.evaluate(
       "camP",
       "viewLen",
       "camErr",
+      "thick",
+      "duv",
+      "normal",
     ];
     globalThis["__glslProbe"] = Math.max(0, GLSL_PROBES.indexOf(probeName));
     const a = new gl.MaterialRenderer(host, cfg, {

@@ -895,6 +895,17 @@ export const GLASS_FRAG = /* glsl */ `
       // The camera against what the scene ASKED for, amplified. Reads flat 0.5 if the uniform
       // holds exactly the authored position; anything else is visible at 8x.
       else if (uProbe > 30.5 && uProbe < 31.5) dbg = (uCam - vec3(0.0, 0.0, 1.25)) * 8.0 + 0.5;
+      // The MEASURED thickness itself, at a scale that can actually resolve it. backZ and viewZ are
+      // each around 7 world units and their difference is under one, so a probe scaled for the
+      // absolute depths quantises the interesting quantity into nothing.
+      // The UV the back-depth fetch actually uses. This engine projects; the node engine reads
+      // screenUV, and those are not the same convention — worth being able to see.
+      // The shading normal, so N and V can be compared separately when ndv disagrees.
+      else if (uProbe > 33.5 && uProbe < 34.5) dbg = N * 0.5 + 0.5;
+      else if (uProbe > 32.5 && uProbe < 33.5)
+        dbg = vec3(clamp((vProj.xy / vProj.w) * 0.5 + 0.5, vec2(0.0), vec2(1.0)), 0.0);
+      else if (uProbe > 31.5 && uProbe < 32.5)
+        dbg = vec3(max(dec(texture2D(tBack, clamp((vProj.xy / vProj.w) * 0.5 + 0.5, vec2(0.0), vec2(1.0))).rg) * FAR - vVZ, 0.0) / 2.0);
       else dbg = vec3(0.5);   // a constant, for comparing the two output paths alone
       gl_FragColor = vec4(dbg, 1.0);
       return;

@@ -1399,6 +1399,12 @@ export class NodeMaterialRenderer implements Engine {
           .sub(vec3(0, 0, 1.25))
           .mul(8)
           .add(0.5),
+        // See the GLSL twin: the measured thickness at a scale that can resolve it. backZ and viewZ
+        // are each around 7 world units and their difference is under one, so a probe scaled for
+        // the absolute depths quantises the interesting quantity away.
+        thick: vec3(backZ.sub(viewZ).max(0).div(2)),
+        // See the GLSL twin: the UV the back-depth fetch uses.
+        duv: vec3(screenUv.x, screenUv.y, 0),
       };
       // `plate:<name>` substitutes on BOTH passes and pairs with the plate dump in `draw`, which is
       // how a plate-pass intermediate is inspected — the main pass would otherwise overwrite it.
@@ -2637,22 +2643,29 @@ export class NodeMaterialRenderer implements Engine {
     }
     // The bindings write into live uniforms, so they run before anything reads them. Also seeds
     // the beam's wanted incidence/entry, which the retrace below consults.
-    this.applyInteraction();
-    this.retraceBeamIfMoved();
-    this.updateCamera();
-    // A `timeOffset` binding scrubs the clock that the motions and the ripple read — as a DELTA,
-    // so the authored timeline is untouched and removing the binding restores it.
+    // MOTIONS FIRST, BINDINGS SECOND. The order is load-bearing and it is the WebGL engine's:
+    // `ITEM_APPLIERS.positionY` writes `mesh.position.y` directly, so whichever runs last owns that
+    // component. Running the bindings after means a bound axis wins over a drift on the same axis,
+    // which is what a scene asking for both is asking for. Running them first — as this engine did
+    // — means the drift wins and the binding is silently inert at rest.
+    //
+    // It shows up as a POSE difference, not as anything that looks like a binding problem: on
+    // `staircase`, where every one of the twenty shapes binds `positionY` to scroll and also
+    // drifts, each shape sat about a tenth of a unit off from where the WebGL engine put it, and
+    // that fed straight into the measured optical path and out into the colour.
+    //
+    // Both engines drive the motions on the PREVIOUS frame's `interactionTime`, because that is
+    // what `applyInteraction` has produced by this point in the frame. A `timeOffset` binding
+    // scrubs the clock as a DELTA, so the authored timeline is untouched and removing it restores.
     this.timeUniform.value = this.time + this.interactionTime;
-    // Per-item motion, from the SAME module the WebGL engine drives. It reads and writes only the
-    // mesh and the authored pose, so the two engines animate identically rather than by two
-    // implementations that agree until they do not. Every item carries a `phase`, so even a frame
-    // at time zero is posed — leaving this out gave the node engine a visibly different LAYOUT,
-    // not just a different animation.
     applyMotions(
       this.items as unknown as MaterialItem[],
       this.time + this.interactionTime,
       this.config.loopSeconds,
     );
+    this.applyInteraction();
+    this.retraceBeamIfMoved();
+    this.updateCamera();
     // The traced planes are world-space, so they follow the pose and have to be recomputed after it.
     for (const entry of this.items) this.applyPrismPlanes(entry);
     // The wall's contact shadows follow the poses too.

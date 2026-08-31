@@ -69,7 +69,7 @@ import {
   type ItemApplyArgs,
   type SceneApplyArgs,
 } from "./interaction";
-import { applyMotions } from "./motions";
+import { applyMotions, loopFrequency } from "./motions";
 import {
   aimBeam,
   aimBeamAtAngle,
@@ -87,6 +87,7 @@ import {
   depthPass,
   platePass,
   prismExit,
+  rippleNormal,
 } from "./nodes/glass";
 import { glitter, thinFilm } from "./nodes/brdf";
 import { shadeOpaque } from "./nodes/opaque";
@@ -150,10 +151,6 @@ interface UniformCell {
  * authored base, how a value is clamped — are exactly the kind of thing that drifts if written
  * twice, and a scene whose reactions behave differently depending on the engine is worse than one
  * that has none. So the names are adapted here rather than the table being duplicated.
- *
- * `uRipple` has no counterpart: the liquid ripple is not ported to this engine yet, and a binding
- * that targets it would otherwise throw on a missing uniform. It is given an inert cell so the
- * rest of a scene's reactions still work — see the note in `buildItemMaterial`.
  */
 const bindingUniforms = (
   u: Record<string, ReturnType<typeof uniform>>,
@@ -169,7 +166,7 @@ const bindingUniforms = (
   uEmis: u.emission,
   uIrid: u.iridescence,
   uFilm: u.filmNm,
-  uRipple: { value: 0 },
+  uRipple: u.ripple,
 });
 
 /** Plane slots per traced solid. Matches the GLSL `uPrismPlanes[6]` — see `buildItemMaterial`. */
@@ -1007,6 +1004,11 @@ export class NodeMaterialRenderer implements Engine {
       filmNm: uniform(m.filmNm),
       sparkle: uniform(m.sparkle),
       sparkleScale: uniform(m.sparkleScale),
+      ripple: uniform(m.ripple),
+      rippleScale: uniform(m.rippleScale),
+      // Snapped to whole cycles over the loop, exactly as motion rates are, so the water in a
+      // recorded clip closes on itself along with everything else.
+      flowRate: uniform(loopFrequency(m.flow, this.config.loopSeconds)),
       hueShift: uniform(m.hueShift),
       tint: uniform(vec3(...rgb(m.tint || "#ffffff"))),
       useTint: uniform(m.tint ? 1 : 0),
@@ -1053,7 +1055,22 @@ export class NodeMaterialRenderer implements Engine {
     // outside one they warn per node and silently drop the assignment — which renders as a shape
     // that is mysteriously missing everything after its first mutable local.
     material.fragmentNode = Fn(() => {
-      const normal = TSL.normalWorld;
+      // LIQUID perturbs the surface before anything reads it — Fresnel, refraction and the
+      // reflection all have to see the same water. Branched in JavaScript rather than on a uniform
+      // because a material's KIND cannot change without rebuilding this graph anyway, and the
+      // ripple is four cosines every scene would otherwise pay for. No `> 0.001` gate: at zero
+      // amplitude the expression returns the normal unchanged, so the gate would only buy speed on
+      // a shape that already declared itself liquid.
+      const normal: Vec =
+        kindIndex === MATERIAL_KINDS.indexOf("liquid")
+          ? rippleNormal(
+              TSL.normalWorld,
+              TSL.positionWorld,
+              this.timeUniform.mul(u.flowRate),
+              u.rippleScale,
+              u.ripple,
+            )
+          : TSL.normalWorld;
       // `.toVar()` HERE IS LOAD-BEARING, not a readability choice.
       //
       // TSL emits a node's assignment wherever it is FIRST BUILT, and building is driven by walking
@@ -1151,22 +1168,30 @@ export class NodeMaterialRenderer implements Engine {
       // own frame, displaced in screen space — which is what lets glass refract other glass. The
       // displacement is RIM-WEIGHTED: a near-flat window in the middle, hard bending at the edge.
       // Uniform displacement reads as frosted; edge-loaded displacement reads as cut.
-      // V FLIPPED, for the same reason the post pass flips its source: a render-target texture
-      // comes back with the opposite vertical orientation to the one screen uv walks. Sampling it
-      // unflipped makes glass refract a mirrored copy of the frame, which reads as the shapes
-      // being oddly dark rather than as anything obviously upside down.
-      // NO VERTICAL FLIP. `screenUV` is top-down on both backends, and that is already the
+      // NO VERTICAL FLIP ON THE UV. `screenUV` is top-down on both backends — three builds it from
+      // a fragment coordinate it flips "to follow webgpu standards" — and that is already the
       // orientation a render target stores, so this samples the plate and the depth target
       // directly. The post pass DOES flip, and the two are not in conflict: it reads through a
       // full-screen quad's `uv()`, which runs bottom-up, so it needs the opposite correction.
       //
-      // Flipping here made every shape refract a vertically mirrored copy of the frame. On a tall
-      // rod that is nearly invisible — the mirror of a vertical cylinder is a vertical cylinder —
-      // which is why it survived: it only shows on a scene whose depth varies strongly up the
-      // frame. On `staircase` it was worth 28 of the 42 levels of difference from the WebGL engine.
+      // Flipping the UV here made every shape refract a vertically mirrored copy of the frame. On
+      // a tall rod that is nearly invisible — the mirror of a vertical cylinder is a vertical
+      // cylinder — which is why it survived: it only shows on a scene whose depth varies strongly
+      // up the frame. On `staircase` it was worth 28 of the 42 levels of difference from WebGL.
+      //
+      // WHICH IS EXACTLY WHY THE OFFSET BELOW IS NEGATED IN Y, and that is not a second flip
+      // undoing the first. The UV is top-down; a view-space normal and an `ndc * 0.5 + 0.5` hit
+      // are both y-UP. Adding a y-up displacement to a top-down coordinate walks the sample the
+      // wrong way up the frame. The GLSL engine never has to think about this because its `suv`
+      // comes from `vProj * 0.5 + 0.5` and is y-up too, so both of its terms already agree.
+      //
+      // The symptom was not a mirrored image — it was CHEVRONS down every rod. A sample sent the
+      // wrong way lands on nearer geometry, the depth guard below correctly rejects it, and the
+      // fragment falls back to clear glass. So a coordinate-convention bug surfaced as bright
+      // triangular banding, and looked for a long time like a tolerance being too tight.
       const screenUv: Vec = TSL.vec2(TSL.screenUV.x, TSL.screenUV.y);
       const viewNormal: Vec = TSL.normalView;
-      const lensOffset = TSL.vec2(viewNormal.x.div(this.aspect), viewNormal.y)
+      const lensOffset = TSL.vec2(viewNormal.x.div(this.aspect), viewNormal.y.negate())
         .mul(u.lens)
         .mul(TSL.float(1).sub(ndv).pow(1.35))
         .mul(3.4);
@@ -1178,17 +1203,18 @@ export class NodeMaterialRenderer implements Engine {
       // surface curves smoothly and whose exit is roughly opposite its entry; on a faceted solid
       // it is not, because the refracted ray can leave through a different face entirely.
       //
-      // `screenUv` and the projected hit are in the same convention and no flip is needed between
-      // them: `screenUV` is top-down on both backends, the `1 -` above makes it y-up, and y-up is
-      // what `ndc * 0.5 + 0.5` gives. The offset is a DIFFERENCE of two points in that one space,
-      // so it stays correct however the plate texture itself happens to be oriented.
+      // The projected hit needs converting to `screenUv`'s convention first — see the note above.
       const inside = bendDir(view, normal, TSL.float(1).div(u.ior.max(1))).toVar();
       const hitT = prismExit(planeArray, u.planeCount)(TSL.positionWorld, inside).toVar();
       const hit = TSL.positionWorld.add(inside.mul(hitT));
       const clip = TSL.cameraProjectionMatrix.mul(TSL.cameraViewMatrix).mul(vec4(hit, 1));
       const hitUv = clip.xy.div(clip.w.max(1e-5)).mul(0.5).add(0.5);
       const traced: Vec = u.prism.greaterThan(0.5).and(hitT.greaterThan(0));
-      const offset = select(traced, hitUv.sub(screenUv), lensOffset);
+      // Into `screenUv`'s convention before the subtraction, for the reason above: `hitUv` is y-up
+      // and the offset has to come out top-down. Subtracting the two straight would leave the
+      // traced branch with the same wrong-way displacement the lens branch had.
+      const hitUvTopDown = TSL.vec2(hitUv.x, TSL.float(1).sub(hitUv.y));
+      const offset = select(traced, hitUvTopDown.sub(screenUv), lensOffset);
 
       const plateUv = screenUv.add(offset).clamp(0.002, 0.998);
       const smp: Vec = this.plateSampler().sample(plateUv);

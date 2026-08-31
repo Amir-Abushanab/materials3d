@@ -149,6 +149,31 @@ export const dielectricFresnel = Fn(([ior, facing]: [Vec, Vec]) => {
  * divide by nearly zero and sample somewhere arbitrarily far away, which reads as a shape smearing
  * the backdrop across itself at exactly the angles where it should be showing its own edge.
  */
+/**
+ * The liquid surface — the twin of GLASS_CHUNK's `rippleNormal`.
+ *
+ * Four travelling waves at incommensurate spatial frequencies and unrelated temporal ones. The
+ * point of four rather than scrolled noise is that a scrolled texture drifts in one direction and
+ * reads as a conveyor belt; crossing waves interfere, which is what water actually does. The
+ * frequencies do not share a common factor, so the pattern does not visibly repeat at the scale
+ * anyone looks at it.
+ *
+ * `phase` is `time * flowRate` with the rate already snapped to whole cycles over the loop on the
+ * CPU, so a recorded clip closes on itself along with the motion rather than jumping at the seam.
+ */
+export const rippleNormal = Fn(([n, p, phase, scale, amount]: [Vec, Vec, Vec, Vec, Vec]) => {
+  const k1 = vec3(1.0, 0.62, 0.31);
+  const k2 = vec3(-0.54, 1.13, 0.47);
+  const k3 = vec3(0.36, -0.82, 1.07);
+  const k4 = vec3(-1.18, -0.33, 0.72);
+  const g = k1
+    .mul(p.dot(k1).mul(scale).add(phase).cos())
+    .add(k2.mul(p.dot(k2).mul(scale).sub(phase.mul(2)).add(1.7).cos()).mul(0.65))
+    .add(k3.mul(p.dot(k3).mul(scale).add(phase.mul(3)).add(3.9).cos()).mul(0.42))
+    .add(k4.mul(p.dot(k4).mul(scale).sub(phase).add(2.6).cos()).mul(0.55));
+  return TSL.normalize(n.add(g.mul(amount).mul(0.16)));
+});
+
 export const backplate = (sampleLamps: Vec, planeZ: Vec, plateScale: Vec, plateOffset: Vec) =>
   Fn(([ro, rd]: [Vec, Vec]) => {
     const dz = rd.z.min(-0.04);

@@ -2139,9 +2139,13 @@ export class ControlPanel {
     // The ENGINE, not the backend: "webgpu" selects three's node renderer, which still falls back
     // to a WebGL backend where the browser has no WebGPU. Fetched on demand — it is a second three
     // build — so the first switch has a moment of load.
+    //
+    // Labelled EXPERIMENTAL in the option itself rather than only in the hint: the hint is a hover,
+    // and someone comparing two renders needs to know which one is the reference without going
+    // looking for it.
     f.addBinding(this.state, "renderer", {
       label: "engine",
-      options: { WebGL: "webgl", "WebGPU (TSL)": "webgpu" },
+      options: { WebGL: "webgl", "WebGPU (TSL) · experimental": "webgpu" },
     }).on("change", (event) => {
       // Not `structural()`: this replaces the renderer rather than rebuilding it, and the scene
       // config is untouched — so it must not run the usual change/history path.

@@ -4,6 +4,9 @@
 // `NodeMaterialRenderer` is deliberately NOT re-exported here: it is a SECOND three build, and
 // naming it in this barrel would pull `three/webgpu` into everything that imports the barrel. It
 // has its own subpath, `@materials3d/core/renderer-webgpu`, so reaching for it is a decision.
+//
+// That engine is EXPERIMENTAL. It is not pixel-equal to this one, which is the reference — see its
+// class doc for what differs and by how much.
 export {
   MaterialRenderer,
   expandScatter,

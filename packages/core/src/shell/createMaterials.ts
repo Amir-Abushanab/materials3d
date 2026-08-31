@@ -29,6 +29,7 @@ export type MaterialState = "poster" | "loading" | "running" | "fallback";
 type CoreModule = typeof import("../core-loader");
 
 /** Which engine build to fetch. */
+/** `"webgpu"` selects the EXPERIMENTAL node/TSL engine — see `MaterialOptions.renderer`. */
 export type RendererKind = "webgl" | "webgpu";
 
 /**
@@ -81,6 +82,12 @@ export interface MaterialOptions<R extends RendererKind = "webgl"> {
   onStateChange?(state: MaterialState): void;
   /**
    * Which engine to fetch. Default `"webgl"`.
+   *
+   * `"webgpu"` is EXPERIMENTAL. It renders every preset and agrees closely with the WebGL engine
+   * on most of them, but it is not pixel-equal and the gap is not uniform — see the note on
+   * `NodeMaterialRenderer` for what is known to differ and by how much. Treat WebGL as the
+   * reference for anything that has to match a design, and check a scene on both before shipping
+   * it through this one.
    *
    * `"webgpu"` fetches a SEPARATE build — three's node renderer and TSL — and is the only way to
    * reach a WebGPU backend. It is opt-in rather than automatic because the two engines are

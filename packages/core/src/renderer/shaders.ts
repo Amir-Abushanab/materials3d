@@ -707,6 +707,7 @@ export const GLASS_FRAG = /* glsl */ `
     float tracedPath = -1.0;
     // Hoisted for the dev probe below; the guard and the plate's stored depth are the two values
     // worth comparing against the node engine, and both are otherwise local to this block.
+    float dbgLobe = 0.0;
     float dbgGuard = 0.0;
     float dbgPlateA = 0.0;
     vec2 dbgOff = vec2(0.0);
@@ -822,6 +823,7 @@ export const GLASS_FRAG = /* glsl */ `
     // 30 did not rescue them, because the term it multiplies was exactly zero.
     vec3 spec = reflect(-V, N);
     float lobe = pow(max(dot(spec, KEY), 0.0), 40.0) + 0.55 * pow(max(dot(spec, KEY_FILL), 0.0), 40.0);
+    dbgLobe = lobe;
     col += lobe * uSpec * mix(vec3(1.0), film, uIrid);
 
     // GLITTER — a field of tiny mirrors embedded in the surface. Each cell gets its own normal,
@@ -869,6 +871,11 @@ export const GLASS_FRAG = /* glsl */ `
       // way the raw depths do — those run to FAR on any backdrop pixel.
       else if (uProbe > 17.5 && uProbe < 18.5) dbg = vec3((dbgPlateA - vVZ + 16.0) / 32.0);
       else if (uProbe > 18.5 && uProbe < 19.5) dbg = vec3(dbgOff.x * 5.0 + 0.5, dbgOff.y * 5.0 + 0.5, 0.5);
+      else if (uProbe > 20.5 && uProbe < 21.5) dbg = vec3(dbgLobe);
+      else if (uProbe > 21.5 && uProbe < 22.5) dbg = reflect(-V, N) * 0.5 + 0.5;
+      else if (uProbe > 22.5 && uProbe < 23.5) dbg = vec3(ndv);
+      else if (uProbe > 23.5 && uProbe < 24.5) dbg = V * 0.5 + 0.5;
+      else if (uProbe > 24.5 && uProbe < 25.5) dbg = vW * 2.0 + 0.5;
       else dbg = vec3(0.5);   // a constant, for comparing the two output paths alone
       gl_FragColor = vec4(dbg, 1.0);
       return;

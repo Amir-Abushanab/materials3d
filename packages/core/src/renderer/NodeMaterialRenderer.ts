@@ -1054,6 +1054,7 @@ export class NodeMaterialRenderer implements Engine {
     // The whole graph lives inside an `Fn`. TSL's `toVar`/`assign` need a stack to write into, and
     // outside one they warn per node and silently drop the assignment — which renders as a shape
     // that is mysteriously missing everything after its first mutable local.
+    let probeLobe: Vec;
     material.fragmentNode = Fn(() => {
       // LIQUID perturbs the surface before anything reads it — Fresnel, refraction and the
       // reflection all have to see the same water. Branched in JavaScript rather than on a uniform
@@ -1306,7 +1307,9 @@ export class NodeMaterialRenderer implements Engine {
         .dot(KEY)
         .max(0)
         .pow(40)
-        .add(mirror.dot(KEY_FILL).max(0).pow(40).mul(0.55));
+        .add(mirror.dot(KEY_FILL).max(0).pow(40).mul(0.55))
+        .toVar();
+      probeLobe = lobe;
       col.addAssign(lobe.mul(u.spec).mul(blend(vec3(1), film, u.iridescence)));
 
       // GLITTER, for the one kind that asks for it — a field of tiny mirrors, only the few facing
@@ -1361,6 +1364,11 @@ export class NodeMaterialRenderer implements Engine {
         base,
         lit,
         trans: vec3(trans),
+        lobe: vec3(probeLobe),
+        mirrorV: mirror.mul(0.5).add(0.5),
+        ndvP: vec3(ndv),
+        viewV: view.mul(0.5).add(0.5),
+        posW: TSL.positionWorld.mul(2).add(0.5),
       };
       // `plate:<name>` substitutes on BOTH passes and pairs with the plate dump in `draw`, which is
       // how a plate-pass intermediate is inspected — the main pass would otherwise overwrite it.

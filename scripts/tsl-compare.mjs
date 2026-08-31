@@ -166,6 +166,9 @@ const result = await page.evaluate(
       "calib",
       "dotKey",
       "rampX",
+      "camP",
+      "viewLen",
+      "camErr",
     ];
     globalThis["__glslProbe"] = Math.max(0, GLSL_PROBES.indexOf(probeName));
     const a = new gl.MaterialRenderer(host, cfg, {

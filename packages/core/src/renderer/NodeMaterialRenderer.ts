@@ -1390,6 +1390,14 @@ export class NodeMaterialRenderer implements Engine {
         // is the instrument's floor. `calib` is constant and cannot expose interpolation, MSAA
         // resolve or target precision; this can. x only — y carries a flip between the two.
         rampX: vec3(TSL.screenCoordinate.x.div(1000)),
+        // See the GLSL twins: V's two inputs, separately.
+        camP: TSL.cameraPosition.div(4).add(0.5),
+        viewLen: vec3(TSL.cameraPosition.sub(TSL.positionWorld).length().div(4)),
+        // See the GLSL twin: the camera against the authored position, at 8x.
+        camErr: TSL.cameraPosition
+          .sub(vec3(0, 0, 1.25))
+          .mul(8)
+          .add(0.5),
       };
       // `plate:<name>` substitutes on BOTH passes and pairs with the plate dump in `draw`, which is
       // how a plate-pass intermediate is inspected — the main pass would otherwise overwrite it.

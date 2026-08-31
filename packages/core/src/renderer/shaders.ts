@@ -888,6 +888,13 @@ export const GLASS_FRAG = /* glsl */ `
       // instrument's floor for a non-constant quantity, and nothing smaller can be attributed.
       // (No backticks in this file: it is one big template literal, and they end it.)
       else if (uProbe > 27.5 && uProbe < 28.5) dbg = vec3(gl_FragCoord.x / 1000.0);
+      // The two inputs to V, separately: the camera, and the distance to the surface. If V
+      // disagrees by more than the position does, one of these is not what it is assumed to be.
+      else if (uProbe > 28.5 && uProbe < 29.5) dbg = uCam / 4.0 + 0.5;
+      else if (uProbe > 29.5 && uProbe < 30.5) dbg = vec3(length(uCam - vW) / 4.0);
+      // The camera against what the scene ASKED for, amplified. Reads flat 0.5 if the uniform
+      // holds exactly the authored position; anything else is visible at 8x.
+      else if (uProbe > 30.5 && uProbe < 31.5) dbg = (uCam - vec3(0.0, 0.0, 1.25)) * 8.0 + 0.5;
       else dbg = vec3(0.5);   // a constant, for comparing the two output paths alone
       gl_FragColor = vec4(dbg, 1.0);
       return;

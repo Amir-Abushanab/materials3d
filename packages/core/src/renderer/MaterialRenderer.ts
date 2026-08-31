@@ -3037,10 +3037,24 @@ export class MaterialRenderer implements Engine {
   async captureImage(mime = "image/webp", quality?: number, time?: number): Promise<Blob> {
     const previousTime = this.time;
     this.capturing = true;
-    // Strip the live interaction scrub/zoom BEFORE the camera is posed for the capture frame;
+    // Strip the live interaction state BEFORE the camera is posed for the capture frame;
     // applyInteractionRest handles the uniforms, but the camera is set in seek(), earlier.
+    //
+    // THE ORBIT PAIR BELONGS HERE TOO, and leaving it out was a real bug: `updateCamera` reads
+    // `orbitYaw`/`orbitPitch` straight out of the out-params, so a capture was taken from wherever
+    // the last live frame had swung the camera. On a scene that binds `cameraYaw` this is not a
+    // small error and it is not zero at rest — before any pointer arrives the sources read 0, not
+    // their midpoint, so `prism` captured from a camera swung to the binding's `from` end: -3.5
+    // degrees of yaw and -3 of pitch. Every poster and every export of such a scene was framed
+    // from a position the config never asked for.
+    //
+    // It stayed hidden because it moves the camera by about a degree of arc, which is invisible in
+    // anything except a specular highlight — where `pow(dot(...), 40)` turns it into a factor of
+    // three, and which is exactly how it was eventually found.
     this.interactionTime = 0;
     this.interactionZoom = 1;
+    this.interactionSceneOut.orbitYaw = 0;
+    this.interactionSceneOut.orbitPitch = 0;
     try {
       if (time === undefined) this.renderOnce();
       else this.seek(time);

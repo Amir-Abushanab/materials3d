@@ -10,6 +10,12 @@ import { clamp, clamp01 } from "../util/math";
  *  breaks at `lamps.length`, so unused slots cost nothing at runtime. */
 export const MAX_LAMPS = 12;
 
+/** Grounded-footprint slots the wall's contact shadow walks, and the most sides one may have.
+ *  Shared: the GLSL engine injects them as `#define`s, the node graph unrolls to them, and the
+ *  parity harness needs the same numbers to compile the chunk on its own. */
+export const GROUND_SLOTS = 4;
+export const GROUND_MAX_SIDES = 8;
+
 /** Camera far plane, and the divisor for the packed linear-depth encoding. Everything the depth
  *  pass writes is `viewZ / FAR`, so this constant is baked into both shaders and must match. */
 export const FAR = 95;

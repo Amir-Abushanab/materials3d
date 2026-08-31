@@ -34,6 +34,8 @@ import {
   type MotionConfig,
   type PostConfig,
   type ScatterConfig,
+  GROUND_MAX_SIDES,
+  GROUND_SLOTS,
 } from "../config/model";
 import type { Engine } from "../engine";
 import { parseHex } from "../util/color";
@@ -590,7 +592,7 @@ export class MaterialRenderer implements Engine {
       fragmentShader: BACKDROP_FRAG,
       // Compile-time bounds: GLSL ES 1.00 wants constant loop limits, and a wall scene has no
       // reason to stand in front of more than a handful of solids.
-      defines: { GROUND_SLOTS: "4", GROUND_MAX_SIDES: "8" },
+      defines: { GROUND_SLOTS: `${GROUND_SLOTS}`, GROUND_MAX_SIDES: `${GROUND_MAX_SIDES}` },
       depthWrite: true,
     });
     this.backdrop = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), this.backdropMaterial);

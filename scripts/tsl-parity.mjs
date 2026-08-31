@@ -85,6 +85,8 @@ const results = await page.evaluate(
     // happened to `valueNoise`: its twin here defined a sine hash, the engine used Hoskins', and
     // the case passed for months while the wall rendered a different texture in each engine.
     const shaders = await import(base + "dist/renderer/shaders.js");
+    // The shared GROUND_* counts, so the chunk compiles here with the same bounds it ships with.
+    const model = await import(base + "dist/config/model.js");
 
     const SIZE = 256;
     const TEX = 128;
@@ -280,6 +282,50 @@ const results = await page.evaluate(
         ${shaders.NOISE_CHUNK}
         void main(){ gl_FragColor = vec4(vec3(valueNoise(vUvIn * 9.0)), 1.0); }`,
         tsl: () => TSL.vec4(TSL.vec3(nodes.valueNoise(TSL.uv().mul(9))), 1),
+      },
+      // The wall's footprint maths, against the REAL chunk. `footprintDistance` reads
+      // `uWallGrounding`, and a plain global stands in for the uniform.
+      softMax: {
+        glsl: `
+        #define GROUND_MAX_SIDES ${model.GROUND_MAX_SIDES}
+        float uWallGrounding = 0.85;
+        ${shaders.FOOTPRINT_CHUNK}
+        void main(){
+          gl_FragColor = vec4(vec3(softMax(vUvIn.x - 0.5, 0.2, 0.05 + vUvIn.y * 0.4) + 0.5), 1.0);
+        }`,
+        tsl: () =>
+          TSL.vec4(
+            TSL.vec3(
+              nodes
+                .softMax(TSL.uv().x.sub(0.5), TSL.float(0.2), TSL.uv().y.mul(0.4).add(0.05))
+                .add(0.5),
+            ),
+            1,
+          ),
+      },
+      footprintDistance: {
+        glsl: `
+        #define GROUND_MAX_SIDES ${model.GROUND_MAX_SIDES}
+        float uWallGrounding = 0.85;
+        ${shaders.FOOTPRINT_CHUNK}
+        void main(){
+          vec4 g = vec4(0.5, 0.5, 0.18, 3.0);
+          gl_FragColor = vec4(vec3(footprintDistance(vUvIn, g, 1.5707963) * 2.0 + 0.5), 1.0);
+        }`,
+        tsl: () =>
+          TSL.vec4(
+            TSL.vec3(
+              backdropNodes
+                .footprintDistance(TSL.float(0.85))(
+                  TSL.uv(),
+                  TSL.vec4(0.5, 0.5, 0.18, 3),
+                  TSL.float(1.5707963),
+                )
+                .mul(2)
+                .add(0.5),
+            ),
+            1,
+          ),
       },
       hash12: {
         glsl: `

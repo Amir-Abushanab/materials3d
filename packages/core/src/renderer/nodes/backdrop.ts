@@ -23,8 +23,10 @@ const length = (v: Vec): Vec => TSL.length(v);
 const normalize = (v: Vec): Vec => TSL.normalize(v);
 
 /** How many footprints the wall can carry, and the most sides any one of them may have. */
-export const GROUND_SLOTS = 4;
-export const GROUND_MAX_SIDES = 8;
+// Re-exported from the config so the two engines and the parity harness cannot drift.
+import { GROUND_MAX_SIDES, GROUND_SLOTS } from "../../config/model";
+
+export { GROUND_MAX_SIDES, GROUND_SLOTS };
 
 /**
  * Sample the palette at `t`, walking the stops in order.

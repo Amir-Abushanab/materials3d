@@ -946,6 +946,55 @@ export const BACKDROP_VERT = /* glsl */ `
  * sin into an unrelated value, so it is not reproducible across backends. This is multiply, add,
  * dot and fract only.
  */
+/**
+ * The wall's footprint maths: the soft maximum, the contour transition, and the signed distance to
+ * a grounded shape.
+ *
+ * Extracted for the same reason as {@link NOISE_CHUNK} — so the parity harness tests THIS, rather
+ * than a transcription of it that can quietly drift. `footprintDistance` reads `uWallGrounding`,
+ * so anything including this chunk has to declare it.
+ */
+export const FOOTPRINT_CHUNK = /* glsl */ `
+  float softMax(float a, float b, float rounding){
+    float r = max(rounding, 0.0001);
+    float m = max(a, b);
+    return m + r * log(exp((a - m) / r) + exp((b - m) / r));
+  }
+
+  /**
+   * Signed distance from a wall point to a solid's footprint.
+   *
+   * The vec4 is (centre.xy, apothem, sides); zero sides means a circle, which is the honest footprint
+   * for every lathe that is not a prism. A regular polygon needs no per-corner uniforms: edge i's
+   * outward normal is just its angle, so the distance is a dot product minus the apothem.
+   */
+  float footprintDistance(vec2 p, vec4 g, float phase){
+    vec2 d = p - g.xy;
+    if (g.w < 2.5) return length(d) - g.z;
+    float step = 6.2831853 / g.w;
+    float acc = -1e9;
+    for (int i = 0; i < GROUND_MAX_SIDES; i++){
+      if (float(i) >= g.w) break;
+      float a = phase + (float(i) + 0.5) * step;
+      acc = softMax(acc, dot(d, vec2(cos(a), sin(a))) - g.z, uWallGrounding * 0.22);
+    }
+    return acc;
+  }
+
+  /**
+   * A 0 -> 1 transition centred ON the contour, so the true silhouette sits at the half value.
+   *
+   * NOT named 'half'. That is a reserved word in GLSL ES 3.00, and three rewrites every non-raw
+   * ShaderMaterial to 3.00 — so the declaration failed to compile, took the whole backdrop program
+   * with it, and the wall mode drew nothing at all. A dead backdrop looks like a scene that simply
+   * has no wall configured, which is why it survived so long.
+   */
+  float softInside(float distance, float amplitude){
+    float edge = max(amplitude * 0.5, 0.0001);
+    return 1.0 - smoothstep(-edge, edge, distance);
+  }
+`;
+
 export const NOISE_CHUNK = /* glsl */ `
   float hash12(vec2 p){
     vec3 p3 = fract(vec3(p.xyx) * 0.1031);
@@ -1031,44 +1080,7 @@ export const BACKDROP_FRAG = /* glsl */ `
    * blurred silhouette looks like. A soft max erodes the corners as the softness grows, which is
    * much closer to actually filtering the projected shape.
    */
-  float softMax(float a, float b, float rounding){
-    float r = max(rounding, 0.0001);
-    float m = max(a, b);
-    return m + r * log(exp((a - m) / r) + exp((b - m) / r));
-  }
-
-  /**
-   * Signed distance from a wall point to a solid's footprint.
-   *
-   * The vec4 is (centre.xy, apothem, sides); zero sides means a circle, which is the honest footprint
-   * for every lathe that is not a prism. A regular polygon needs no per-corner uniforms: edge i's
-   * outward normal is just its angle, so the distance is a dot product minus the apothem.
-   */
-  float footprintDistance(vec2 p, vec4 g, float phase){
-    vec2 d = p - g.xy;
-    if (g.w < 2.5) return length(d) - g.z;
-    float step = 6.2831853 / g.w;
-    float acc = -1e9;
-    for (int i = 0; i < GROUND_MAX_SIDES; i++){
-      if (float(i) >= g.w) break;
-      float a = phase + (float(i) + 0.5) * step;
-      acc = softMax(acc, dot(d, vec2(cos(a), sin(a))) - g.z, uWallGrounding * 0.22);
-    }
-    return acc;
-  }
-
-  /**
-   * A 0 -> 1 transition centred ON the contour, so the true silhouette sits at the half value.
-   *
-   * NOT named 'half'. That is a reserved word in GLSL ES 3.00, and three rewrites every non-raw
-   * ShaderMaterial to 3.00 — so the declaration failed to compile, took the whole backdrop program
-   * with it, and the wall mode drew nothing at all. A dead backdrop looks like a scene that simply
-   * has no wall configured, which is why it survived so long.
-   */
-  float softInside(float distance, float amplitude){
-    float edge = max(amplitude * 0.5, 0.0001);
-    return 1.0 - smoothstep(-edge, edge, distance);
-  }
+  ${FOOTPRINT_CHUNK}
 
   float shadowContrastCurve(float v, float contrast, float pivot){
     float p = clamp(pivot, 0.001, 0.999);

@@ -934,6 +934,36 @@ export const BACKDROP_VERT = /* glsl */ `
 /** The backdrop samples the same lamps, faintly. If colour appears *only* inside glass, the eye
  *  reads it as tint however it was computed — a faint presence in the gaps is what sells
  *  "behind". */
+/**
+ * The value-noise hash and the noise built on it.
+ *
+ * Extracted so the parity harness can test the SOURCE rather than a copy of it. It used to be
+ * inline here, and the parity case for valueNoise carried its own hand-written twin that used a
+ * different hash — so the case passed while the two engines disagreed, which is the one failure
+ * mode a parity case must not have.
+ *
+ * Hoskins' sine-free hash: fract(sin(x) * 43758) turns whatever a backend does in the last bits of
+ * sin into an unrelated value, so it is not reproducible across backends. This is multiply, add,
+ * dot and fract only.
+ */
+export const NOISE_CHUNK = /* glsl */ `
+  float hash12(vec2 p){
+    vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+    p3 += dot(p3, p3.yzx + 33.33);
+    return fract((p3.x + p3.y) * p3.z);
+  }
+
+  /** Bilinear value noise — enough to break a flat wall up without reading as a pattern. */
+  float valueNoise(vec2 p){
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    vec2 u = f * f * (3.0 - 2.0 * f);
+    return mix(
+      mix(hash12(i), hash12(i + vec2(1.0, 0.0)), u.x),
+      mix(hash12(i + vec2(0.0, 1.0)), hash12(i + vec2(1.0)), u.x),
+      u.y);
+  }`;
+
 export const BACKDROP_FRAG = /* glsl */ `
   precision highp float;
   varying vec2 vUv;
@@ -969,22 +999,7 @@ export const BACKDROP_FRAG = /* glsl */ `
   uniform float uGroundPhase[GROUND_SLOTS];
   uniform int   uGroundCount;
 
-  float hash12(vec2 p){
-    vec3 p3 = fract(vec3(p.xyx) * 0.1031);
-    p3 += dot(p3, p3.yzx + 33.33);
-    return fract((p3.x + p3.y) * p3.z);
-  }
-
-  /** Bilinear value noise — enough to break a flat wall up without reading as a pattern. */
-  float valueNoise(vec2 p){
-    vec2 i = floor(p);
-    vec2 f = fract(p);
-    vec2 u = f * f * (3.0 - 2.0 * f);
-    return mix(
-      mix(hash12(i), hash12(i + vec2(1.0, 0.0)), u.x),
-      mix(hash12(i + vec2(0.0, 1.0)), hash12(i + vec2(1.0)), u.x),
-      u.y);
-  }
+  ${NOISE_CHUNK}
 
   /**
    * A contrast curve that pivots rather than clipping, ported from the reference.

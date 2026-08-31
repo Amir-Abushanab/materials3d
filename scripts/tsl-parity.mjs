@@ -80,6 +80,11 @@ const results = await page.evaluate(
     const GPU = await import(base + "three.webgpu.js");
     const TSL = GPU.TSL;
     const nodes = await import(base + "dist/renderer/nodes/index.js");
+    // The REAL GLSL, not a transcription. A case that carries its own copy of a shader function can
+    // agree with the port while both disagree with what actually ships — which is exactly what
+    // happened to `valueNoise`: its twin here defined a sine hash, the engine used Hoskins', and
+    // the case passed for months while the wall rendered a different texture in each engine.
+    const shaders = await import(base + "dist/renderer/shaders.js");
 
     const SIZE = 256;
     const TEX = 128;
@@ -272,15 +277,15 @@ const results = await page.evaluate(
       },
       valueNoise: {
         glsl: `
-        float hash21(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
-        float valueNoise(vec2 p){
-          vec2 i = floor(p); vec2 f = fract(p);
-          vec2 w = f * f * (3.0 - 2.0 * f);
-          return mix(mix(hash21(i), hash21(i + vec2(1.0, 0.0)), w.x),
-                     mix(hash21(i + vec2(0.0, 1.0)), hash21(i + vec2(1.0, 1.0)), w.x), w.y);
-        }
+        ${shaders.NOISE_CHUNK}
         void main(){ gl_FragColor = vec4(vec3(valueNoise(vUvIn * 9.0)), 1.0); }`,
         tsl: () => TSL.vec4(TSL.vec3(nodes.valueNoise(TSL.uv().mul(9))), 1),
+      },
+      hash12: {
+        glsl: `
+        ${shaders.NOISE_CHUNK}
+        void main(){ gl_FragColor = vec4(vec3(hash12(floor(vUvIn * 23.0))), 1.0); }`,
+        tsl: () => TSL.vec4(TSL.vec3(nodes.hash12(TSL.uv().mul(23).floor())), 1),
       },
     };
 
@@ -1375,14 +1380,12 @@ const results = await page.evaluate(
     const backdropNodes = await import(base + "dist/renderer/nodes/backdrop.js");
     const finishNodes = await import(base + "dist/renderer/nodes/finish.js");
 
+    // The REAL noise, not a transcription — this used to be a hand-written copy with a SINE hash
+    // while every shader that ships uses Hoskins', so the cases built on it agreed with a port that
+    // was also wrong. `noise2` is CAUSTIC_FRAG's local name for the same function.
     const NOISE_PRELUDE = `
-      float hash21(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
-      float valueNoise(vec2 p){
-        vec2 i = floor(p); vec2 f = fract(p);
-        vec2 u = f * f * (3.0 - 2.0 * f);
-        return mix(mix(hash21(i), hash21(i + vec2(1.0, 0.0)), u.x),
-                   mix(hash21(i + vec2(0.0, 1.0)), hash21(i + vec2(1.0, 1.0)), u.x), u.y);
-      }`;
+      ${shaders.NOISE_CHUNK}
+      float noise2(vec2 p){ return valueNoise(p); }`;
 
     cases.caustic = {
       glsl:

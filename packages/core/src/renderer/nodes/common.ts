@@ -333,14 +333,34 @@ export const studioCone = (u: RoomUniforms) => {
 
 export const hash21 = Fn(([p]: [Vec]) => p.dot(vec2(127.1, 311.7)).sin().mul(43758.5453).fract());
 
+/**
+ * The value-noise hash — Hoskins' sine-free one, and the twin of NOISE_CHUNK's `hash12`.
+ *
+ * NOT `hash21`. That one is `fract(sin(...) * 43758)`, and while the two are interchangeable as
+ * noise they are not the same numbers: this graph used `hash21` where the GLSL engine has always
+ * used this, so the wall came out with a different texture and no probe of `valueNoise` could show
+ * it, because the parity case had a hand-written GLSL twin that used `hash21` too and agreed with
+ * the wrong one.
+ *
+ * There is a second reason to prefer it here beyond matching. `fract(sin(x) * 43758)` amplifies
+ * whatever the backend's `sin` does in its last few bits into an unrelated value, so a sine hash
+ * is not reproducible across backends even when both sides are spelled identically. This uses only
+ * multiply, add, dot and fract, all of which are exactly specified.
+ */
+export const hash12 = Fn(([p]: [Vec]) => {
+  const p3 = vec3(p.x, p.y, p.x).mul(0.1031).fract().toVar();
+  p3.addAssign(p3.dot(vec3(p3.y, p3.z, p3.x).add(33.33)));
+  return p3.x.add(p3.y).mul(p3.z).fract();
+});
+
 /** Value noise on the unit lattice, smoothstepped between corners. */
 export const valueNoise = Fn(([p]: [Vec]) => {
   const i = p.floor();
   const f = p.fract();
   const w = f.mul(f).mul(float(3).sub(f.mul(2)));
   return mix(
-    mix(hash21(i), hash21(i.add(vec2(1, 0))), w.x),
-    mix(hash21(i.add(vec2(0, 1))), hash21(i.add(vec2(1, 1))), w.x),
+    mix(hash12(i), hash12(i.add(vec2(1, 0))), w.x),
+    mix(hash12(i.add(vec2(0, 1))), hash12(i.add(vec2(1, 1))), w.x),
     w.y,
   );
 });

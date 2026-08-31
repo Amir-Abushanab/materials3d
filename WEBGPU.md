@@ -27,9 +27,9 @@ Whole-frame mean absolute difference against the WebGL engine, over the eight ga
 
 | preset    | mean\|d\| | preset    | mean\|d\| |
 | --------- | --------: | --------- | --------: |
-| reactions |      0.49 | cascade   |      7.60 |
-| assembly  |      1.14 | skewer    |      8.02 |
-| materials |      1.57 | staircase |     11.17 |
+| reactions |      0.49 | staircase |      2.91 |
+| assembly  |      1.14 | cascade   |      7.60 |
+| materials |      1.57 | skewer    |      8.02 |
 | slimes    |      2.73 | prism     |     16.31 |
 
 Reproduce with `node scripts/tsl-compare.mjs <preset>`, which renders the same scene through both
@@ -52,9 +52,10 @@ the obvious next step.
 **Post amplifies whatever reaches it.** On `prism`, 11.92 with post on against 4.41 with it off,
 spread across bloom (~2.7) and the tone map (~3.7) rather than concentrated in one term.
 
-**`staircase` has a residual that has not been attributed to anything.** It is a bright scene,
-unlike the other worst cases, and has no camera bindings and no wall — so it is likely a different
-cause again.
+**`skewer` has a residual that has not been attributed to anything.** None of the three fixes so
+far touched it: it has no camera bindings, no wall, and no `positionY` binding racing a motion — so
+it is a fourth cause. The obvious place to start is that it is the one preset built entirely from
+rods.
 
 ### Two cautionary tales
 

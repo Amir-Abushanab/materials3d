@@ -942,6 +942,7 @@ export class NodeMaterialRenderer implements Engine {
         ground: this.ground,
         groundPhase: this.groundPhase,
         groundCount: this.groundCount,
+        probe: devProbe(),
       },
       lamps: platePass({
         lamps: this.lampArray,

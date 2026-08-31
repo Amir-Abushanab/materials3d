@@ -124,6 +124,9 @@ export interface WallUniforms {
   ground: Vec;
   groundPhase: Vec;
   groundCount: Vec;
+  /** Dev tap: the name of a wall intermediate to return instead of the shaded colour. Never set in
+   *  production, where it is undefined and every tap compiles out. */
+  probe?: string;
 }
 
 /**
@@ -191,16 +194,48 @@ export const wallShade = (u: WallUniforms, bottom: Vec) =>
 
     const occl = float(0).toVar();
     const distanceTo = footprintDistance(u.grounding);
-    Loop(GROUND_SLOTS, ({ i }: { i: Vec }) => {
-      If(i.lessThan(u.groundCount), () => {
+    // UNROLLED IN JAVASCRIPT, not a `Loop`. `footprintDistance` contains a `Loop` of its own, and
+    // nesting one inside another does not survive: the inner function's `toVar` accumulator is
+    // hoisted out of the scope it belongs to, so every slot came back with a distance that is not
+    // the one the same call returns when it is evaluated on its own. The measured symptom was a
+    // contact shadow at roughly twice its true strength, from a footprint distance of -0.19 where
+    // the identical expression outside the loop gave +0.04.
+    //
+    // `GROUND_SLOTS` is a compile-time constant, so this costs nothing a `Loop` would not: the
+    // shader was going to unroll it anyway. The count guard stays a runtime `If`.
+    for (let slot = 0; slot < GROUND_SLOTS; slot++) {
+      If(float(slot).lessThan(u.groundCount), () => {
         occl.assign(
           occl.max(
-            softInside(distanceTo(wp, u.ground.element(i), u.groundPhase.element(i)), u.grounding),
+            softInside(
+              distanceTo(wp, u.ground.element(slot), u.groundPhase.element(slot)),
+              u.grounding,
+            ),
           ),
         );
       });
-    });
+    }
     const grounding = mix(float(1), float(1).sub(u.shadow), occl);
+
+    // Dev taps, matching BACKDROP_FRAG's, so the wall can be bisected against it term by term.
+    if (u.probe) {
+      const taps: Record<string, Vec> = {
+        wallM: vec3(m),
+        wallN: N.mul(0.5).add(0.5),
+        wallGl: vec3(gl),
+        wallFacing: vec3(facing),
+        wallSpec: vec3(specular.mul(8)),
+        wallDirect: direct,
+        wallGi: globalIllum.mul(4),
+        wallGrounding: vec3(grounding),
+        wallExposure: vec3(baseExposure.div(4)),
+        wallWp: vec3(wp.mul(0.5).add(0.5), 0),
+        wallOccl: vec3(occl),
+        wallFp: vec3(distanceTo(wp, u.ground.element(0), u.groundPhase.element(0)).mul(4).add(0.5)),
+      };
+      const tap = taps[u.probe];
+      if (tap !== undefined) return tap;
+    }
 
     return direct.mul(baseExposure).add(globalIllum).mul(grounding);
   });

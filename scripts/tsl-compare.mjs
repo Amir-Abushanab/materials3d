@@ -174,6 +174,18 @@ const result = await page.evaluate(
       "normal",
       "front",
       "back",
+      "wallM",
+      "wallN",
+      "wallGl",
+      "wallFacing",
+      "wallSpec",
+      "wallDirect",
+      "wallGi",
+      "wallGrounding",
+      "wallExposure",
+      "wallWp",
+      "wallOccl",
+      "wallFp",
     ];
     globalThis["__glslProbe"] = Math.max(0, GLSL_PROBES.indexOf(probeName));
     // Named separately: `front`/`back` select a TARGET to blit rather than a shader intermediate.

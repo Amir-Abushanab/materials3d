@@ -6,6 +6,12 @@
  * breaks at `uLampCount` instead of grinding through all twelve slots.
  *
  * Everything here works in DISPLAY (sRGB) space — see util/color.ts for why.
+ *
+ * NO BACKTICKS INSIDE THE SHADER BODIES, not even in a comment. Each shader is a template literal,
+ * so a backtick ends it, and what you get is a parse error hundreds of lines further down with
+ * nothing to connect it to the line you touched. Quoting an identifier in a comment is the natural
+ * way to hit this and it has been hit five times. Write uProbe, not the quoted form. The comments
+ * out here, outside the literals, are fine.
  */
 
 import { FAR, MAX_LAMPS, MAX_MESH_POINTS, MAX_STOPS } from "../config/model";
@@ -954,6 +960,7 @@ export const BACKDROP_FRAG = /* glsl */ `
   uniform float uWallScale, uWallNormal, uWallGamma, uWallContrast, uWallPivot;
   uniform float uWallFloor, uWallHighlight, uWallAmbient, uWallAmbientLight;
   uniform float uWallShadow, uWallGrounding;
+  uniform float uWallProbe;
   // The second, finer noise octave. Supplied by the renderer since the wall was written, but never
   // DECLARED here — so the program failed to compile and the whole backdrop drew nothing. It went
   // unnoticed behind the 'half' reserved-word error above it, which failed first.
@@ -1182,6 +1189,22 @@ export const BACKDROP_FRAG = /* glsl */ `
       float grounding = mix(1.0, 1.0 - uWallShadow, occl);
 
       c = (direct * baseExposure + globalIllum) * grounding;
+      // Dev taps, so the wall can be bisected against the node engine's twin. uWallProbe is
+      // never set in production, where this compiles to a branch on a constant zero.
+      if (uWallProbe > 0.5) {
+        if (uWallProbe < 1.5) c = vec3(m);
+        else if (uWallProbe < 2.5) c = N * 0.5 + 0.5;
+        else if (uWallProbe < 3.5) c = vec3(gl);
+        else if (uWallProbe < 4.5) c = vec3(facing);
+        else if (uWallProbe < 5.5) c = vec3(specular * 8.0);
+        else if (uWallProbe < 6.5) c = direct;
+        else if (uWallProbe < 7.5) c = globalIllum * 4.0;
+        else if (uWallProbe < 8.5) c = vec3(grounding);
+        else if (uWallProbe < 9.5) c = vec3(baseExposure / 4.0);
+        else if (uWallProbe < 10.5) c = vec3(wp * 0.5 + 0.5, 0.0);
+        else if (uWallProbe < 11.5) c = vec3(occl);
+        else c = vec3(footprintDistance(wp, uGround[0], uGroundPhase[0]) * 4.0 + 0.5);
+      }
     } else if (uMode == 1){
       if (uGradType == 3){
         // Mesh: inverse-distance blend of the blobs. Weights are normalized, so the field is a

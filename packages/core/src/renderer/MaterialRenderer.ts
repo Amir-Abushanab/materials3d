@@ -558,6 +558,7 @@ export class MaterialRenderer implements Engine {
         uWallAmbient: { value: 0.42 },
         uWallAmbientLight: { value: 0.1 },
         uWallShadow: { value: 0.55 },
+        uWallProbe: { value: 0 },
         // Up to four footprints, which is what a wall scene reasonably stands in front of.
         uGround: { value: Array.from({ length: 4 }, () => new THREE.Vector4()) },
         uGroundPhase: { value: [0, 0, 0, 0] },
@@ -1186,9 +1187,29 @@ export class MaterialRenderer implements Engine {
     u.uGroundCount.value = count;
   }
 
+  /** Wall dev taps, keyed by the same names the node engine's `wallShade` uses. */
+  private static readonly WALL_PROBES = [
+    "wallM",
+    "wallN",
+    "wallGl",
+    "wallFacing",
+    "wallSpec",
+    "wallDirect",
+    "wallGi",
+    "wallGrounding",
+    "wallExposure",
+    "wallWp",
+    "wallOccl",
+    "wallFp",
+  ];
+
   private applyBackground(): void {
     const c = this.config;
     const bg = this.backdropMaterial.uniforms;
+    if (bg.uWallProbe) {
+      const name = (globalThis as Record<string, unknown>)["__glslProbeName"];
+      bg.uWallProbe.value = MaterialRenderer.WALL_PROBES.indexOf(name as string) + 1;
+    }
     bg.uMode.value = BACKGROUND_MODES.indexOf(c.backgroundMode);
     // The wall spans whatever the camera sees of it, same derivation the beam uses so the two
     // agree about where the light lands. Unconditional, and see `refreshWallExtent`: the

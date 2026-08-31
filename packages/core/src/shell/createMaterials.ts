@@ -83,11 +83,8 @@ export interface MaterialOptions<R extends RendererKind = "webgl"> {
   /**
    * Which engine to fetch. Default `"webgl"`.
    *
-   * `"webgpu"` is EXPERIMENTAL. It renders every preset and agrees closely with the WebGL engine
-   * on most of them, but it is not pixel-equal and the gap is not uniform — see the note on
-   * `NodeMaterialRenderer` for what is known to differ and by how much. Treat WebGL as the
-   * reference for anything that has to match a design, and check a scene on both before shipping
-   * it through this one.
+   * `"webgpu"` is EXPERIMENTAL and not pixel-equal to the WebGL engine, which is the reference.
+   * See `WEBGPU.md` for where it stands and what differs.
    *
    * `"webgpu"` fetches a SEPARATE build — three's node renderer and TSL — and is the only way to
    * reach a WebGPU backend. It is opt-in rather than automatic because the two engines are

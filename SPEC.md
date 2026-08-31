@@ -490,7 +490,7 @@ State these in the README rather than let people discover them:
 4. React + element wrappers, poster pipeline
 5. Preset gallery
 6. `pnpm calibrate` as a shipped tool
-7. WebGPU/TSL engine — SHIPPED as experimental behind `renderer: "webgpu"`; not yet at parity (see README)
+7. WebGPU/TSL engine — SHIPPED as experimental behind `renderer: "webgpu"`; not yet at parity (see WEBGPU.md)
 
 ---
 

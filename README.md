@@ -312,33 +312,16 @@ is reproducible rather than whatever happened to be on screen.
 
 ### The WebGPU engine (experimental)
 
-There is a second engine built on three's node renderer and TSL, reached with `renderer: "webgpu"`
-or by importing `@materials3d/core/renderer-webgpu` directly. It is a separate build — the default
-path stays around 733 KB, this one is nearer 1,028 KB — so it is opt-in rather than automatic.
+There is a second engine built on three's node renderer and TSL, opt-in because it is a separate,
+larger build:
 
 ```ts
 createMaterials(el, config, { renderer: "webgpu" });
 ```
 
-**It is experimental, and WebGL is the reference.** It renders every preset and agrees closely on
-most of them, but it is not pixel-equal. Measured as whole-frame mean absolute difference against
-the WebGL engine (0 = identical, 255 = maximum):
-
-| preset    | mean\|d\| | preset    | mean\|d\| |
-| --------- | --------: | --------- | --------: |
-| reactions |      0.49 | skewer    |      8.02 |
-| assembly  |      1.14 | staircase |     11.17 |
-| materials |      1.57 | cascade   |     12.41 |
-| slimes    |      2.73 | prism     |     19.41 |
-
-The known cause of most of that spread is the specular lobe, which comes out weaker. Because the
-lobe is raised to the 40th power, a fraction of a degree is a factor of two, and a flat face either
-catches the highlight or does not — so faceted solids (`prism`, `hex`) are hit hardest while smooth
-ones are nearly exact. `staircase` has a residual that has not been attributed yet.
-
-Note also that `"webgpu"` selects the ENGINE, not the backend: three's node renderer falls back to
-a WebGL backend where the browser has no WebGPU. What it buys is TSL, and a WebGPU backend where
-one exists.
+It is **experimental** and not pixel-equal to the WebGL engine, which remains the reference. See
+[WEBGPU.md](./WEBGPU.md) for where it stands per preset, what differs and why, and how to work on
+it.
 
 ---
 
@@ -487,7 +470,7 @@ State these up front rather than let people discover them:
 1. Contact shadows
 2. Poster capture in CI (a Vite plugin, as `@wave3d/vite` does it)
 3. More presets
-4. Bring the experimental WebGPU/TSL engine to parity — the specular lobe first (see above)
+4. Bring the experimental WebGPU/TSL engine to parity — see [WEBGPU.md](./WEBGPU.md)
 
 ---
 

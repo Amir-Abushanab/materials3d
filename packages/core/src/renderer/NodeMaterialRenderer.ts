@@ -229,39 +229,12 @@ const blend = (a: Vec, b: Vec, t: Vec): Vec => TSL.mix(a, b, t);
  * The node/TSL engine — EXPERIMENTAL.
  *
  * A second renderer built on three's `WebGPURenderer` and TSL, implementing the same {@link Engine}
- * surface as {@link MaterialRenderer} so a scene config can be handed to either. It runs every
- * preset and is close on most of them, but it is NOT pixel-equal to the WebGL engine, which is the
- * reference. Anything that has to match a design should be checked on both.
+ * surface as `MaterialRenderer` so a scene config can be handed to either. It runs every preset and
+ * is close on most of them, but it is NOT pixel-equal to the WebGL engine, which is the reference.
  *
- * Where it stands, as whole-frame mean absolute difference against the WebGL engine (0 = identical,
- * 255 = maximum) on the eight gallery presets:
- *
- * | preset    | mean\|d\| | | preset    | mean\|d\| |
- * | --------- | -------: |-| --------- | -------: |
- * | reactions |     0.49 | | skewer    |     8.02 |
- * | assembly  |     1.14 | | staircase |    11.17 |
- * | materials |     1.57 | | cascade   |    12.41 |
- * | slimes    |     2.73 | | prism     |    19.41 |
- *
- * What is known to differ:
- *
- * - The SPECULAR LOBE is short — a rod gains +2.4 brightness from it where the WebGL engine gains
- *   +4.5. It is `pow(dot(reflect(-V,N), KEY), 40)`, and at that exponent a fraction of a degree is
- *   a factor of two. Flat faces make it all-or-nothing because the mirror direction is constant
- *   across a face, which is why `prism` and `hex` are the worst affected and smooth shapes are
- *   nearly exact. Setting `specular: 0` makes the two engines agree, which is how it was isolated.
- * - `staircase` has a residual that has not been attributed to anything yet.
- *
- * Everything else that was suspected has been eliminated: the traced refraction path, the
- * back-glass pass, the plate depth guard, the optical chord, the back-face depth, the refracted
- * offset, absorption, the room functions and the opaque path all match, as do the camera, the mesh
- * transforms and the projection.
- *
- * A caution for anyone continuing this: the dev probes below are substituted into the material and
- * then pass through the whole post chain, so their values are neither linear nor isolated, and a
- * probe delta carries a constant level shift that reads convincingly as a geometric offset. Crop
- * to the shape, turn post off in the config, and corroborate anything important with a config A/B
- * rather than a probe.
+ * `WEBGPU.md` in the repo root is the place to look: it carries the per-preset numbers, what is
+ * known to differ (mostly the specular lobe) and what has already been ruled out, and — worth
+ * reading before you trust a measurement — how the dev probes below mislead.
  */
 export class NodeMaterialRenderer implements Engine {
   readonly canvas: HTMLCanvasElement;

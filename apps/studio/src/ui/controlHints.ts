@@ -233,7 +233,7 @@ const CONTROL_HINTS: Record<string, string> = {
   "measured thickness":
     "Measures each shape's optical path from a back-face depth pass instead of assuming a cylinder. Worth one extra pass for discs, spheres, rings and arrows; on a rod scene it buys nothing (the analytic chord is exact there).",
   engine:
-    "Which renderer draws the scene. WebGL is the reference. WebGPU (TSL) is experimental — it renders every preset and is close on most, but it is not pixel-equal: specular highlights come out weaker, most visibly on prisms and hexes. Switching costs a moment of load the first time, since it is a second three build.",
+    "Which renderer draws the scene. WebGL is the reference; WebGPU (TSL) is experimental and not pixel-equal to it — see WEBGPU.md. Switching costs a moment of load the first time, since it is a second three build.",
 
   // --- Guides ---
   grid: "Overlay alignment guides on the preview. Pure DOM — never reaches an export.",

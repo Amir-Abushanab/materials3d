@@ -56,7 +56,9 @@ spread across bloom (~2.7) and the tone map (~3.7) rather than concentrated in o
 unlike the other worst cases, and has no camera bindings and no wall — so it is likely a different
 cause again.
 
-### It was not the specular lobe
+### Two cautionary tales
+
+**It was not the specular lobe**
 
 An earlier version of this page blamed the specular lobe, on good evidence: it differed threefold,
 and `specular: 0` made the two engines agree. That was a symptom. The cause was that the WebGL
@@ -64,6 +66,12 @@ engine captured from a camera displaced by an interaction binding, and `pow(dot(
 degree of arc into a factor of three. Fixing the camera collapsed the lobe difference to exactly
 zero — along with every other material intermediate. Worth remembering when the next "obviously it
 is term X" presents itself.
+
+**And `staircase` was not a shading difference at all.** It read as one across a third of the frame,
+and every shading probe agreed: the optical path differed, and so did everything downstream of it.
+The cause was that this engine applied interaction bindings BEFORE motions rather than after, so
+every shape sat about a tenth of a unit from where the other engine put it. A pose error, arriving
+entirely disguised as a shading error, because the measured optical path reads the pose.
 
 ## What has been ruled out
 

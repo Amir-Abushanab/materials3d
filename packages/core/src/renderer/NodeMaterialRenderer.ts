@@ -2791,13 +2791,15 @@ export class NodeMaterialRenderer implements Engine {
       await this.quad.blit(this.renderer, this.debugAlpha, null);
       return;
     }
-    if (dump === "plate" || dump === "back" || dump?.startsWith("plate:")) {
-      const src = dump === "back" ? t.back.texture : t.plate.texture;
+    if (dump === "plate" || dump === "back" || dump === "front" || dump?.startsWith("plate:")) {
+      const src =
+        dump === "back" ? t.back.texture : dump === "front" ? t.front.texture : t.plate.texture;
       // Alpha forced to one: the plate stores linear DEPTH there, and letting it reach the canvas
       // composites the whole frame away at about one percent opacity.
-      this.debugBlit ??= passMaterial(
-        vec4(TSL.texture(src, TSL.vec2(TSL.screenUV.x, TSL.float(1).sub(TSL.screenUV.y))).rgb, 1),
-      );
+      // NO V-FLIP, for the same reason `debugColor` has none: these dumps exist to be DIFFED
+      // against the WebGL engine's, which blits its targets unflipped. They used to flip so a
+      // human saw the target upright, which made every comparison a mirror image.
+      this.debugBlit ??= passMaterial(vec4(TSL.texture(src, TSL.screenUV).rgb, 1));
       await this.quad.blit(this.renderer, this.debugBlit, null);
       return;
     }

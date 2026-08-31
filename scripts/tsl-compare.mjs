@@ -172,8 +172,12 @@ const result = await page.evaluate(
       "thick",
       "duv",
       "normal",
+      "front",
+      "back",
     ];
     globalThis["__glslProbe"] = Math.max(0, GLSL_PROBES.indexOf(probeName));
+    // Named separately: `front`/`back` select a TARGET to blit rather than a shader intermediate.
+    globalThis["__glslProbeName"] = probeName || undefined;
     const a = new gl.MaterialRenderer(host, cfg, {
       respectReducedMotion: false,
       preserveDrawingBuffer: true,

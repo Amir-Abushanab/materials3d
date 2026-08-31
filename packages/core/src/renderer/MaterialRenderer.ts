@@ -2601,9 +2601,20 @@ export class MaterialRenderer implements Engine {
     //    blurring, and pinning them to the focal plane removes the bleed outright.
     const d = THREE.MathUtils.clamp(this.config.post.focus / FAR, 0, 1);
     const low = (d * 255) % 1;
-    this.depthClearColor.r = d - low / 255;
-    this.depthClearColor.g = low;
-    this.depthClearColor.b = 0;
+    // SET AS sRGB, not by assigning the channels.
+    //
+    // This renderer's `outputColorSpace` is sRGB, and a clear colour is converted out of the
+    // working space on its way into the target — so channels assigned directly, which land in the
+    // working space, were stored ENCODED. The depth pass writes a linear distance and the post
+    // pass decodes one, so the background came back as 67 world units instead of the 44 this
+    // clear is asking for: the focal plane it is supposed to pin the background to, and the whole
+    // reason this clear exists. Backgrounds were being blurred by a lens they were meant to sit
+    // exactly in focus for.
+    //
+    // Declaring the value as sRGB makes three convert it INTO the working space here, so the
+    // conversion on the way out returns exactly these numbers. The node engine needs no such dance
+    // because its output space is already linear.
+    this.depthClearColor.setRGB(d - low / 255, low, 0, THREE.SRGBColorSpace);
 
     this.scene.overrideMaterial = this.depthMaterial;
     this.backdrop.visible = false; // hidden here in every mode — see the note above
@@ -2686,7 +2697,17 @@ export class MaterialRenderer implements Engine {
         depthTest: false,
         depthWrite: false,
       });
-      this.probeBlit.uniforms.tSrc.value = this.colorRT.texture;
+      // `front`/`back` ask for a depth target instead of the composed colour, so the two engines'
+      // depth passes can be compared directly rather than through everything that reads them.
+      const probe = Number((globalThis as Record<string, unknown>)["__glslProbe"] ?? 0);
+      const named = (globalThis as Record<string, unknown>)["__glslProbeName"];
+      this.probeBlit.uniforms.tSrc.value =
+        named === "front"
+          ? this.depthRT.texture
+          : named === "back"
+            ? this.backRT.texture
+            : this.colorRT.texture;
+      void probe;
       // Its OWN quad, not the bloom one. The bloom quad is set up for reduced-size mip passes, and
       // borrowing it put the probe image a pixel off from what post produces — which then reads as
       // a registration difference between the two engines that does not exist in the real frames.

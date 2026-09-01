@@ -29,26 +29,22 @@ Whole-frame mean absolute difference against the WebGL engine, over the eight ga
 | --------- | --------: | --------- | --------: |
 | reactions |      0.42 | staircase |      2.91 |
 | assembly  |      1.14 | skewer    |      5.33 |
-| materials |      1.57 | cascade   |      6.88 |
-| slimes    |      2.54 | prism     |     10.86 |
+| materials |      1.57 | cascade   |      6.56 |
+| slimes    |      2.54 | prism     |     10.28 |
 
 Reproduce with `node scripts/tsl-compare.mjs <preset>`, which renders the same scene through both
 engines and writes `compare-<preset>-{glsl,tsl,diff}.png`.
 
 ## What is known to differ
 
-**The value-noise hash, and this one is not fixable as written.** Both engines use the classic
-`fract(sin(dot(p, k)) * 43758.5453)`. `sin` of a large argument differs by a few ULPs between the
-WebGL and WebGPU backends, and that multiply amplifies the difference into an unrelated value. It
-shows as a faint diagonal weave over any `wall` backdrop and costs about 4 on the `wallM` probe.
-Making it deterministic would take an integer hash, which would change the wall's texture in both
-engines for no correctness gain.
+**Post, amplifying rather than causing.** It is now essentially the whole remainder on the three
+worst scenes: `prism` is 10.28 with post on and 3.51 with it off, `cascade` 6.56 against 2.13,
+`skewer` 5.33 against 1.74. The bloom and tone-map passes are parity-clean, so post is magnifying
+a small input difference rather than adding one. Reducing the numbers further means finding what
+still differs upstream of it — the bare wall backdrop is now exactly 0.00, so it is in the shapes.
 
-**Post amplifies whatever reaches it.** On `prism`, 10.86 with post on against about 1 for the body
-with it off. Post is not adding error of its own — the bloom and tone-map passes are parity-clean —
-it is magnifying a small input difference. Fixing inputs is what moves this number.
-
-**The beam** contributes about 3 on `prism`. Not investigated.
+Nothing else is currently attributed. The beam, once thought to be worth about 3 on `prism`, is
+worth 0.06.
 
 ### Cautionary tales
 
@@ -56,22 +52,27 @@ Every one of these was stated confidently, with evidence, and was wrong.
 
 **It was not the specular lobe.** It differed threefold and `specular: 0` made the engines agree.
 That was a symptom: the WebGL engine captured from a camera displaced by an interaction binding,
-and `pow(dot(...), 40)` turns a degree of arc into a factor of three. Fixing the camera collapsed
-the lobe difference to exactly zero, along with every other material intermediate.
+and `pow(dot(...), 40)` turns a degree of arc into a factor of three.
 
-**`staircase` was not a shading difference.** It read as one across a third of the frame and every
-shading probe agreed. The cause was this engine applying interaction bindings BEFORE motions rather
-than after, so every shape sat a tenth of a unit from where the other engine put it. A pose error
-disguised as a shading error, because the measured optical path reads the pose.
+**`staircase` was not a shading difference.** Every shading probe agreed it was. The cause was this
+engine applying interaction bindings BEFORE motions rather than after, so each shape sat a tenth of
+a unit from where the other engine put it — a pose error, because the measured optical path reads
+the pose.
 
-**`prism`'s residual was not sub-pixel bevel coverage.** It looked exactly like it — a thin bright
-ring on a sub-pixel-wide band of steeply angled faces. It is byte-identical at 450, 900 and 1800
-pixels wide, which no coverage artefact would be. It was the contact shadow, from a nested `Loop`.
+**`prism`'s residual was not sub-pixel bevel coverage.** It looked exactly like it. It was
+byte-identical at 450, 900 and 1800 pixels wide, which no coverage artefact would be. It was the
+contact shadow, from a nested `Loop`.
 
-The pattern worth carrying: a difference in term X usually means an input to X is wrong somewhere
-upstream, and the term that _looks_ responsible is the one that amplifies rather than the one that
-causes. Bisect toward the inputs, and check resolution dependence before believing anything about
-rasterisation.
+**The noise difference was not irreducible.** It was argued — correctly — that
+`fract(sin(x) * 43758)` cannot be reproducible across backends, and concluded that the wall's noise
+therefore could not be matched. The two engines were running DIFFERENT HASH FUNCTIONS: Hoskins' in
+GLSL, the sine one in the node graph. Sound reasoning about the wrong question. Checking which
+function each side actually called would have taken a minute and the difference went to zero.
+
+The pattern worth carrying: a difference in term X usually means an input to X is wrong upstream,
+and the term that _looks_ responsible is the one amplifying rather than the one causing. Check
+resolution dependence before believing anything about rasterisation, and check that both sides are
+running the same function before theorising about why the same function disagrees.
 
 ## What has been ruled out
 
@@ -89,7 +90,7 @@ exactly, so the wall difference is inside `wallShade` itself.
 
 Two harnesses, both headless:
 
-- `node scripts/tsl-parity.mjs` — 50 term-by-term cases, each a single node function against its
+- `node scripts/tsl-parity.mjs` — 53 term-by-term cases, each a single node function against its
   GLSL twin. Fast, and the first thing to check.
 - `node scripts/tsl-compare.mjs <preset>` — whole-frame diff, with `--crop`, `--probe`, `--at`.
 
@@ -125,9 +126,15 @@ Two things still to know:
 - Silhouette pixels differ by about one pixel of coverage between the two rasterizers. Interiors
   agree exactly (that is what `calib 0.00` on an interior crop shows), so this only matters if a
   crop touches an edge — which is what `calib` is there to catch.
-- Not every probe exists on both sides. `GLSL_PROBES` in `scripts/tsl-compare.mjs` is the list, and
-  a name missing from it silently falls through to a normal render on the GLSL side, which looks
-  like a huge difference rather than like a missing probe.
+- Not every probe exists on both sides. `GLSL_PROBES` in `scripts/tsl-compare.mjs` is the list, and a
+  name missing from it silently falls through to a normal render on the GLSL side, which looks like a
+  huge difference rather than like a missing probe.
+
+**Build cases from the shader source, never from a transcription of it.** `NOISE_CHUNK` and
+`FOOTPRINT_CHUNK` are exported from `shaders.ts` for exactly this. Two parity cases once carried
+hand-written GLSL twins that used a different hash than the engine, so they agreed with a port that
+was also wrong and passed for as long as they existed — the one failure mode a parity case must not
+have, because it fails silently in the direction that hides bugs.
 
 `--shift dx,dy` offsets the node image before diffing, for checking registration. Measured on the
 composed frames, zero is best — the two engines are correctly registered.

@@ -28,23 +28,23 @@ Whole-frame mean absolute difference against the WebGL engine, over the eight ga
 | preset    | mean\|d\| | preset    | mean\|d\| |
 | --------- | --------: | --------- | --------: |
 | reactions |      0.42 | staircase |      2.91 |
-| assembly  |      1.14 | skewer    |      5.33 |
-| materials |      1.57 | cascade   |      6.56 |
-| slimes    |      2.54 | prism     |     10.28 |
+| assembly  |      1.14 | cascade   |      5.17 |
+| materials |      1.57 | skewer    |      5.33 |
+| slimes    |      2.54 | prism     |      7.91 |
 
 Reproduce with `node scripts/tsl-compare.mjs <preset>`, which renders the same scene through both
 engines and writes `compare-<preset>-{glsl,tsl,diff}.png`.
 
 ## What is known to differ
 
-**Post, amplifying rather than causing.** It is now essentially the whole remainder on the three
-worst scenes: `prism` is 10.28 with post on and 3.51 with it off, `cascade` 6.56 against 2.13,
-`skewer` 5.33 against 1.74. The bloom and tone-map passes are parity-clean, so post is magnifying
-a small input difference rather than adding one. Reducing the numbers further means finding what
-still differs upstream of it — the bare wall backdrop is now exactly 0.00, so it is in the shapes.
+**`skewer`, at 5.33, is the largest and least explained.** None of the fixes so far touched it: no
+camera bindings, no wall, no `positionY` racing a motion, no back-glass. It is 1.74 with post
+disabled, so most of it is post amplifying something upstream, and it is the only preset built
+entirely from rods via `scatter`.
 
-Nothing else is currently attributed. The beam, once thought to be worth about 3 on `prism`, is
-worth 0.06.
+**Post amplifies rather than causes.** `prism` is 7.91 with post and about 0.2 without; `cascade`
+5.17 against 2.13. The bloom and tone-map passes are parity-clean. Reducing these numbers means
+finding what still differs upstream, not looking at post.
 
 ### Cautionary tales
 

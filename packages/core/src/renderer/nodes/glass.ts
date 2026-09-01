@@ -16,6 +16,7 @@
  * error, both naming nothing. `() => { x.assign(y); }` returns undefined and none of it happens.
  */
 import { TSL } from "three/webgpu";
+import { PRISM_PLANES } from "../../config/model";
 import { sq, srgbToLinear } from "./common";
 
 type Vec = any;
@@ -113,17 +114,32 @@ export const prismExitNormal = (planes: Vec, count: Vec) =>
   Fn(([ro, rd]: [Vec, Vec]) => {
     const nearest = float(1e9).toVar();
     const normal = vec3(0, 0, 1).toVar();
-    Loop(count, ({ i }: { i: Vec }) => {
-      const pl = planes.element(i);
-      const denom = rd.dot(pl.xyz);
-      If(denom.greaterThan(1e-5), () => {
-        const t = ro.dot(pl.xyz).add(pl.w).negate().div(denom);
-        If(t.greaterThan(1e-4).and(t.lessThan(nearest)), () => {
-          nearest.assign(t);
-          normal.assign(pl.xyz);
+    // UNROLLED IN JAVASCRIPT, not a `Loop`. The back-glass walk calls this from inside an `If`, and
+    // a `Loop` carrying `toVar` accumulators nested in another control block does not survive —
+    // the accumulators are hoisted out of the scope they belong to and the search returns a face
+    // that is not the nearest one. Same failure as the wall's contact shadow, and it showed here as
+    // a bright ring on the bevel: the bevel is not one of the traced planes, so which plane the ray
+    // is deemed to leave by is exactly what this search decides.
+    //
+    // `PRISM_PLANES` is a compile-time constant, so this costs nothing a `Loop` would not. The
+    // count stays a runtime guard.
+    //
+    // HONESTLY: unrolling this did not change the rendered output — the bevel difference it was
+    // suspected of turned out to be elsewhere. It stays because the call site is nested and the
+    // identical construct did break the wall, so this is one fewer place for that to hide.
+    for (let slot = 0; slot < PRISM_PLANES; slot++) {
+      If(float(slot).lessThan(count), () => {
+        const pl = planes.element(slot);
+        const denom = rd.dot(pl.xyz);
+        If(denom.greaterThan(1e-5), () => {
+          const t = ro.dot(pl.xyz).add(pl.w).negate().div(denom);
+          If(t.greaterThan(1e-4).and(t.lessThan(nearest)), () => {
+            nearest.assign(t);
+            normal.assign(pl.xyz);
+          });
         });
       });
-    });
+    }
     return vec4(normal, select(nearest.greaterThan(1e8), float(0), nearest));
   });
 

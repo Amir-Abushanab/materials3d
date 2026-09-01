@@ -717,6 +717,7 @@ export const GLASS_FRAG = /* glsl */ `
     float dbgGuard = 0.0;
     float dbgPlateA = 0.0;
     vec2 dbgOff = vec2(0.0);
+    vec2 dbgSuvOff = vec2(0.0);
     if (uPass > 0.5){
       vec2 suv = (vProj.xy / vProj.w) * 0.5 + 0.5;
       vec2 off = vec2(vVN.x / uAspect, vVN.y) * uLens * pow(1.0 - ndv, 1.35) * 3.4;
@@ -734,6 +735,7 @@ export const GLASS_FRAG = /* glsl */ `
       // than this fragment, or shapes pick up the silhouette of whatever is in front of them and
       // the whole cluster gains a ghost outline. This is what buys the high blend weight below.
       dbgOff = off;
+      dbgSuvOff = clamp(suv + off, vec2(0.002), vec2(0.998));
       dbgGuard = step(vVZ - 0.30, smp.a * FAR);
       dbgPlateA = smp.a * FAR;
       base = mix(base, smp.rgb, 0.94 * dbgGuard);
@@ -908,6 +910,11 @@ export const GLASS_FRAG = /* glsl */ `
       // screenUV, and those are not the same convention — worth being able to see.
       // The shading normal, so N and V can be compared separately when ndv disagrees.
       else if (uProbe > 33.5 && uProbe < 34.5) dbg = N * 0.5 + 0.5;
+      // The plate sample position, in ONE convention both engines can be read in. The raw offsets
+      // cannot be compared: this engine works y-up and the node engine top-down, so their y values
+      // are negatives of each other by design.
+      else if (uProbe > 34.5 && uProbe < 35.5)
+        dbg = vec3(dbgSuvOff.x, 1.0 - dbgSuvOff.y, 0.0);
       else if (uProbe > 32.5 && uProbe < 33.5)
         dbg = vec3(clamp((vProj.xy / vProj.w) * 0.5 + 0.5, vec2(0.0), vec2(1.0)), 0.0);
       else if (uProbe > 31.5 && uProbe < 32.5)
@@ -1642,6 +1649,19 @@ export const BLIT_FRAG = /* glsl */ `
   uniform sampler2D tSrc;
   varying vec2 vUvIn;
   void main(){ gl_FragColor = texture2D(tSrc, vUvIn); }`;
+
+/**
+ * The same copy with alpha forced to one, for dumping a target to the screen.
+ *
+ * The plate stores linear DEPTH in alpha. Letting that reach the canvas composites the dump away at
+ * about one percent opacity, which reads as the two engines holding completely different plates
+ * when they do not. The node engine's dump has always forced alpha; this is its twin.
+ */
+export const BLIT_OPAQUE_FRAG = /* glsl */ `
+  precision highp float;
+  uniform sampler2D tSrc;
+  varying vec2 vUvIn;
+  void main(){ gl_FragColor = vec4(texture2D(tSrc, vUvIn).rgb, 1.0); }`;
 
 /** Rasterize the analytic room into the equirectangular layout the pyramid is built on. */
 export const ENV_BAKE_FRAG = /* glsl */ `

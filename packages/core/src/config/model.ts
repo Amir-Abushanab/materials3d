@@ -13,6 +13,9 @@ export const MAX_LAMPS = 12;
 /** Grounded-footprint slots the wall's contact shadow walks, and the most sides one may have.
  *  Shared: the GLSL engine injects them as `#define`s, the node graph unrolls to them, and the
  *  parity harness needs the same numbers to compile the chunk on its own. */
+/** Bounding planes a traced solid may carry — a square prism's four sides plus two caps. */
+export const PRISM_PLANES = 6;
+
 export const GROUND_SLOTS = 4;
 export const GROUND_MAX_SIDES = 8;
 

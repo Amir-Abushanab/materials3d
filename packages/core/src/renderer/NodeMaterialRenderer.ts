@@ -1367,6 +1367,8 @@ export class NodeMaterialRenderer implements Engine {
         ndv: vec3(ndv),
         normal: normal.mul(0.5).add(0.5),
         offset: vec3(offset.x.mul(5).add(0.5), offset.y.mul(5).add(0.5), 0.5),
+        // See the GLSL twin: the sample position in one shared convention.
+        plateUvTd: vec3(plateUv.x, plateUv.y, 0),
         // Divided, not multiplied — the GLSL twin scales it the same way so the two are comparable.
         chord: vec3(chord.div(3)),
         backZ: vec3(backZ.div(32)),
@@ -2146,7 +2148,21 @@ export class NodeMaterialRenderer implements Engine {
       // very structure that tells a viewer they are looking through a solid rather than a shell.
       room: (dir: Vec) => this.room()(dir, TSL.float(0)),
       bounces: BACK_GLASS_BOUNCES,
-    })(TSL.positionWorld, TSL.normalWorld, TSL.cameraPosition) as never;
+    })(
+      TSL.positionWorld,
+      // THE OBJECT'S OWN NORMAL, not `normalWorld`.
+      //
+      // This pass draws BACK faces, and three flips `normalWorld` to face the viewer on a
+      // back-facing draw. BACKGLASS_VERT does no such thing — it carries `mat3(modelMatrix) *
+      // normal` straight through — and this shader wants exactly that: the outward normal of the
+      // face the ray is LEAVING through, which points away from the camera by definition here.
+      //
+      // Taking three's flipped one put the reflected ray on the wrong side of every back face, and
+      // showed up as a bright ring on the bevel — the one place where which plane the ray exits by
+      // is genuinely in question. Worth 2.40 to 0.18 on `prism` with post off.
+      TSL.normalLocal.transformDirection(TSL.modelWorldMatrix).normalize(),
+      TSL.cameraPosition,
+    ) as never;
     // Additive on COLOUR, alpha untouched — the plate's alpha is depth, not coverage.
     material.transparent = true;
     material.blending = THREE.CustomBlending;

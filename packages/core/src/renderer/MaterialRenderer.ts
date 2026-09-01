@@ -69,6 +69,7 @@ import {
   BLOOM_COMPOSITE_FRAG,
   BLOOM_DOWN_FRAG,
   BLIT_FRAG,
+  BLIT_OPAQUE_FRAG,
   ENV_BAKE_FRAG,
   ENV_BLUR_FRAG,
   PARTICLE_DOWN_FRAG,
@@ -2715,7 +2716,8 @@ export class MaterialRenderer implements Engine {
     if (this.probeActive()) {
       this.probeBlit ??= new THREE.ShaderMaterial({
         vertexShader: POST_VERT,
-        fragmentShader: BLIT_FRAG,
+        // Opaque: a target dump must not composite itself away through a depth it stores in alpha.
+        fragmentShader: BLIT_OPAQUE_FRAG,
         uniforms: { tSrc: { value: null } },
         depthTest: false,
         depthWrite: false,
@@ -2729,7 +2731,9 @@ export class MaterialRenderer implements Engine {
           ? this.depthRT.texture
           : named === "back"
             ? this.backRT.texture
-            : this.colorRT.texture;
+            : named === "plate"
+              ? this.bgRT.texture
+              : this.colorRT.texture;
       void probe;
       // Its OWN quad, not the bloom one. The bloom quad is set up for reduced-size mip passes, and
       // borrowing it put the probe image a pixel off from what post produces — which then reads as

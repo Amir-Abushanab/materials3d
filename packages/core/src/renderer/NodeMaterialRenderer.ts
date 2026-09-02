@@ -159,6 +159,7 @@ const bindingUniforms = (
   uIOR: u.ior,
   uDisp: u.dispersion,
   uLens: u.lens,
+  uBend: u.bend,
   uRim: u.rim,
   uSpec: u.spec,
   uSat: u.saturation,
@@ -352,6 +353,7 @@ export class NodeMaterialRenderer implements Engine {
   /** The same encoding, front faces — what the depth of field measures its blur against. */
   private frontDepthMaterial?: THREE.NodeMaterial;
   private plateSource?: Vec;
+  private plainSource?: Vec;
   private debugBlit?: THREE.NodeMaterial;
   private debugColor?: THREE.NodeMaterial;
   private debugEnv?: THREE.NodeMaterial;
@@ -1120,6 +1122,7 @@ export class NodeMaterialRenderer implements Engine {
       path: uniform(m.path),
       density: uniform(m.density),
       lens: uniform(m.lens),
+      bend: uniform(m.bend),
       dispersion: uniform(m.dispersion),
       emission: uniform(m.emission),
       saturation: uniform(m.saturation),
@@ -1347,7 +1350,26 @@ export class NodeMaterialRenderer implements Engine {
       // and the offset has to come out top-down. Subtracting the two straight would leave the
       // traced branch with the same wrong-way displacement the lens branch had.
       const hitUvTopDown = TSL.vec2(hitUv.x, TSL.float(1).sub(hitUv.y));
-      const offset = select(traced, hitUvTopDown.sub(screenUv), lensOffset);
+
+      // BENT: the same construction as the traced branch, but with the MEASURED thickness standing
+      // in for an analytic exit — so it is available to any shape rather than to plane-bounded
+      // solids. `lensOffset` is built from the view normal, which points at the camera in the
+      // middle of any convex shape, so it is zero exactly where a ball bends hardest. See
+      // `MaterialConfig.bend`.
+      //
+      // Top-down before the subtraction, for the same reason the traced branch converts: `bentUv`
+      // is y-up and `screenUv` is not.
+      const bentThick = decodeDepth(TSL.texture(this.depthTexture(), screenUv))
+        .mul(FAR)
+        .sub(TSL.positionView.z.negate())
+        .max(0);
+      const bentExit = TSL.positionWorld.add(inside.mul(bentThick));
+      const bentClip = TSL.cameraProjectionMatrix.mul(TSL.cameraViewMatrix).mul(vec4(bentExit, 1));
+      const bentUv = bentClip.xy.div(bentClip.w.max(1e-5)).mul(0.5).add(0.5);
+      const bentTopDown = TSL.vec2(bentUv.x, TSL.float(1).sub(bentUv.y));
+      const bentOffset = blend(lensOffset, bentTopDown.sub(screenUv), u.bend);
+
+      const offset = select(traced, hitUvTopDown.sub(screenUv), bentOffset);
 
       const plateUv = screenUv.add(offset).clamp(0.002, 0.998);
       const smp: Vec = this.plateSampler().sample(plateUv);
@@ -1360,7 +1382,15 @@ export class NodeMaterialRenderer implements Engine {
       const behind = smp.a.mul(FAR).greaterThanEqual(TSL.positionView.z.negate().sub(0.3));
       const sampled: Vec = smp.rgb;
       const weight = this.passIndex.mul(0.94).mul(select(behind, TSL.float(1), TSL.float(0)));
-      const base = blend(this.clearGlass, sampled, weight);
+      // A bending material reads the GLASS-FREE plate instead, and skips the depth guard with it:
+      // that guard exists to stop a shape sampling what stands in front of it, and there is no
+      // glass in this texture to stand anywhere. See the plain pass in `renderFrame`.
+      const plain: Vec = this.plainSampler().sample(plateUv).rgb;
+      const base = blend(
+        blend(this.clearGlass, sampled, weight.mul(TSL.float(1).sub(u.bend))),
+        plain,
+        this.passIndex.mul(0.94).mul(u.bend),
+      );
 
       // Beer-Lambert, over a MEASURED path where the scene asks for one.
       //
@@ -1875,6 +1905,26 @@ export class NodeMaterialRenderer implements Engine {
     this.placeholder.needsUpdate = true;
     this.plateSource ??= TSL.texture(this.placeholder);
     return this.plateSource;
+  }
+
+  /** Whether any material asks for a real path, so the extra draw costs nothing to a scene that
+   *  does not use one. */
+  private wantsPlainPlate(): boolean {
+    return this.resolvedItems.some((item) => (item.material.bend ?? 0) > 0);
+  }
+
+  /** The glass-free plate, as one swappable texture node — same construction and same reason as
+   *  {@link plateSampler}. */
+  private plainSampler(): Vec {
+    this.placeholder ??= new THREE.DataTexture(new Uint8Array([0, 0, 0, 255]), 1, 1);
+    this.placeholder.needsUpdate = true;
+    this.plainSource ??= TSL.texture(this.placeholder);
+    return this.plainSource;
+  }
+
+  private bindPlain(live: boolean): void {
+    if (!this.plainSource) return;
+    this.plainSource.value = live && this.targets ? this.targets.plain.texture : this.placeholder;
   }
 
   /** Point every item's plate fetch at the real plate, or at a 1x1 stand-in during the plate pass. */
@@ -3026,8 +3076,24 @@ export class NodeMaterialRenderer implements Engine {
     // The beam stays hidden for the plate too: the plate is what the glass REFRACTS, and the
     // tracer has already computed the beam's true path through the glass. Carrying it here as well
     // refracts it a second time and draws a bent ghost of the beam inside the solid.
+    // 0b. The plate WITHOUT the glass, for `material.bend`. A refracted ray near the centre of a
+    //     convex solid lands back inside that solid's own silhouette, where the ordinary plate
+    //     holds its clear-glass pixel rather than the backdrop — so a real optical path needs a
+    //     plate with no glass in it. Skipped by every scene that asks for no bending.
+    if (this.wantsPlainPlate()) {
+      const hidden = this.items.map((item) => item.mesh.visible);
+      for (const item of this.items) item.mesh.visible = false;
+      this.passIndex.value = 0;
+      this.bindPlate(false);
+      this.bindPlain(false);
+      this.renderer.setRenderTarget(t.plain);
+      this.renderer.render(this.scene, this.camera);
+      for (const [i, item] of this.items.entries()) item.mesh.visible = hidden[i];
+    }
+
     this.passIndex.value = 0;
     this.bindPlate(false);
+    this.bindPlain(false);
     this.renderer.setRenderTarget(t.plate);
     this.renderer.render(this.scene, this.camera);
     if (this.beamMesh) this.beamMesh.visible = beamWasVisible;
@@ -3040,6 +3106,7 @@ export class NodeMaterialRenderer implements Engine {
     // 2. Main — the same frame again, now refracting the plate. Tubes refracting tubes.
     this.passIndex.value = 1;
     this.bindPlate(true);
+    this.bindPlain(true);
     this.renderer.setRenderTarget(t.color);
     this.renderer.render(this.scene, this.camera);
 

@@ -34,6 +34,9 @@ export interface PassTargets {
   back: THREE.RenderTarget;
   /** The plate: backdrop plus shapes, un-refracted. Alpha carries linear depth. */
   plate: THREE.RenderTarget;
+  /** The plate WITHOUT the shapes — what `material.bend` refracts. See the WebGL engine's
+   *  `renderPlainPlate` for why a real optical path needs a plate with no glass in it. */
+  plain: THREE.RenderTarget;
   /** The composed frame, before post. Half-float when a tone map is in play. */
   color: THREE.RenderTarget;
   /** Where post writes when the finish pass is going to run over it. */
@@ -103,6 +106,7 @@ export function createTargets(
       magFilter: THREE.NearestFilter,
     }),
     plate: makeTarget(width, height, scene),
+    plain: makeTarget(width, height, scene),
     color: makeTarget(width, height, scene),
     finish: makeTarget(outWidth, outHeight, scene),
     // ROUND, not floor, and not the bare quotient: the reference rounds, and at 900x540 flooring
@@ -136,6 +140,7 @@ export function resizeTargets(
   t.front.setSize(w, h);
   t.back.setSize(w, h);
   t.plate.setSize(w, h);
+  t.plain.setSize(w, h);
   t.color.setSize(w, h);
   t.finish.setSize(Math.max(1, Math.floor(outWidth)), Math.max(1, Math.floor(outHeight)));
   BLOOM_DIVISORS.forEach((d, i) => {
@@ -148,6 +153,7 @@ export function disposeTargets(t: PassTargets): void {
   t.front.dispose();
   t.back.dispose();
   t.plate.dispose();
+  t.plain.dispose();
   t.color.dispose();
   t.finish.dispose();
   for (const level of t.bloom) {

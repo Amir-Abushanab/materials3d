@@ -35,4 +35,9 @@ item's `material`, a sparse override set where absent means "take the default". 
 now also INFER whether a change needs geometry rebuilt rather than uniforms pushed, because the
 caller cannot know which fields are baked and a silent no-op costs a round trip to notice.
 
-NOT yet in the WebGPU/TSL engine — a scene using `bend` renders differently on the two engines.
+Ported to the WebGPU/TSL engine, but NOT yet at parity. Both engines carry the same construction —
+a second glass-free target, the refracted ray walked the measured thickness, the exit projected into
+`screenUV`'s top-down convention — and `bend: 0` is byte-identical on both (`prism` renders to the
+same 188685 bytes as before the port). At `bend: 1` they disagree: WebGL grades across the solid,
+the node engine floods it. The remaining difference is in what the glass-free plate contains rather
+than in the offset, since the hard core boundary does clear on both.

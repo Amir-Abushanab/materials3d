@@ -1392,24 +1392,6 @@ export function materials(): SceneConfig {
 }
 
 /**
- * A spectacles frame, drawn as one outline and two counters.
- *
- * Authored in SVG's own coordinates — y DOWN, a 242x62 box — because that is what `path` reads and
- * what a vector tool would hand you. `pathShape` flips it and fits it to the shape's radius, so the
- * numbers here are the drawing's, not the scene's; changing `r` resizes the whole thing.
- *
- * The first subpath is the frame and the two after it are the lens openings, which is the
- * outline-then-holes rule doing exactly what a vector tool's own output does. The openings are
- * rounded rectangles rather than ellipses so they echo the rims: an oval inside a soft-cornered rim
- * reads as two shapes that have never met.
- *
- * Three proportions do all the work of saying "spectacles" rather than "two rings". The rims are
- * half again as wide as they are tall, because equal ones read as goggles. The bridge sits in the
- * upper third rather than on the centreline, which is where a real one clears a nose. And the
- * temple tabs are square stubs off the outer edges — no arm is drawn, but the hinge is enough to
- * turn a symmetrical ornament into an object with a front and a back.
- */
-/**
  * Two nearly-flat lenses, overlapping, with one beam through both.
  *
  * A `disc` is a lathe, so its slice in the beam's plane is a CIRCLE — and a circle is a lens: it

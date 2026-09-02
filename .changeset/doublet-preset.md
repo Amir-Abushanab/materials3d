@@ -4,34 +4,18 @@
 
 Replace the `cascade` preset with `doublet`: two overlapping lenses in one beam.
 
-Every other preset composes shapes the language describes with numbers. This one shows the case it
-cannot — an outline with no radius, pasted in from a drawing, carrying its own holes — and then
-puts light through it. A pair of spectacles is the clearest example there is: nobody would try to
-build one out of lathes, and everyone can see whether it came out right.
+A `disc` is a lathe, so its slice in the beam's plane is a CIRCLE — and a circle is a lens, which
+refracts every ray toward its own axis rather than simply bending it. Two in series is the cheapest
+optic that does something a single prism cannot: the fan arriving at the second element has already
+begun to separate, so each wavelength meets it at its own angle.
 
-It is only possible because the tracer no longer needs a convex cross-section. This outline turns
-back on itself at the bridge and at both temple tabs, and until the clipper learned to scan a
-re-entrant polygon edge by edge it was refused outright.
-
-Three things about it are optics rather than styling:
-
-- **The beam crosses the bridge.** `crossSectionFor` reads the first subpath only, so the tracer
-  sees a filled silhouette where the mesh has two lens openings. The bridge is the one part of the
-  frame with clear air above and below, so the traced path and the rendered solid agree along its
-  whole length; any route across an opening would bend light through air the mesh draws as empty.
-- **The bridge's underside slopes.** A bar with parallel faces refracts a ray twice by equal and
-  opposite amounts — it comes out displaced and exactly parallel, which is to say white. The apex
-  between the faces is what makes a prism a prism, and seventeen degrees of it is what fans this
-  one.
-- **Incidence 14°, swept -34 to +18.** Measured rather than picked: the fan widens from 9° at
-  normal to 16° by +20, past which the blue end passes the critical angle on the sloped face and
-  starts bouncing inside the bar. Adjacent wavelengths only join into a sheet while they share a
-  route.
-
-The plate is resized to the scene, which `prism` never had to do because it carries no lamps: the
-inherited 26x20 put a lamp nearly seven units off to the side of a frame two thirds of a unit wide.
-And `rim` runs high where `cascade` runs it low — a frame is nearly all edge, so the Fresnel term
-is what stops the far side being black on black.
+The overlap is the whole constraint on the scene, and it is a property of the tracer rather than of
+the optics. `traceSolids` walks solids one at a time — enter the nearest, leave it, look for the
+next — so a ray that leaves the first element INSIDE the second cannot enter it: from inside, every
+crossing ahead points outward, `clipEntry` reports nothing, and the second lens is skipped in
+silence. At an overlap of 0.13 a scan of the entire aim space, 160 combinations of entry angle and
+incidence, found no route through both. Thinned to 0.03 the beam crosses just off the tangent point
+and threads them. So "slightly" is load-bearing: much more and the second element goes dark.
 
 `cascade` goes to make room. It was the only preset the WebGPU harnesses could name — `pnpm
 tsl:live cascade` no longer resolves and `tsl:perf` loses that row — and the only test of threading

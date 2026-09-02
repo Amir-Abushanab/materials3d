@@ -284,6 +284,10 @@ export const GLASS_FRAG = /* glsl */ `
   uniform vec3  uCam, uTint, uClearCol;
   uniform vec2  uPlateScale, uPlateOffset;
   uniform float uDisp, uLens, uSigma, uAspect, uPath, uPass, uIOR, uPlaneZ;
+  // How much of the refraction comes from the real path through the measured thickness rather
+  // than the rim-weighted normal offset. 0 is every scene authored before it existed.
+  uniform float uBend;
+  uniform sampler2D tPlain;
   uniform float uConeTransmission;
   /** 0 in production; a dev harness sets it to dump one intermediate. See the probe below. */
   uniform float uProbe;
@@ -715,12 +719,45 @@ export const GLASS_FRAG = /* glsl */ `
     // worth comparing against the node engine, and both are otherwise local to this block.
     float dbgLobe = 0.0;
     float dbgGuard = 0.0;
+    float bentPlate = 0.0;
     float dbgPlateA = 0.0;
     vec2 dbgOff = vec2(0.0);
     vec2 dbgSuvOff = vec2(0.0);
     if (uPass > 0.5){
       vec2 suv = (vProj.xy / vProj.w) * 0.5 + 0.5;
       vec2 off = vec2(vVN.x / uAspect, vVN.y) * uLens * pow(1.0 - ndv, 1.35) * 3.4;
+      // THE REAL PATH, for shapes the prism tracer cannot take.
+      //
+      // The offset above is built from the view-space NORMAL, and at the centre of any convex
+      // shape the normal points at the camera — so vVN.xy is zero there, and the rim weight
+      // zeroes it again for good measure. That is deliberate for a plate (a near-flat window in
+      // the middle, hard bending at the edge) and wrong for a ball, whose whole optical character
+      // is that the middle is the THICKEST part and therefore bends the most. A sphere rendered
+      // this way shows a flat disc of clear glass where it should show an inverted, magnified
+      // image of what is behind it.
+      //
+      // So: refract the view ray at the surface, walk it the MEASURED thickness, and project where
+      // it comes out. That is the same construction the prism branch below uses, with the back
+      // depth standing in for an analytic exit — available to any shape, since it asks the depth
+      // buffer rather than a plane set. Small bend times large thickness is exactly where a ball
+      // lens gets its power, which is why this fills in precisely where the normal offset cannot.
+      if (uBend > 0.0 && uThick > 0.5){
+        float backZ = dec(texture2D(tBack, clamp(suv, vec2(0.0), vec2(1.0))).rg) * FAR;
+        float thick = max(backZ - vVZ, 0.0);
+        if (thick > 0.0){
+          vec3 inside = bendDir(V, N, 1.0 / max(uIOR, 1.0));
+          vec4 exitClip = uViewProj * vec4(vW + inside * thick, 1.0);
+          vec2 traced = ((exitClip.xy / max(exitClip.w, 1e-5)) * 0.5 + 0.5) - suv;
+          off = mix(off, traced, uBend);
+          // From the plate WITHOUT the glass in it. A refracted ray near the centre of a convex
+          // solid lands back inside that solid's own silhouette, where the ordinary plate holds
+          // its clear-glass pixel rather than the backdrop — so bending the ray further only ever
+          // finds more flat colour. See renderPlainPlate for the trade this makes.
+          vec4 plain = texture2D(tPlain, clamp(suv + off, vec2(0.002), vec2(0.998)));
+          base = mix(base, plain.rgb, 0.94 * uBend);
+          bentPlate = uBend;
+        }
+      }
       if (uPrism > 0.5){
         vec3 inside = bendDir(V, N, 1.0 / max(uIOR, 1.0));
         float t = prismExit(vW, inside);
@@ -738,7 +775,7 @@ export const GLASS_FRAG = /* glsl */ `
       dbgSuvOff = clamp(suv + off, vec2(0.002), vec2(0.998));
       dbgGuard = step(vVZ - 0.30, smp.a * FAR);
       dbgPlateA = smp.a * FAR;
-      base = mix(base, smp.rgb, 0.94 * dbgGuard);
+      base = mix(base, smp.rgb, 0.94 * dbgGuard * (1.0 - bentPlate));
     }
 
     // Beer-Lambert. The optical path is either MEASURED from the back-face depth pass, or falls

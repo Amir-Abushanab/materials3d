@@ -619,6 +619,23 @@ export interface MaterialConfig {
   dispersion: number;
   /** Rim-weighted screen-space displacement. Uniform displacement reads as frosted; edge-loaded
    *  displacement — a near-flat window in the middle, hard bending at the rim — reads as cut. */
+  /**
+   * How much of the refraction is the REAL path through the glass rather than the normal offset.
+   *
+   * `lens` displaces by the view-space normal, weighted toward the rim. At the centre of any
+   * convex shape the normal points at the camera, so that displacement is zero there — which is
+   * right for a plate, whose middle should be a window, and wrong for a ball, whose middle is the
+   * thickest part and therefore bends the most. A sphere on `lens` alone shows a flat disc where
+   * it should show an inverted, magnified image of what is behind it.
+   *
+   * At 1 the ray is refracted at the surface, walked the MEASURED thickness, and its exit point
+   * projected — the same construction the prism tracer uses, with the back-depth pass standing in
+   * for an analytic exit, so it is available to any shape rather than to plane-bounded solids.
+   * Needs `measuredThickness` on, since that is where the thickness comes from.
+   *
+   * 0 is every scene authored before this existed, and stays exactly as it was.
+   */
+  bend: number;
   lens: number;
   /**
    * Rim highlight strength — the bright edge that sells "glass" at the silhouette.
@@ -1388,6 +1405,7 @@ export function createMaterial(): MaterialConfig {
     ior: 1.45,
     dispersion: 0.03,
     lens: 0.055,
+    bend: 0,
     rim: 0.45,
     // 0.35, not the 0.95 this shipped with. The highlight term was widened (a softer lobe, plus a
     // fill key that flat and cylindrical shapes can actually reach), so a unit of `specular` now
@@ -1687,6 +1705,7 @@ export function resolveMaterial(material: Partial<MaterialConfig> | undefined): 
     ior: clamp(num(material?.ior, base.ior), 1.0001, 4),
     dispersion: clamp(num(material?.dispersion, base.dispersion), 0, 0.4),
     lens: Math.max(0, num(material?.lens, base.lens)),
+    bend: clamp01(num(material?.bend, base.bend)),
     rim: clamp01(num(material?.rim, base.rim)),
     specular: Math.max(0, num(material?.specular, base.specular)),
     saturation: Math.max(0, num(material?.saturation, base.saturation)),

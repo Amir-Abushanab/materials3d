@@ -991,10 +991,39 @@ function boot(): void {
  * `structural` is the same distinction the panel draws. Most fields only move uniforms; the item
  * list, the scatter and the quality rebuild geometry. Pass it when a change is one of those.
  *
+ * `structural` is inferred from the paths — see {@link needsRebuild} — and can be forced either
+ * way with the second argument.
+ *
  *   m3d.patch({ "beam.incidence": -20, "post.bloom": 0.4 })
  *   m3d.patch({ "items.0.material.ior": 1.6 })
  *   m3d.get("beam.incidence")   m3d.config()   m3d.preset("doublet")
  */
+/**
+ * Whether a config path needs geometry rebuilt rather than uniforms pushed.
+ *
+ * `refresh()` re-pushes what lives in a uniform. Everything else is baked at build time — the mesh
+ * gradient into a texture, a material into a compiled shader, the items into meshes — and a patch
+ * to one of those looks like it did nothing at all, which is a far worse failure than a slow
+ * rebuild. Inferred rather than left to the caller, because the caller has no way to know which
+ * fields are which, and getting it wrong silently costs a round trip to notice.
+ */
+function needsRebuild(path: string): boolean {
+  return (
+    path.startsWith("items") ||
+    path.startsWith("scatter") ||
+    path.startsWith("backgroundMesh") ||
+    path.startsWith("backgroundPalette") ||
+    path === "backgroundGradientType" ||
+    path === "backgroundMode" ||
+    path === "quality" ||
+    path === "clearGlass" ||
+    path === "transmission" ||
+    path === "environment" ||
+    path === "studio" ||
+    path.startsWith("post.toneMap")
+  );
+}
+
 function exposeDevBridge(): void {
   if (!import.meta.env.DEV) return;
   const walk = (path: string, create: boolean): [Record<string, unknown>, string] => {
@@ -1017,12 +1046,30 @@ function exposeDevBridge(): void {
       const [node, last] = walk(path, false);
       return node[last];
     },
-    patch: (changes: Record<string, unknown>, structural = false) => {
+    patch: (changes: Record<string, unknown>, structural?: boolean) => {
       for (const [path, value] of Object.entries(changes)) {
         const [node, last] = walk(path, false);
         node[last] = value;
       }
-      applyChange(structural);
+      applyChange(structural ?? Object.keys(changes).some(needsRebuild));
+      panel.refresh();
+      return Object.keys(changes).length;
+    },
+    /**
+     * `patch`, but it CREATES what is missing.
+     *
+     * An item's `material` is a sparse override set — absent means "take the resolved default" —
+     * so `items.0.material.iridescence` does not exist until something writes it, and `patch`
+     * refusing to create is exactly right for catching a typo and exactly wrong for adding an
+     * override. Two verbs rather than a flag, because the safe one should be the one you reach for
+     * without thinking.
+     */
+    set: (changes: Record<string, unknown>, structural?: boolean) => {
+      for (const [path, value] of Object.entries(changes)) {
+        const [node, last] = walk(path, true);
+        node[last] = value;
+      }
+      applyChange(structural ?? Object.keys(changes).some(needsRebuild));
       panel.refresh();
       return Object.keys(changes).length;
     },

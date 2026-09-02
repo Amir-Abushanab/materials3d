@@ -135,6 +135,7 @@ function pushMaterialUniforms(
   u.uUseTint.value = m.tint ? 1 : 0;
   u.uDisp.value = m.dispersion;
   u.uLens.value = m.lens;
+  u.uBend.value = m.bend;
   u.uSigma.value = m.density;
   u.uUseAbsorb.value = m.absorption ? 1 : 0;
   if (m.absorption) {
@@ -283,6 +284,7 @@ export class MaterialRenderer implements Engine {
 
   private readonly colorRT: THREE.WebGLRenderTarget;
   private readonly bgRT: THREE.WebGLRenderTarget;
+  private readonly plainRT: THREE.WebGLRenderTarget;
   private readonly depthRT: THREE.WebGLRenderTarget;
 
   private readonly backdrop: THREE.Mesh;
@@ -499,6 +501,8 @@ export class MaterialRenderer implements Engine {
       : rtOptions;
     this.colorRT = new THREE.WebGLRenderTarget(1, 1, colorOptions);
     this.bgRT = new THREE.WebGLRenderTarget(1, 1, colorOptions);
+    // The plate WITHOUT the glass in it. See `renderPlainPlate`.
+    this.plainRT = new THREE.WebGLRenderTarget(1, 1, colorOptions);
     this.depthRT = new THREE.WebGLRenderTarget(1, 1, {
       ...rtOptions,
       // Nearest: the packed two-channel depth must not be interpolated — a blend of the low byte
@@ -767,6 +771,8 @@ export class MaterialRenderer implements Engine {
         uUseEdge: { value: 0 },
         uAspect: { value: 1 },
         uConeTransmission: { value: this.config.transmission === "cone" ? 1 : 0 },
+        uBend: { value: 0 },
+        tPlain: { value: null },
         uProbe: { value: 0 },
       },
       // Eleven, the reference's count. It is a compile-time constant rather than a uniform because
@@ -1500,6 +1506,7 @@ export class MaterialRenderer implements Engine {
     this.colorRT.setSize(rw, rh);
     this.backRT.setSize(rw, rh);
     this.bgRT.setSize(rw, rh);
+    this.plainRT.setSize(rw, rh);
     if (this.bloomLevels) {
       for (const [i, level] of this.bloomLevels.entries()) {
         const d = MaterialRenderer.BLOOM_DIVISORS[i];
@@ -2579,12 +2586,23 @@ export class MaterialRenderer implements Engine {
     }
   }
 
+  /** Whether any material asks for a real path, so the extra draw is skipped by every scene that
+   *  does not use one. */
+  private wantsPlainPlate(): boolean {
+    for (const item of this.items) {
+      if ((item.material.uniforms.uBend?.value ?? 0) > 0) return true;
+    }
+    return false;
+  }
+
   private setPass(pass: 0 | 1): void {
     for (const item of this.items) {
       item.material.uniforms.uPass.value = pass;
       // The refraction texture MUST be unbound while pass 2 renders INTO it, or the driver
       // reports a framebuffer feedback loop and the frame is undefined.
       item.material.uniforms.tBg.value = pass === 1 ? this.bgRT.texture : null;
+      // Never written during the main pass, so unlike tBg it can stay bound — no feedback loop.
+      item.material.uniforms.tPlain.value = pass === 1 ? this.plainRT.texture : null;
     }
   }
 
@@ -2686,6 +2704,25 @@ export class MaterialRenderer implements Engine {
     //    The beam stays hidden: the plate is what the glass REFRACTS, and the tracer has already
     //    computed the beam's true path through the glass. Letting the plate carry it too would
     //    refract it a second time and draw a bent ghost of the beam inside the prism.
+    // 2a. The plate WITHOUT the glass, for `material.bend` to refract.
+    //
+    //     The plate below is the whole frame INCLUDING the glass, which is what lets a tube refract
+    //     the tube behind it. It is also why a convex solid cannot see through its own middle: a
+    //     refracted ray near the centre lands back inside the shape's own silhouette, and what is
+    //     stored there is that shape's plate-pass pixel — clear glass and lamps, not the backdrop.
+    //     No amount of bending helps, because the thing being sampled is flat.
+    //
+    //     So a shape tracing a real path gets a plate with the glass left out of it. The trade is
+    //     explicit and is the whole meaning of `bend`: a true optical path through the backdrop,
+    //     in exchange for not seeing the other glass along it.
+    if (this.wantsPlainPlate()) {
+      for (const item of this.items) item.mesh.visible = false;
+      renderer.setRenderTarget(this.plainRT);
+      renderer.clear();
+      renderer.render(this.scene, this.camera);
+      for (const item of this.items) item.mesh.visible = true;
+    }
+
     this.setPass(0);
     renderer.setRenderTarget(this.bgRT);
     renderer.clear();
@@ -3193,6 +3230,7 @@ export class MaterialRenderer implements Engine {
     this.backMaterial.dispose();
     this.colorRT.dispose();
     this.bgRT.dispose();
+    this.plainRT.dispose();
     this.depthRT.dispose();
     this.renderer.dispose();
     if (this.ownsCanvas) this.renderer.domElement.remove();

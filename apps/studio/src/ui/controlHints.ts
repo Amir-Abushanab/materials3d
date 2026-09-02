@@ -214,6 +214,7 @@ const CONTROL_HINTS: Record<string, string> = {
   // for both: the material's per-channel split, and the beam's Cauchy term.
   dispersion:
     "On a MATERIAL, splits the refraction per colour channel — the rainbow fringing at edges. On the BEAM, the Cauchy strength: how wide the spectrum fans. Zero still bends the light but leaves it white.",
+  bend: "How much of the refraction is the REAL path rather than the rim-weighted normal offset. `lens` displaces by the view normal, which points at the camera in the middle of any convex shape — right for a plate, whose middle should be a window, and wrong for a ball, whose middle is the thickest part and bends the most. At 1 the ray is refracted, walked the MEASURED thickness, and its exit projected. Needs `measured thickness` on. The trade: a shape doing this refracts the BACKDROP along a true path and stops seeing the other glass along it.",
   lens: 'Rim-weighted screen-space displacement: near-flat in the middle, hard bending at the edge — the difference between "frosted" and "cut".',
   rim: "Strength of the bright edge highlight at the silhouette — the cue that sells glass.",
   specular: "Specular highlight strength from the key light.",

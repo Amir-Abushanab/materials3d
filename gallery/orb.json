@@ -1,0 +1,275 @@
+{
+  "background": "#080614",
+  "transparentBackground": false,
+  "clearGlass": "#ffd9ef",
+  "lamps": [
+    {
+      "x": 0.8,
+      "y": 0.5,
+      "r": 0.17,
+      "color": "#ff2d6f",
+      "intensity": 1.35
+    },
+    {
+      "x": 0.65,
+      "y": 0.76,
+      "r": 0.17,
+      "color": "#ff6a2d",
+      "intensity": 1.35
+    },
+    {
+      "x": 0.35,
+      "y": 0.76,
+      "r": 0.17,
+      "color": "#ffc53d",
+      "intensity": 1.35
+    },
+    {
+      "x": 0.2,
+      "y": 0.5,
+      "r": 0.17,
+      "color": "#b6ff3d",
+      "intensity": 1.35
+    },
+    {
+      "x": 0.35,
+      "y": 0.24,
+      "r": 0.17,
+      "color": "#3dffa8",
+      "intensity": 1.35
+    },
+    {
+      "x": 0.65,
+      "y": 0.24,
+      "r": 0.17,
+      "color": "#3de0ff",
+      "intensity": 1.35
+    },
+    {
+      "x": 0.5,
+      "y": 0.5,
+      "r": 0.3,
+      "color": "#ffe9c7",
+      "intensity": 0.8
+    }
+  ],
+  "studio": "gradient",
+  "environment": "analytic",
+  "transmission": "cone",
+  "studioGain": 1,
+  "lampGain": 1.9,
+  "lampGate": {
+    "lo": 0.01,
+    "hi": 0.99
+  },
+  "backdropLamps": 0.1,
+  "plate": {
+    "z": -5,
+    "scale": {
+      "x": 13,
+      "y": 9
+    },
+    "offset": {
+      "x": 0.5,
+      "y": 0.5
+    }
+  },
+  "camera": {
+    "fov": 15,
+    "distance": 21,
+    "lookAt": {
+      "x": 0,
+      "y": 0,
+      "z": 0
+    },
+    "height": 0,
+    "roll": 0,
+    "fit": "cover",
+    "minVisibleWidth": 0
+  },
+  "post": {
+    "focus": 21,
+    "range": 9,
+    "aperture": 0.35,
+    "bloom": 0.28,
+    "caustics": 0.55,
+    "haze": 0.04,
+    "hazeTop": 0.03,
+    "hazeColor": "#f7f9fc",
+    "vignette": 0.42,
+    "grain": 0.014,
+    "bloomRadius": 9,
+    "bloomThreshold": 0,
+    "toneMap": "none",
+    "bloomMode": "gather",
+    "bloomSpread": 0.5,
+    "innerLight": 0,
+    "innerLightDensity": 0.5,
+    "innerLightDecay": 0.94,
+    "innerLightX": 0.5,
+    "innerLightY": 0.15,
+    "dither": 0,
+    "ditherScale": 2,
+    "ditherSteps": 4,
+    "halftone": 0,
+    "halftoneCell": 6,
+    "halftoneAngle": 0.4,
+    "halftoneCmyk": 0,
+    "halftoneCmykCell": 6,
+    "paperTexture": 0,
+    "paperTextureScale": 2
+  },
+  "orbit": true,
+  "tracedRefraction": false,
+  "backGlassStrength": 0,
+  "measuredThickness": true,
+  "loopSeconds": 0,
+  "introRamp": true,
+  "mirrorH": false,
+  "mirrorV": false,
+  "backgroundMode": "gradient",
+  "backgroundPalette": [
+    {
+      "color": "#efedeb",
+      "position": 0
+    },
+    {
+      "color": "#d9d5f0",
+      "position": 1
+    }
+  ],
+  "backgroundGradientType": "mesh",
+  "backgroundGradientAngle": 1.5707963267948966,
+  "backgroundMeshPoints": [
+    {
+      "x": 0.1,
+      "y": 0.14,
+      "color": "#ff1f5a"
+    },
+    {
+      "x": 0.5,
+      "y": 0.02,
+      "color": "#2b0f4a"
+    },
+    {
+      "x": 0.9,
+      "y": 0.16,
+      "color": "#ffb02e"
+    },
+    {
+      "x": 0.98,
+      "y": 0.56,
+      "color": "#00e5a0"
+    },
+    {
+      "x": 0.66,
+      "y": 0.96,
+      "color": "#1273ff"
+    },
+    {
+      "x": 0.26,
+      "y": 0.98,
+      "color": "#6d28ff"
+    },
+    {
+      "x": 0.02,
+      "y": 0.66,
+      "color": "#120a2e"
+    },
+    {
+      "x": 0.46,
+      "y": 0.46,
+      "color": "#ff5ec4"
+    }
+  ],
+  "backgroundMeshSoftness": 0.55,
+  "backgroundImageFit": "cover",
+  "backgroundImageZoom": 1,
+  "backgroundImagePosition": {
+    "x": 0.5,
+    "y": 0.5
+  },
+  "items": [
+    {
+      "shape": {
+        "kind": "sphere",
+        "r": 1.8,
+        "len": 8,
+        "thickness": 0.5,
+        "fillet": 0,
+        "bevel": 0,
+        "sides": 96,
+        "hole": 1,
+        "shaft": 0.35,
+        "head": 1,
+        "depth": 0.5,
+        "seed": 1,
+        "bump": 0.5
+      },
+      "position": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "name": "orb",
+      "material": {
+        "kind": "glass",
+        "albedo": "#eef1f6",
+        "path": 0.75,
+        "density": 0.28,
+        "ior": 1.5,
+        "dispersion": 0.16,
+        "lens": 0.75,
+        "bend": 1,
+        "rim": 1.15,
+        "specular": 1,
+        "saturation": 1.35,
+        "emission": 0.04,
+        "iridescence": 0.75,
+        "filmNm": 430,
+        "roughness": 0.22
+      },
+      "motion": {
+        "kind": "none",
+        "axis": "y",
+        "rate": 0,
+        "amount": 0
+      },
+      "phase": 0
+    }
+  ],
+  "groups": [],
+  "interaction": {
+    "enabled": true,
+    "bindings": [
+      {
+        "source": "pointerX",
+        "target": "cameraYaw",
+        "to": 4,
+        "from": -4,
+        "smoothing": 0.45
+      },
+      {
+        "source": "pointerY",
+        "target": "cameraPitch",
+        "to": 3,
+        "from": -3,
+        "smoothing": 0.45
+      }
+    ]
+  },
+  "quality": 1,
+  "dprMax": 1.75,
+  "paused": false,
+  "timeOffset": 0
+}

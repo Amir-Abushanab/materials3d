@@ -1475,6 +1475,127 @@ function doublet(): SceneConfig {
   };
 }
 
+/**
+ * One glass sphere over a mesh gradient — the scene `material.bend` exists for.
+ *
+ * A sphere is the shape that most exposes what `lens` cannot do. That term displaces the plate
+ * sample by the view-space NORMAL, which at the centre of any convex solid points straight at the
+ * camera, so the displacement there is exactly zero however far the knob is pushed. On a plate that
+ * is right — the middle should be a window. On a ball it renders a flat disc of clear glass with a
+ * hard edge where the rim weighting takes over, sitting inside the shape like a sticker.
+ *
+ * At `bend: 1` the view ray is refracted at the surface, walked the measured thickness, and its
+ * exit projected, so the body shades continuously from edge to edge and reads as solid glass. Set
+ * `bend` to 0 in the studio to see the disc come back; that comparison is the whole preset.
+ *
+ * WHAT IT DOES NOT DO is magnify. The exit POINT is projected, not the ray's eventual landing on
+ * the plate, so displacement is bounded by the solid's own size — the same approximation the prism
+ * tracer makes. Moving the plate further back does not turn this into a ball lens, which is worth
+ * knowing before reaching for it expecting one.
+ *
+ * `measuredThickness` is on because that is where the thickness comes from; without it `bend` has
+ * nothing to walk and quietly does nothing.
+ */
+function orb(): SceneConfig {
+  const base = createDefaultConfig();
+  return {
+    ...base,
+    background: "#080614",
+    backgroundMode: "gradient",
+    backgroundGradientType: "mesh",
+    // Eight wells with dark ones between the bright, because a sphere refracting a smooth wash
+    // returns a smooth wash — the gradient has to have somewhere to bend light FROM.
+    backgroundMeshPoints: [
+      { x: 0.1, y: 0.14, color: "#ff1f5a" },
+      { x: 0.5, y: 0.02, color: "#2b0f4a" },
+      { x: 0.9, y: 0.16, color: "#ffb02e" },
+      { x: 0.98, y: 0.56, color: "#00e5a0" },
+      { x: 0.66, y: 0.96, color: "#1273ff" },
+      { x: 0.26, y: 0.98, color: "#6d28ff" },
+      { x: 0.02, y: 0.66, color: "#120a2e" },
+      { x: 0.46, y: 0.46, color: "#ff5ec4" },
+    ],
+    /**
+     * Bright, and that is load-bearing rather than a colour choice.
+     *
+     * A refracted ray near the centre of a big convex solid lands back inside that solid's own
+     * silhouette, and `bend` answers it from the glass-free plate — but everything the guard still
+     * rejects falls back to THIS. Left dark, it multiplies the whole interior down to nothing, and
+     * the orb reads as a hole rather than as glass. That mistake cost an afternoon.
+     */
+    clearGlass: "#ffd9ef",
+    // A rosette rather than a few key lights: the orb is one large curved surface, and what fills
+    // it is whatever the lamp field has to offer directly behind. Gaps between lamps read as gaps.
+    lamps: [
+      { x: 0.8, y: 0.5, r: 0.17, color: "#ff2d6f", intensity: 1.35 },
+      { x: 0.65, y: 0.76, r: 0.17, color: "#ff6a2d", intensity: 1.35 },
+      { x: 0.35, y: 0.76, r: 0.17, color: "#ffc53d", intensity: 1.35 },
+      { x: 0.2, y: 0.5, r: 0.17, color: "#b6ff3d", intensity: 1.35 },
+      { x: 0.35, y: 0.24, r: 0.17, color: "#3dffa8", intensity: 1.35 },
+      { x: 0.65, y: 0.24, r: 0.17, color: "#3de0ff", intensity: 1.35 },
+      { x: 0.5, y: 0.5, r: 0.3, color: "#ffe9c7", intensity: 0.8 },
+    ],
+    lampGain: 1.9,
+    lampGate: { lo: 0.01, hi: 0.99 },
+    backdropLamps: 0.1,
+    plate: { z: -5, scale: { x: 13, y: 9 }, offset: { x: 0.5, y: 0.5 } },
+    camera: { ...base.camera, fov: 15, distance: 21, lookAt: { x: 0, y: 0, z: 0 }, height: 0 },
+    measuredThickness: true,
+    transmission: "cone",
+    post: {
+      ...base.post,
+      focus: 21,
+      range: 9,
+      aperture: 0.35,
+      bloom: 0.28,
+      haze: 0.04,
+      hazeTop: 0.03,
+      hazeColor: "#f7f9fc",
+      vignette: 0.42,
+      grain: 0.014,
+    },
+    scatter: undefined,
+    items: [
+      {
+        name: "orb",
+        shape: { ...createShape("sphere"), kind: "sphere", r: 1.8, sides: 96 },
+        position: { x: 0, y: 0, z: 0 },
+        rotation: { x: 0, y: 0, z: 0 },
+        scale: { x: 1, y: 1, z: 1 },
+        material: {
+          kind: "glass",
+          albedo: "#eef1f6",
+          // Half the radius, not the whole one. `defaultPath` hands a sphere its full radius, which
+          // at any useful density saturates the middle to black — the note in `defaultPath` says
+          // so, and this is the scene that would show it.
+          path: 0.75,
+          density: 0.28,
+          ior: 1.5,
+          dispersion: 0.16,
+          lens: 0.75,
+          bend: 1,
+          rim: 1.15,
+          specular: 1,
+          saturation: 1.35,
+          emission: 0.04,
+          iridescence: 0.75,
+          filmNm: 430,
+          roughness: 0.22,
+        },
+        motion: { kind: "none", axis: "y", rate: 0, amount: 0 },
+        phase: 0,
+      },
+    ],
+    interaction: {
+      enabled: true,
+      bindings: [
+        { source: "pointerX", target: "cameraYaw", from: -4, to: 4, smoothing: 0.45 },
+        { source: "pointerY", target: "cameraPitch", from: -3, to: 3, smoothing: 0.45 },
+      ],
+    },
+  };
+}
+
 export const PRESETS: Record<string, () => SceneConfig> = {
   skewer,
   assembly,
@@ -1484,6 +1605,7 @@ export const PRESETS: Record<string, () => SceneConfig> = {
   materials,
   prism,
   doublet,
+  orb,
 };
 
 export const PRESET_NAMES = Object.keys(PRESETS);

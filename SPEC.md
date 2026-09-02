@@ -446,7 +446,8 @@ self-contained embed HTML, and the raw config.
 **Presets** are the actual product for most users: the reference scene ("Skewer"),
 an exploded shapes composition ("Assembly"), a glass spiral staircase
 ("Staircase"), a set of gooey liquid blobs ("Slimes"), a dispersion rig
-("Prism"), two overlapping lenses in one beam ("Doublet"), a hover legend for the
+("Prism"), two overlapping lenses in one beam ("Doublet"), a glass sphere refracting along its real
+optical path ("Orb"), a hover legend for the
 interaction layer ("Reactions"), and a swatch
 grid of every material against every shape ("Materials").
 

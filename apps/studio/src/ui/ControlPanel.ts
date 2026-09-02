@@ -2264,10 +2264,27 @@ export class ControlPanel {
   }
 
   /** Write the model back into the inputs without the write looking like a user edit. */
+  /**
+   * Push the config's current values back into the controls.
+   *
+   * The rebuild guard is not defensive tidiness. Tweakpane throws "View has been already disposed"
+   * from a blade whose rack went away, and a pane whose FOLDER SET changed between rebuilds can be
+   * left holding one — switching to a scene that has a beam, where the previous one had none, is
+   * exactly that shape. A second refresh then works, which is the tell that the state is stale
+   * rather than wrong.
+   *
+   * Rebuilding is the correct recovery and not a mask: it is what a pane out of step with its
+   * config needs anyway, `restoreView` puts the folders back as they were, and a refresh failing
+   * must never take its caller down — the callers are a file picker and the dev bridge, both of
+   * which have already applied the change by the time they ask the panel to catch up.
+   */
   private syncInputs(): void {
     this.syncing = true;
     try {
       this.pane.refresh();
+    } catch {
+      this.syncing = false;
+      this.rebuild();
     } finally {
       this.syncing = false;
     }

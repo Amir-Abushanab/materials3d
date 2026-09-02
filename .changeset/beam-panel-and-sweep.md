@@ -22,3 +22,13 @@ Make the beam editable, and the tuning loop batched.
   into `presets.ts`. It emits the difference against a base rather than the whole config: a dump of
   every field buries the three numbers that matter under two hundred defaults, and what a preset
   contains should be what somebody chose.
+
+- **`window.m3d` in dev builds** — a handle on the running studio. `patch` writes dotted paths into
+  the live config and pushes them, so a change lands in the frame already on screen rather than
+  reloading and losing whatever state was there. Nothing is created: a mistyped path throws rather
+  than adding a field the renderer will never read.
+- `syncInputs` now recovers instead of throwing. Tweakpane raises "View has been already disposed"
+  from a blade whose rack went away, and a pane whose FOLDER SET changed between rebuilds can hold
+  one — switching to a scene that has a beam, from one that had none, is exactly that shape, which
+  the new Beam folder made reachable. A rebuild is the correct recovery, and a refresh failing must
+  never take its caller down.

@@ -225,6 +225,24 @@ pnpm sweep doublet beam.entryAngle=150,157,164 beam.incidence=0,8,16
 pnpm preset:from ~/Downloads/scene.json --base prism  # tuned scene → pasteable source
 ```
 
+### Driving the running studio
+
+`pnpm dev` exposes `window.m3d` — dev builds only. It is a handle on the LIVE scene, so a change
+lands in the frame already on screen instead of reloading the page and losing whatever state was
+there. `@materials3d/core` resolves to `src/*.ts` in dev, so edits to the renderer or the presets
+hot-reload on their own; this covers the other half, where the thing to change is the scene rather
+than the code.
+
+```js
+m3d.patch({ "beam.incidence": -20, "post.bloom": 0.4 })  // dotted paths, applied live
+m3d.patch({ "items.0.material.ior": 1.6 }, true)         // true = rebuild geometry
+m3d.get("beam.incidence")   m3d.config()   m3d.preset("doublet")   m3d.still()
+```
+
+Nothing is created: a mistyped path throws rather than quietly adding a field the renderer will
+never read. That makes it safe to drive from a console, a script, or an assistant with a view of
+the tab — say what to change, watch it change, say the next thing.
+
 `sweep` exists because tuning asks "which of these" far more often than "is this one right", and
 answering that one PNG at a time costs a browser launch per guess. It launches once and returns a
 single labelled grid — one axis is a row, two make a grid. `preset:from` closes the other

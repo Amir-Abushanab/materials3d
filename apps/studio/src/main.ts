@@ -975,4 +975,68 @@ function boot(): void {
   });
 }
 
+/**
+ * A handle on the running studio, for driving it from outside the page.
+ *
+ * DEV ONLY, and gated on `import.meta.env.DEV` so it is not in a build. The studio is the fastest
+ * way to tune a scene — a slider and a live frame beat a rebuild per guess — but that speed is only
+ * available to whoever is holding the mouse. Everything else (an assistant, a script, a REPL in the
+ * devtools console) had to go through the config editor, and reloading the page to try a number
+ * throws away whatever was on screen.
+ *
+ * `patch` writes DOTTED PATHS into the live config and pushes them, which is the whole point: the
+ * scene keeps its current state and only the named fields move. Nothing is created — a mistyped
+ * path throws rather than quietly adding a field the renderer will never read.
+ *
+ * `structural` is the same distinction the panel draws. Most fields only move uniforms; the item
+ * list, the scatter and the quality rebuild geometry. Pass it when a change is one of those.
+ *
+ *   m3d.patch({ "beam.incidence": -20, "post.bloom": 0.4 })
+ *   m3d.patch({ "items.0.material.ior": 1.6 })
+ *   m3d.get("beam.incidence")   m3d.config()   m3d.preset("doublet")
+ */
+function exposeDevBridge(): void {
+  if (!import.meta.env.DEV) return;
+  const walk = (path: string, create: boolean): [Record<string, unknown>, string] => {
+    const keys = path.split(".");
+    let node = config() as unknown as Record<string, unknown>;
+    for (const key of keys.slice(0, -1)) {
+      const next = (node as Record<string, unknown>)[key];
+      if (next === undefined || next === null || typeof next !== "object") {
+        throw new Error(`no such config path: ${path}`);
+      }
+      node = next as Record<string, unknown>;
+    }
+    const last = keys[keys.length - 1];
+    if (!create && !(last in node)) throw new Error(`no such config path: ${path}`);
+    return [node, last];
+  };
+  (globalThis as Record<string, unknown>).m3d = {
+    config: () => config(),
+    get: (path: string) => {
+      const [node, last] = walk(path, false);
+      return node[last];
+    },
+    patch: (changes: Record<string, unknown>, structural = false) => {
+      for (const [path, value] of Object.entries(changes)) {
+        const [node, last] = walk(path, false);
+        node[last] = value;
+      }
+      applyChange(structural);
+      panel.refresh();
+      return Object.keys(changes).length;
+    },
+    preset: (name: string) => {
+      if (!(name in PRESETS)) throw new Error(`no preset "${name}"`);
+      adopt(PRESETS[name](), name, true, presetLabel(name));
+      return name;
+    },
+    presets: () => Object.keys(PRESETS),
+    // A still of exactly what is on screen, as a data URI — so a caller with no view of the tab
+    // can still see what its own change did.
+    still: async () => URL.createObjectURL(await renderer.captureImage("image/png", 1)),
+  };
+}
+
 boot();
+exposeDevBridge();

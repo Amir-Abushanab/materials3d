@@ -170,6 +170,8 @@ export interface PanelHooks {
   onOutputSizeChange(): void;
   /** Open a file picker for a backdrop image or video. */
   onPickBackgroundMedia(kind: "image" | "video"): void;
+  /** Open a file picker for a `.svg` and write its outline into this shape. */
+  onPickOutline(shape: ShapeConfig): void;
   /** Scroll-preview scrub: fix the scroll signal at 0..1. The studio page never actually
    *  scrolls, so this is how a scroll reaction is authored to an exact position. */
   onScrollPreview(value: number): void;
@@ -812,10 +814,16 @@ export class ControlPanel {
    * conditionally-shown optional as `material.path` and `material.tint`.
    */
   private addOutline(f: FolderApi, shape: ShapeConfig): void {
-    if (shape.kind !== "path") return;
-    shape.outline ??= DEFAULT_OUTLINE;
-    const label = { label: "outline (svg d)" };
-    if (shape.outline) this.typedStructural(f.addBinding(shape, "outline", label));
+    if (shape.kind === "path") {
+      shape.outline ??= DEFAULT_OUTLINE;
+      const label = { label: "outline (svg d)" };
+      if (shape.outline) this.typedStructural(f.addBinding(shape, "outline", label));
+    }
+    // The BUTTON is on every kind and the field only on `path`, which is not an inconsistency.
+    // Picking a file says what the shape is meant to BE, so it should not require finding the kind
+    // dropdown and switching to `path` first — it does that for you. A `d` field on a rod, by
+    // contrast, is dead weight in the panel and in every export.
+    f.addButton({ title: "⬈ Shape from SVG…" }).on("click", () => this.hooks.onPickOutline(shape));
   }
 
   private structural<T extends { on: (event: "change", cb: () => void) => unknown }>(

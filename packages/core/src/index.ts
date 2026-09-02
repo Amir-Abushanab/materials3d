@@ -7,6 +7,8 @@ export * from "./config/model";
 export * from "./config/groups";
 export * from "./config/palettes";
 export { parseHex, toHex, rgbToHsl } from "./util/color";
+// The one reader for outline data, so a pasted `d` and an uploaded `.svg` cannot diverge.
+export { outlineFromSvg } from "./util/svg";
 export type { RGB } from "./util/color";
 // Explicit (not `export *`) so the internal createMaterialsImpl — which the standalone build uses to
 // avoid bundling the dynamic-import path — stays off the public surface.

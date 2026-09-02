@@ -55,3 +55,18 @@ export function capPathData(d: string, max: number): string {
   }
   return "";
 }
+
+/**
+ * A pasted string or an uploaded `.svg` file's text, as outline data a shape can carry.
+ *
+ * Extract THEN cap, in that order: a whole document is far longer than the cap, so capping first
+ * would truncate the markup and leave the extractor nothing to find. Both the config normalizer
+ * and the studio's file picker go through here, so what a paste and an upload produce cannot
+ * drift apart.
+ *
+ * Empty when nothing was found, which the caller has to handle — silently substituting a default
+ * would tell someone who just uploaded a logo that their file was fine.
+ */
+export function outlineFromSvg(input: string, max: number): string {
+  return capPathData(extractPathData(input), max);
+}

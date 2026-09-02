@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { capPathData, extractPathData } from "./svg";
+import { capPathData, extractPathData, outlineFromSvg } from "./svg";
 
 describe("extractPathData", () => {
   it("leaves bare path data alone", () => {
@@ -47,5 +47,31 @@ describe("capPathData", () => {
 
   it("gives up rather than emit a fragment with no command at all", () => {
     expect(capPathData("M0 0 L10 10", 3)).toBe("");
+  });
+});
+
+describe("outlineFromSvg", () => {
+  const SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10">
+    <path d="M0 0 H10 V10 H0 Z"/><path d="M2 2 H8 V8 H2 Z"/></svg>`;
+
+  it("reads an uploaded document the same way as a pasted d", () => {
+    // The one reader both the normalizer and the studio's file picker go through, so an upload and
+    // a paste of the same file cannot produce different shapes.
+    expect(outlineFromSvg(SVG, 4000)).toBe("M0 0 H10 V10 H0 Z M2 2 H8 V8 H2 Z");
+    expect(outlineFromSvg("M0 0 H10 V10 H0 Z", 4000)).toBe("M0 0 H10 V10 H0 Z");
+  });
+
+  it("extracts before capping", () => {
+    // The other order truncates the markup and leaves the extractor nothing to find, so a big
+    // file would come back empty rather than shortened.
+    const padded = `<svg>${" ".repeat(500)}<path d="M0 0 H10 V10 H0 Z"/></svg>`;
+    expect(padded.length).toBeGreaterThan(100);
+    expect(outlineFromSvg(padded, 100)).toBe("M0 0 H10 V10 H0 Z");
+  });
+
+  it("returns nothing for a file with no path in it", () => {
+    // The caller has to handle this. Substituting a default would tell someone who just uploaded a
+    // logo that their file was fine.
+    expect(outlineFromSvg(`<svg><circle cx="5" cy="5" r="4"/></svg>`, 4000)).toBe("");
   });
 });

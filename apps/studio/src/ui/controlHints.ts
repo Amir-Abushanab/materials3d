@@ -173,6 +173,8 @@ const CONTROL_HINTS: Record<string, string> = {
   kind: "The geometry. Almost everything is a lathe — rods, discs, cones, spheres and rings differ only in profile; hex is a prism with six sides; arrow is a swept 2D path. Fields a kind doesn't use are kept, so switching back never loses values.",
   radius: "Outer radius in world units (tube radius for a rod, disc radius for a disc).",
   thickness: "Slab thickness for discs and rings, in world units.",
+  "⬈ Shape from SVG…":
+    "Pick a `.svg` off disk and make this shape its silhouette — it switches the kind to `path` for you. Every `<path>` in the file is read, in order: the first is the outline, the rest are holes. Other elements (`<circle>`, `<rect>`) are not read, so flatten shapes to paths before exporting. Read through the same reader a pasted `d` goes through, so an upload and a paste of the same file give the same shape.",
   "outline (svg d)":
     "The silhouette of a `path` shape. Paste an SVG `d`, or the whole `<svg>` file — every `<path>` in it is read, in order. Y is read pointing DOWN as SVG does and flipped, and the drawing is scaled until its longer half-extent is the RADIUS above, so a path from any viewBox arrives at a findable size. The first subpath is the outline; every later one is a hole. The scene rebuilds when you stop typing, not on every keystroke.",
   position: "The shape's authored resting place. Viewport drags edit the same values.",

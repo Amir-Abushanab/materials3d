@@ -5,7 +5,7 @@
  */
 
 import { clamp, clamp01 } from "../util/math";
-import { capPathData, extractPathData } from "../util/svg";
+import { outlineFromSvg } from "../util/svg";
 
 /** Fixed-size lamp uniform array. Twelve is what fits comfortably in a uniform block; the loop
  *  breaks at `lamps.length`, so unused slots cost nothing at runtime. */
@@ -1614,9 +1614,7 @@ export function normalizeShape(shape: ShapeInput | undefined): ShapeConfig {
   // Markup first, cap second. A pasted `.svg` document is far longer than the cap, so capping the
   // raw string would truncate the markup and leave the extractor nothing to find.
   const outline =
-    typeof shape?.outline === "string"
-      ? capPathData(extractPathData(shape.outline), MAX_OUTLINE)
-      : "";
+    typeof shape?.outline === "string" ? outlineFromSvg(shape.outline, MAX_OUTLINE) : "";
   if (outline) out.outline = outline;
   else if (out.kind === "path") out.outline = DEFAULT_OUTLINE;
   const cuts = normalizeCuts(shape?.cuts);

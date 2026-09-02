@@ -14,9 +14,13 @@ import "./style.css";
 import {
   groupItems,
   groupLabel,
+  defaultSides,
+  MAX_OUTLINE,
+  outlineFromSvg,
   pruneGroups,
   type SceneConfig,
   type ItemConfig,
+  type ShapeConfig,
   ungroupItems,
 } from "@materials3d/core";
 import { bakeScatter, MaterialRenderer } from "@materials3d/core/renderer";
@@ -441,6 +445,51 @@ function pickBackgroundMedia(kind: "image" | "video"): void {
   input.click();
 }
 
+/**
+ * Load a shape's outline from a `.svg` on disk.
+ *
+ * Read as TEXT, not as a data URI like the backdrop media above: an outline is not an asset the
+ * scene displays, it is geometry the config carries, and it goes through the same
+ * {@link outlineFromSvg} the normalizer uses on a pasted string — so an upload and a paste of the
+ * same file cannot produce different shapes.
+ *
+ * A file with no `<path>` in it says so rather than falling back. Substituting the default outline
+ * would tell someone who just uploaded a logo that their file was fine.
+ */
+function pickOutlineSvg(shape: ShapeConfig): void {
+  const input = document.createElement("input");
+  input.type = "file";
+  input.accept = ".svg,image/svg+xml";
+  input.addEventListener("change", () => {
+    const file = input.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.addEventListener("error", () => toast(`Could not read ${file.name}`));
+    reader.addEventListener("load", () => {
+      const text = typeof reader.result === "string" ? reader.result : "";
+      const outline = outlineFromSvg(text, MAX_OUTLINE);
+      if (!outline) {
+        toast(`No <path> in ${file.name} — flatten shapes to paths and re-export`);
+        return;
+      }
+      shape.outline = outline;
+      // The kind is usually still whatever it was: the button sits on every shape, and picking a
+      // file is a statement of what the shape is meant to BE. Leaving a rod as a rod would drop
+      // the file on the floor and read as a failed upload.
+      const wasPath = shape.kind === "path";
+      shape.kind = "path";
+      if (!wasPath) shape.sides = defaultSides("path");
+      applyChange(true);
+      // setConfig, not refresh(): becoming a `path` adds the outline field to the panel, and
+      // refresh only re-reads the controls that already exist.
+      panel.setConfig(config(), presetName);
+      history.commit(config(), presetName, `shape from ${file.name}`);
+    });
+    reader.readAsText(file);
+  });
+  input.click();
+}
+
 /** The badge under the frame. `withWarning` is skipped mid-drag — the size is still changing. */
 function exportAreaLabel(withWarning: boolean): string {
   const width = Math.round(size.width);
@@ -719,6 +768,7 @@ function boot(): void {
       }),
     onOutputSizeChange: refitPreview,
     onPickBackgroundMedia: pickBackgroundMedia,
+    onPickOutline: pickOutlineSvg,
     onScrollPreview: (value) => renderer.setScrollPreview(value),
     onOpenScrollTest: () => scrollTest.toggle(),
     onRendererChange: (kind) =>

@@ -10,8 +10,8 @@
  * a chain of solids survives only a few degrees of aim, so finding it is a search — and a search
  * wants a contact sheet, not a sequence of stills.
  *
- *   pnpm sweep doublet beam.incidence=-20,-10,0,10,20
- *   pnpm sweep doublet beam.entryAngle=150,157,164 beam.incidence=0,8,16
+ *   pnpm sweep orb +items.0.material.magnify=0,0.5,1
+ *   pnpm sweep orb plate.z=-2,-6,-14 +items.0.material.magnify=0,1
  *   pnpm sweep gallery/prism.json post.bloom=0,0.3,0.7 -o bloom.png
  *   pnpm sweep orb +items.0.material.magnify=0,0.5,1     # + creates a missing override
  *

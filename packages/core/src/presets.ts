@@ -1407,74 +1407,6 @@ export function materials(): SceneConfig {
  * beam therefore crosses where the two do not overlap, which the trace below is checked against
  * rather than assumed.
  */
-/** One nearly-flat element of {@link doublet}, laid flat so its circular section is the slice the
- *  beam's sheet cuts. */
-function lensElement(name: string, r: number, x: number, y: number, ior: number) {
-  return {
-    name,
-    shape: { ...createShape("disc"), kind: "disc" as const, r, thickness: 0.11, sides: 96 },
-    position: { x, y, z: 0 },
-    // -90 degrees about X lays the lathe axis along Z, which is what puts the disc's circular
-    // section in the sheet's own plane and its face square to the camera.
-    rotation: { x: -Math.PI / 2, y: 0, z: 0 },
-    scale: { x: 1, y: 1, z: 1 },
-    material: {
-      kind: "glass" as const,
-      albedo: "#eef1f6",
-      density: 0.3,
-      absorption: { x: 1, y: 1, z: 0.54 },
-      ior,
-      dispersion: 0.05,
-      rim: 0.5,
-      specular: 1.15,
-      emission: 0,
-      saturation: 1,
-    },
-    motion: { kind: "none" as const, axis: "y" as const, rate: 0, amount: 0 },
-    phase: 0,
-  };
-}
-
-function doublet(): SceneConfig {
-  const base = prism();
-  return {
-    ...base,
-    lamps: [
-      { x: 0.26, y: 0.66, r: 0.26, color: "#9fc4ff", intensity: 1.3 },
-      { x: 0.74, y: 0.34, r: 0.24, color: "#ffb066", intensity: 1.1 },
-    ],
-    lampGain: 1.5,
-    backdropLamps: 0.05,
-    // Sized to the scene. `prism` carries no lamps, so its 26x20 plate never had to line up with
-    // one; inherited unchanged it puts a lamp several units outside a frame one unit across.
-    plate: { z: -2.2, scale: { x: 3.2, y: 2.0 }, offset: { x: 0.5, y: 0.5 } },
-    // Pulled back from `prism`'s 1.25. The optics are absolute — moving the camera reframes without
-    // touching a single angle, where rescaling the lenses would have meant re-solving the aim.
-    camera: { ...base.camera, distance: 2.05 },
-    items: [
-      // Different indices, so the second element is not a second copy of the first refraction.
-      lensElement("front", 0.4, -0.36, 0.06, 1.52),
-      lensElement("back", 0.36, 0.36, -0.06, 1.71),
-    ],
-    beam: {
-      ...base.beam!,
-      targets: ["front", "back"],
-      entryAngle: 157,
-      incidence: 8,
-      entrySweep: 14,
-    },
-    interaction: {
-      ...base.interaction,
-      bindings: [
-        { source: "pointerY", target: "beamIncidence", from: -20, to: 20, smoothing: 0.55 },
-        { source: "pointerX", target: "beamEntry", from: 1, to: 0, smoothing: 0.5 },
-        { source: "pointerX", target: "cameraYaw", from: -3.5, to: 3.5, smoothing: 0.45 },
-        { source: "pointerY", target: "cameraPitch", from: -3, to: 3, smoothing: 0.45 },
-      ],
-    },
-  };
-}
-
 /**
  * One glass sphere over a mesh gradient — the scene `material.bend` exists for.
  *
@@ -1612,7 +1544,6 @@ export const PRESETS: Record<string, () => SceneConfig> = {
   reactions,
   materials,
   prism,
-  doublet,
   orb,
 };
 

@@ -220,8 +220,8 @@ shape as though the pocket were not there.
 ## Rendering without a browser
 
 ```bash
-pnpm sweep doublet beam.incidence=-16,-8,0,8,16      # one labelled contact sheet
-pnpm sweep doublet beam.entryAngle=150,157,164 beam.incidence=0,8,16
+pnpm sweep orb +items.0.material.magnify=0,0.5,1     # one labelled contact sheet
+pnpm sweep orb plate.z=-2,-6,-14 +items.0.material.magnify=0,1
 pnpm preset:from ~/Downloads/scene.json --base prism  # tuned scene → pasteable source
 ```
 
@@ -236,7 +236,7 @@ than the code.
 ```js
 m3d.patch({ "beam.incidence": -20, "post.bloom": 0.4 })  // dotted paths, applied live
 m3d.patch({ "items.0.material.ior": 1.6 }, true)         // true = rebuild geometry
-m3d.get("beam.incidence")   m3d.config()   m3d.preset("doublet")   m3d.still()
+m3d.get("post.bloom")   m3d.config()   m3d.preset("orb")   m3d.still()
 ```
 
 Nothing is created: a mistyped path throws rather than quietly adding a field the renderer will

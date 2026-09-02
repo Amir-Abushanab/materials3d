@@ -996,7 +996,7 @@ function boot(): void {
  *
  *   m3d.patch({ "beam.incidence": -20, "post.bloom": 0.4 })
  *   m3d.patch({ "items.0.material.ior": 1.6 })
- *   m3d.get("beam.incidence")   m3d.config()   m3d.preset("doublet")
+ *   m3d.get("post.bloom")   m3d.config()   m3d.preset("orb")
  */
 /**
  * Whether a config path needs geometry rebuilt rather than uniforms pushed.

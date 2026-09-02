@@ -1411,80 +1411,75 @@ export function materials(): SceneConfig {
  */
 const SPECTACLES =
   // The frame, clockwise from the top-left rim corner: rim, bridge, rim, temple tab, and back.
-  "M30 8 L90 8 A18 18 0 0 1 108 26 L108 28 L134 28 L134 26 A18 18 0 0 1 152 8 " +
+  // The bridge's underside SLOPES — 96,32 to 146,48 — and that is optics, not styling. A bar with
+  // parallel faces refracts a ray twice by equal and opposite amounts: it comes out displaced and
+  // perfectly parallel to how it went in, which is to say white. An apex between the faces is what
+  // makes a prism a prism, and seventeen degrees of it is what fans this one.
+  "M30 8 L78 8 A18 18 0 0 1 96 26 L96 24 L146 24 L146 26 A18 18 0 0 1 164 8 " +
   "L212 8 A18 18 0 0 1 230 26 L230 30 L242 30 L242 42 L230 42 L230 52 " +
-  "A18 18 0 0 1 212 70 L152 70 A18 18 0 0 1 134 52 L134 40 L108 40 L108 52 " +
-  "A18 18 0 0 1 90 70 L30 70 A18 18 0 0 1 12 52 L12 42 L0 42 L0 30 L12 30 " +
+  "A18 18 0 0 1 212 70 L164 70 A18 18 0 0 1 146 52 L146 48 L96 32 L96 52 " +
+  "A18 18 0 0 1 78 70 L30 70 A18 18 0 0 1 12 52 L12 42 L0 42 L0 30 L12 30 " +
   "L12 26 A18 18 0 0 1 30 8 Z " +
   // The two openings, inset a constant 11 all round so the frame has one thickness.
-  "M39 19 L81 19 A16 16 0 0 1 97 35 L97 43 A16 16 0 0 1 81 59 L39 59 A16 16 0 0 1 23 43 " +
+  "M39 19 L69 19 A16 16 0 0 1 85 35 L85 43 A16 16 0 0 1 69 59 L39 59 A16 16 0 0 1 23 43 " +
   "L23 35 A16 16 0 0 1 39 19 Z " +
-  "M161 19 L203 19 A16 16 0 0 1 219 35 L219 43 A16 16 0 0 1 203 59 L161 59 A16 16 0 0 1 145 43 " +
-  "L145 35 A16 16 0 0 1 161 19 Z";
+  "M173 19 L203 19 A16 16 0 0 1 219 35 L219 43 A16 16 0 0 1 203 59 L173 59 A16 16 0 0 1 157 43 " +
+  "L157 35 A16 16 0 0 1 173 19 Z";
 
 /**
- * One drawn object, lit as a product shot — the demonstration of the `path` kind.
+ * One drawn object with a beam through its bridge — the demonstration of the `path` kind.
  *
- * Every other preset composes shapes the language can describe with numbers. This one exists to
- * show the case it cannot: a silhouette with no radius, pasted in from a drawing, carrying its own
- * holes. A pair of spectacles is the clearest example there is, because nobody would try to build
- * one out of lathes and everyone recognises whether it came out right.
+ * Every other preset composes shapes the language describes with numbers. This one shows the case
+ * it cannot: a silhouette with no radius, pasted in from a drawing, carrying its own holes. A pair
+ * of spectacles is the clearest example there is, because nobody would try to build one out of
+ * lathes and everyone recognises whether it came out right.
  *
- * Posed at three quarters rather than square to the lens. Face-on, an extrusion is a coloured
- * decal — the depth, the bevel and the refraction through the rim all disappear at once, and the
- * one thing that says "glass" rather than "sticker" is the band of lit edge down the near side.
+ * Built on `prism`, so the optics, the dust and the dark room are that scene's and only the solid
+ * in the light's way is new. What makes it possible at all is that the tracer no longer requires a
+ * convex cross-section: this outline turns back on itself at the bridge and at both temple tabs,
+ * and until the clipper learned to scan a re-entrant polygon edge by edge it was refused outright.
  *
- * The lamps sit BEHIND and spread wide, which for a shape that is mostly hole is the whole
- * composition: what fills the lens openings is the plate seen straight through, and what fills the
- * frame is the same plate bent. Clustering them would light both rims the same and lose the
- * left-cool, right-warm read that separates the two lenses.
+ * SQUARE TO THE LENS, unlike the pose a still of this shape would want. `crossSectionFor` applies
+ * the item's roll and nothing else, because a `path` is drawn in the sheet's own plane — so tilting
+ * it about X or Y would leave the traced outline describing a shape that is no longer on screen.
+ * That is the same reason `cascade` laid its lathes flat, and it is a constraint of beam scenes
+ * rather than of the shape.
+ *
+ * THE BEAM GOES THROUGH THE BRIDGE, which is not an aesthetic choice. `crossSectionFor` reads the
+ * first subpath only, so the tracer sees a filled silhouette where the mesh has two lens openings —
+ * any route across an opening would bend light through air that the mesh draws as empty. The bridge
+ * is the one part of the frame with clear air both above and below it, so the traced path and the
+ * rendered solid agree along its whole length. It is also the smallest prism in the language: a
+ * bar a tenth of a unit deep, which is exactly enough to fan.
  */
 function spectacles(): SceneConfig {
-  const base = createDefaultConfig();
+  const base = prism();
   return {
     ...base,
-    background: "#eef2f8",
-    backgroundMode: "gradient",
-    backgroundPalette: [
-      { color: "#dde6f5", position: 0 },
-      { color: "#fbfcfe", position: 1 },
-    ],
-    backgroundGradientType: "radial",
-    backgroundGradientAngle: Math.PI / 2,
-    clearGlass: "#f2f5fa",
+    /**
+     * A cool key and a warm rim, where `prism` has no lamps at all.
+     *
+     * That preset can do without them because its solid sits on the camera axis with its faces
+     * nearly square to the view, described entirely by the studio reflecting off them. A frame is
+     * mostly hole and mostly edge: with only the studio to go on, everything the beam does not
+     * touch is black on black, and the shape stops being spectacles and becomes a lit bar.
+     */
     lamps: [
-      { x: 0.26, y: 0.58, r: 0.2, color: "#5f86ea", intensity: 1.1 },
-      { x: 0.52, y: 0.66, r: 0.16, color: "#b06fe0", intensity: 0.85 },
-      { x: 0.76, y: 0.54, r: 0.2, color: "#f0803a", intensity: 1.1 },
+      { x: 0.2, y: 0.64, r: 0.26, color: "#9fc4ff", intensity: 1.35 },
+      { x: 0.8, y: 0.36, r: 0.24, color: "#ffb066", intensity: 1.15 },
     ],
-    lampGain: 1.4,
-    lampGate: { lo: 0.05, hi: 0.95 },
-    // Close in, for the reason `plate.z` always matters: far back and each lens smears the whole
-    // gradient across its own width as banding. At -3 the hit point tracks position, so the
-    // openings read as a window onto the backdrop and the frame as that same backdrop displaced.
-    plate: { z: -3, scale: { x: 22, y: 17 }, offset: { x: 0.5, y: 0.5 } },
-    // `fov` is vertical, so at 16:9 the visible width is distance x 2tan(fov/2) x 16/9 — about
-    // 11.9 here, against a frame 9.2 across. The shape wants to sit inside the vignette without
-    // touching it: a hero that reaches the edge stops reading as an object on a backdrop.
-    camera: { ...base.camera, fov: 20, distance: 19, lookAt: { x: 0, y: 0, z: 0 }, height: 0.15 },
-    // The one place a drawn outline genuinely wants this: the frame is a thin ring of glass and the
-    // bridge is thinner still, so the analytic chord's single depth is the same everywhere while
-    // the measured one falls off through the bevel and gives the rim its own gradient.
-    measuredThickness: true,
-    post: {
-      ...base.post,
-      focus: 19,
-      range: 8,
-      aperture: 0.35,
-      bloom: 0.02,
-      caustics: 0,
-      haze: 0.04,
-      hazeTop: 0.03,
-      hazeColor: "#f7f9fc",
-      vignette: 0.2,
-      grain: 0.012,
-    },
-    scatter: undefined,
+    lampGain: 1.5,
+    backdropLamps: 0.05,
+    /**
+     * Resized to the scene, which `prism` never had to do because it carries no lamps.
+     *
+     * The plate is a world-space rectangle and lamps are positioned in ITS uv, so the inherited
+     * 26x20 put a lamp at u=0.24 nearly seven units off to the left of a frame two thirds of a unit
+     * wide. What reached the glass was the far tail of a Gaussian — enough to tint the near rim and
+     * leave the far one black on black, which read as a lighting bug rather than as a lamp in the
+     * wrong postcode.
+     */
+    plate: { z: -2.2, scale: { x: 3.4, y: 2.1 }, offset: { x: 0.5, y: 0.5 } },
     items: [
       {
         name: "spectacles",
@@ -1492,42 +1487,61 @@ function spectacles(): SceneConfig {
           ...createShape("path"),
           kind: "path",
           outline: SPECTACLES,
-          r: 4.6,
-          depth: 0.62,
-          // Explicit and small. The default would be measured off the narrowest limb — the bridge
-          // — and land near here anyway, but a frame this fine is exactly where the difference
-          // between a bevel and a bead shows, so it is stated rather than inferred.
-          fillet: 0.05,
+          r: 0.66,
+          depth: 0.12,
+          // Explicit and small. The default is measured off the narrowest limb — the bridge — and
+          // would land near here anyway, but the bridge is the one part the light crosses, so the
+          // size of the bevel eating into it is stated rather than inferred.
+          fillet: 0.006,
         },
         position: { x: 0, y: 0, z: 0 },
-        rotation: { x: 0.2, y: -0.58, z: 0.05 },
+        rotation: { x: 0, y: 0, z: 0 },
         scale: { x: 1, y: 1, z: 1 },
         material: {
           kind: "glass",
-          density: 1.35,
-          ior: 1.52,
-          dispersion: 0.09,
-          lens: 0.06,
-          rim: 0.65,
-          specular: 1.1,
-          saturation: 1.08,
-          emission: 0.05,
           albedo: "#eef1f6",
+          density: 0.4,
+          absorption: { x: 1, y: 1, z: 0.54 },
+          ior: 1.62,
+          dispersion: 0.06,
+          // High, where `cascade` runs its solids at 0.15 for the opposite reason. A Fresnel rim
+          // covering most of a shape's width turns a fat solid into a white cutout — but this one
+          // is nearly all edge, and the room lights it hard from one side only. Without the rim the
+          // FAR frame is black on black and the scene reads as one lens, not a pair.
+          rim: 1.4,
+          specular: 1.2,
+          emission: 0.06,
+          saturation: 1,
         },
-        // Bobbing with a slow roll, not spinning. A full turn about Y takes an extrusion edge-on
-        // twice a cycle, and edge-on this shape is a sliver — the scene would blink.
-        motion: { kind: "drift", axis: "y", rate: 0.16, amount: 0.13 },
+        motion: { kind: "none", axis: "y", rate: 0, amount: 0 },
         phase: 0,
       },
     ],
+    beam: {
+      ...base.beam!,
+      targets: ["spectacles"],
+      // 90° is straight up from the outline's centre, which leaves through the top of the bridge —
+      // the centre sits inside that bar, so the bearing and the face it names are the same thing.
+      entryAngle: 90,
+      // Measured, not guessed: the fan widens with incidence — 9 degrees at normal, 16 by +20 — and
+      // then the blue end passes the critical angle on the sloped face and starts bouncing inside
+      // the bar instead of leaving it. Fourteen is near the wide end of the band that keeps every
+      // wavelength on ONE route, which is what lets adjacent samples join into a sheet at all.
+      incidence: 14,
+      // Narrow, because the face is narrow. The bearing pivots about a point inside the bridge, so
+      // sixty degrees only walks the impact point a third of the way along its top edge — and past
+      // that the ray leaves through a rim instead of the bar.
+      entrySweep: 60,
+    },
     interaction: {
-      enabled: true,
+      ...base.interaction,
       bindings: [
-        // Parallax only. There is no beam to aim here, and a few degrees either way is what turns
-        // the near rim's lit edge into something that moves — which is the cue that says the object
-        // has depth. Bigger reads as the scene lurching after the cursor.
-        { source: "pointerX", target: "cameraYaw", from: -5, to: 5, smoothing: 0.45 },
-        { source: "pointerY", target: "cameraPitch", from: -3.5, to: 3.5, smoothing: 0.45 },
+        // Asymmetric, and bounded by the same measurement: below -40 nothing changes but the fan
+        // narrows, and above +20 the spectrum splinters into unconnected streaks.
+        { source: "pointerY", target: "beamIncidence", from: -34, to: 18, smoothing: 0.55 },
+        { source: "pointerX", target: "beamEntry", from: 1, to: 0, smoothing: 0.5 },
+        { source: "pointerX", target: "cameraYaw", from: -3, to: 3, smoothing: 0.45 },
+        { source: "pointerY", target: "cameraPitch", from: -2.5, to: 2.5, smoothing: 0.45 },
       ],
     },
   };

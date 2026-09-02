@@ -7,6 +7,7 @@ export const PRESET_LABELS: Record<string, string> = {
   slimes: "Slimes",
   reactions: "Reactions",
   materials: "Materials",
+  spectacles: "Spectacles",
 };
 
 export function presetLabel(name: string): string {

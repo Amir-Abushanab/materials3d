@@ -1,0 +1,218 @@
+{
+  "background": "#eef2f8",
+  "transparentBackground": false,
+  "clearGlass": "#f2f5fa",
+  "lamps": [
+    {
+      "x": 0.26,
+      "y": 0.58,
+      "r": 0.2,
+      "color": "#5f86ea",
+      "intensity": 1.1
+    },
+    {
+      "x": 0.52,
+      "y": 0.66,
+      "r": 0.16,
+      "color": "#b06fe0",
+      "intensity": 0.85
+    },
+    {
+      "x": 0.76,
+      "y": 0.54,
+      "r": 0.2,
+      "color": "#f0803a",
+      "intensity": 1.1
+    }
+  ],
+  "studio": "gradient",
+  "environment": "analytic",
+  "transmission": "simple",
+  "studioGain": 1,
+  "lampGain": 1.4,
+  "lampGate": {
+    "lo": 0.05,
+    "hi": 0.95
+  },
+  "backdropLamps": 0.05,
+  "plate": {
+    "z": -3,
+    "scale": {
+      "x": 22,
+      "y": 17
+    },
+    "offset": {
+      "x": 0.5,
+      "y": 0.5
+    }
+  },
+  "camera": {
+    "fov": 20,
+    "distance": 19,
+    "lookAt": {
+      "x": 0,
+      "y": 0,
+      "z": 0
+    },
+    "height": 0.15,
+    "roll": 0,
+    "fit": "cover",
+    "minVisibleWidth": 0
+  },
+  "post": {
+    "focus": 19,
+    "range": 8,
+    "aperture": 0.35,
+    "bloom": 0.02,
+    "caustics": 0,
+    "haze": 0.04,
+    "hazeTop": 0.03,
+    "hazeColor": "#f7f9fc",
+    "vignette": 0.2,
+    "grain": 0.012,
+    "bloomRadius": 9,
+    "bloomThreshold": 0,
+    "toneMap": "none",
+    "bloomMode": "gather",
+    "bloomSpread": 0.5,
+    "innerLight": 0,
+    "innerLightDensity": 0.5,
+    "innerLightDecay": 0.94,
+    "innerLightX": 0.5,
+    "innerLightY": 0.15,
+    "dither": 0,
+    "ditherScale": 2,
+    "ditherSteps": 4,
+    "halftone": 0,
+    "halftoneCell": 6,
+    "halftoneAngle": 0.4,
+    "halftoneCmyk": 0,
+    "halftoneCmykCell": 6,
+    "paperTexture": 0,
+    "paperTextureScale": 2
+  },
+  "orbit": true,
+  "tracedRefraction": false,
+  "backGlassStrength": 0,
+  "measuredThickness": true,
+  "loopSeconds": 0,
+  "introRamp": true,
+  "mirrorH": false,
+  "mirrorV": false,
+  "backgroundMode": "gradient",
+  "backgroundPalette": [
+    {
+      "color": "#dde6f5",
+      "position": 0
+    },
+    {
+      "color": "#fbfcfe",
+      "position": 1
+    }
+  ],
+  "backgroundGradientType": "radial",
+  "backgroundGradientAngle": 1.5707963267948966,
+  "backgroundMeshPoints": [
+    {
+      "x": 0.25,
+      "y": 0.3,
+      "color": "#f3d9e8"
+    },
+    {
+      "x": 0.75,
+      "y": 0.35,
+      "color": "#d7e0f6"
+    },
+    {
+      "x": 0.5,
+      "y": 0.8,
+      "color": "#f7f0e4"
+    }
+  ],
+  "backgroundMeshSoftness": 0.55,
+  "backgroundImageFit": "cover",
+  "backgroundImageZoom": 1,
+  "backgroundImagePosition": {
+    "x": 0.5,
+    "y": 0.5
+  },
+  "items": [
+    {
+      "shape": {
+        "kind": "path",
+        "r": 4.6,
+        "len": 8,
+        "thickness": 0.5,
+        "fillet": 0.05,
+        "bevel": 0,
+        "sides": 72,
+        "hole": 1,
+        "shaft": 0.35,
+        "head": 1,
+        "depth": 0.62,
+        "seed": 1,
+        "bump": 0.5,
+        "outline": "M30 8 L90 8 A18 18 0 0 1 108 26 L108 28 L134 28 L134 26 A18 18 0 0 1 152 8 L212 8 A18 18 0 0 1 230 26 L230 30 L242 30 L242 42 L230 42 L230 52 A18 18 0 0 1 212 70 L152 70 A18 18 0 0 1 134 52 L134 40 L108 40 L108 52 A18 18 0 0 1 90 70 L30 70 A18 18 0 0 1 12 52 L12 42 L0 42 L0 30 L12 30 L12 26 A18 18 0 0 1 30 8 Z M39 19 L81 19 A16 16 0 0 1 97 35 L97 43 A16 16 0 0 1 81 59 L39 59 A16 16 0 0 1 23 43 L23 35 A16 16 0 0 1 39 19 Z M161 19 L203 19 A16 16 0 0 1 219 35 L219 43 A16 16 0 0 1 203 59 L161 59 A16 16 0 0 1 145 43 L145 35 A16 16 0 0 1 161 19 Z"
+      },
+      "position": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "rotation": {
+        "x": 0.2,
+        "y": -0.58,
+        "z": 0.05
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "name": "spectacles",
+      "material": {
+        "kind": "glass",
+        "density": 1.35,
+        "ior": 1.52,
+        "dispersion": 0.09,
+        "lens": 0.06,
+        "rim": 0.65,
+        "specular": 1.1,
+        "saturation": 1.08,
+        "emission": 0.05,
+        "albedo": "#eef1f6"
+      },
+      "motion": {
+        "kind": "drift",
+        "axis": "y",
+        "rate": 0.16,
+        "amount": 0.13
+      },
+      "phase": 0
+    }
+  ],
+  "groups": [],
+  "interaction": {
+    "enabled": true,
+    "bindings": [
+      {
+        "source": "pointerX",
+        "target": "cameraYaw",
+        "to": 5,
+        "from": -5,
+        "smoothing": 0.45
+      },
+      {
+        "source": "pointerY",
+        "target": "cameraPitch",
+        "to": 3.5,
+        "from": -3.5,
+        "smoothing": 0.45
+      }
+    ]
+  },
+  "quality": 1,
+  "dprMax": 1.75,
+  "paused": false,
+  "timeOffset": 0
+}

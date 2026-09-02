@@ -481,19 +481,45 @@ describe("the angular fast path", () => {
   });
 });
 
-/** The three outlines the `cascade` scene puts in the light's way, in world space. */
-function cascadeSolids() {
-  const scene = ensureSceneConfig(PRESETS.cascade());
-  const beam = scene.beam!;
-  const named = (name: string) => scene.items.find((i) => i.name === name)!;
-  return (beam.targets ?? []).map((name) => {
-    const item = named(name);
-    const polygon = crossSectionFor(item.shape, beam.rotation, item.rotation.z, {
-      x: item.position.x,
-      y: item.position.y,
-    })!;
-    return { outline: preparePolygon(polygon), ior: item.material.ior ?? 1.5 };
-  });
+/**
+ * A chain of three DIFFERENT solids for the light to thread — a hexagon, a sphere and a triangular
+ * prism, each with its own index.
+ *
+ * Held here rather than read out of a preset. It used to be `PRESETS.cascade`, and when that
+ * preset was replaced the behaviour it covered did not go anywhere: `traceSolids` still walks a
+ * scene of solids in whatever order it meets them, and that walk is what lets a beam re-enter a
+ * re-entrant outline too. Losing the only test of it along with the scene would have been a real
+ * gap, so the geometry moved into the test that needs it.
+ */
+const CHAIN = [
+  { kind: "prism", sides: 3, r: 0.32, x: -0.6, y: 0.14, spin: 0, ior: 1.62 },
+  { kind: "sphere", sides: 72, r: 0.28, x: -0.02, y: 0.02, spin: 0, ior: 1.5 },
+  { kind: "hex", sides: 6, r: 0.3, x: 0.62, y: 0, spin: Math.PI / 6, ior: 1.74 },
+];
+
+/** The beam that threads them: the `prism` preset's optics, re-aimed for a chain. The sweep is
+ *  narrow because the route that reaches all three survives only a few degrees. */
+function chainBeam() {
+  return {
+    ...ensureSceneConfig(PRESETS.prism()).beam!,
+    entryAngle: 170,
+    incidence: -35,
+    entrySweep: 26,
+  };
+}
+
+/** Those three outlines in world space, ready for the tracer. */
+function chainSolids(): Solid[] {
+  const beam = chainBeam();
+  return CHAIN.map((s) => ({
+    outline: preparePolygon(
+      crossSectionFor({ kind: s.kind, r: s.r, sides: s.sides }, beam.rotation, s.spin, {
+        x: s.x,
+        y: s.y,
+      })!,
+    ),
+    ior: s.ior,
+  }));
 }
 
 /** Retune every solid to one wavelength. The BASE indices are passed in, because `Solid.ior` is
@@ -502,14 +528,13 @@ function tune(solids: Solid[], base: number[], nm: number, dispersion: number): 
   for (const [i, s] of solids.entries()) s.ior = iorAt(nm, base[i], dispersion);
 }
 
-describe("the cascade preset's route", () => {
+describe("a chain of solids", () => {
   it("threads all three solids across the whole pointer sweep", () => {
     // The point of the scene, and the thing that silently stops being true. A chain only looks
     // like a chain while the light actually reaches every link; miss the second shape and it
     // degrades to a single prism with no error anywhere.
-    const scene = ensureSceneConfig(PRESETS.cascade());
-    const beam = scene.beam!;
-    const solids = cascadeSolids();
+    const beam = chainBeam();
+    const solids = chainSolids();
     const bases = solids.map((s) => s.ior);
     let threaded = 0;
     let positions = 0;
@@ -544,9 +569,9 @@ describe("the cascade preset's route", () => {
   });
 
   it("keeps the wavelengths on one route, so the fan interpolates", () => {
-    const solids = cascadeSolids();
+    const solids = chainSolids();
     const bases = solids.map((s) => s.ior);
-    const beam = ensureSceneConfig(PRESETS.cascade()).beam!;
+    const beam = chainBeam();
     const aim = aimBeamAtAngle(
       solids[0].outline.points,
       beam.entryAngle ?? 0,
@@ -567,6 +592,11 @@ describe("the cascade preset's route", () => {
   });
 });
 
+/** One traced solid from a bare outline. */
+function solid(points: THREE.Vector2[], ior = 1.5): Solid {
+  return { outline: preparePolygon(points), ior };
+}
+
 /**
  * Tracing a re-entrant solid.
  *
@@ -575,10 +605,6 @@ describe("the cascade preset's route", () => {
  * that the ray never makes. These cover the general scan that replaces it for such shapes, and the
  * property that matters most — that the two agree wherever both are valid.
  */
-/** One traced solid from a bare outline. */
-function solid(points: THREE.Vector2[], ior = 1.5): Solid {
-  return { outline: preparePolygon(points), ior };
-}
 
 describe("re-entrant cross-sections", () => {
   /** A "C" opening to the right. A ray sent UP its open side crosses glass, air, glass. */

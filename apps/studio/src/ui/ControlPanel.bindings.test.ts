@@ -45,6 +45,10 @@ const CONFIG_RECEIVERS: Record<string, (c: SceneConfig) => unknown> = {
   material: (c) => backfillMaterial(c.items[0].material),
   motion: (c) => c.items[0].motion,
   scatter: (c) => c.scatter,
+  // Optional on the config, so `minimalConfig` seeds one from `{}` — which also pins down that a
+  // beam with no fields at all normalizes into a bindable one. `entryAngle` and `entrySweep` stay
+  // absent by design (0 is a real bearing), so the panel guards those two inline.
+  beam: (c) => c.beam,
   "scatter.shape": (c) => c.scatter?.shape,
   "scatter.position": (c) => c.scatter?.position,
   stop: (c) => c.backgroundPalette[0],
@@ -104,6 +108,7 @@ function minimalConfig(): SceneConfig {
     items: [{ shape: { cuts: [{}] } }],
     lamps: [{}],
     scatter: {},
+    beam: {},
   } as unknown as Partial<SceneConfig>);
 }
 

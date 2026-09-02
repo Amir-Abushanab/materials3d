@@ -175,6 +175,14 @@ const CONTROL_HINTS: Record<string, string> = {
   thickness: "Slab thickness for discs and rings, in world units.",
   "⬈ Shape from SVG…":
     "Pick a `.svg` off disk and make this shape its silhouette — it switches the kind to `path` for you. Every `<path>` in the file is read, in order: the first is the outline, the rest are holes. Other elements (`<circle>`, `<rect>`) are not read, so flatten shapes to paths before exporting. Read through the same reader a pasted `d` goes through, so an upload and a paste of the same file give the same shape.",
+  "entry angle":
+    "Where the beam strikes, as a bearing in DEGREES around the cross-section from its centre. The round-safe handle: a circle is traced as ninety-six facets, so a face index picks one of them almost at random, while an angle means the same thing on a triangle and on a disc.",
+  incidence:
+    "Angle of incidence on that face, in DEGREES from its NORMAL — not from world X. Measured from the normal, where the beam strikes and how steeply are independent, so this and `entry` drive on separate axes. Past the critical angle the beam totally internally reflects and bounces inside the glass, which is a real optical regime rather than a failure.",
+  "entry sweep":
+    "How far `entry` swings the entry angle, in degrees either side. Ninety suits a single solid. A CHAIN is far more delicate — the route that threads every link survives only a few degrees — so a scene that has arranged one narrows this until the whole sweep keeps it.",
+  exposure:
+    "Display exposure for the spectral integral the beam mesh represents — the main brightness knob.",
   "outline (svg d)":
     "The silhouette of a `path` shape. Paste an SVG `d`, or the whole `<svg>` file — every `<path>` in it is read, in order. Y is read pointing DOWN as SVG does and flipped, and the drawing is scaled until its longer half-extent is the RADIUS above, so a path from any viewBox arrives at a findable size. The first subpath is the outline; every later one is a hole. The scene rebuilds when you stop typing, not on every keystroke.",
   position: "The shape's authored resting place. Viewport drags edit the same values.",
@@ -202,7 +210,10 @@ const CONTROL_HINTS: Record<string, string> = {
     "Absorption strength σ along that path — higher pulls deeper colour out of the same glass.",
   tint: "Gives the shape its own absorption colour instead of borrowing the lamps behind it.",
   ior: "Refraction strength. 1.45 ≈ glass; higher bends the sampled background harder.",
-  dispersion: "Splits the refraction per colour channel — the rainbow fringing at edges.",
+  // Two folders carry this label and the hint map is keyed by label, so this text has to answer
+  // for both: the material's per-channel split, and the beam's Cauchy term.
+  dispersion:
+    "On a MATERIAL, splits the refraction per colour channel — the rainbow fringing at edges. On the BEAM, the Cauchy strength: how wide the spectrum fans. Zero still bends the light but leaves it white.",
   lens: 'Rim-weighted screen-space displacement: near-flat in the middle, hard bending at the edge — the difference between "frosted" and "cut".',
   rim: "Strength of the bright edge highlight at the silhouette — the cue that sells glass.",
   specular: "Specular highlight strength from the key light.",

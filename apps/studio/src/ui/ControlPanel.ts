@@ -739,6 +739,7 @@ export class ControlPanel {
     this.addBackplate(pane);
     this.addCamera(pane);
     this.addPost(pane);
+    this.addBeam(pane);
     this.addInteraction(pane);
     this.addShapes(pane);
 
@@ -1256,6 +1257,97 @@ export class ControlPanel {
    * page never really scrolls) plus reactions that drive shared scene params. Per-shape reactions
    * live in each shape's own Interaction folder, per-lamp ones in each lamp's.
    */
+  /**
+   * The traced beam.
+   *
+   * Absent from this panel for a long time, which made the one thing in the language that is
+   * SOLVED rather than shaded the one thing you could not touch without hand-editing JSON. Aiming
+   * a beam is a search — the route through a chain of solids survives only a few degrees, and past
+   * that the light misses and the effect collapses — and a search wants a slider and a live frame,
+   * not a rebuild per guess.
+   *
+   * Nothing here is structural. `refresh()` calls `applyBeam`, which re-traces whenever its key
+   * changes, so a drag re-solves the ray on the next frame without rebuilding any geometry.
+   */
+  private addBeam(pane: Pane): void {
+    const beam = this.config.beam;
+    if (!beam) return;
+    const f = pane.addFolder({ title: "Beam", expanded: false });
+
+    // --- aim: the handles you actually search with ---
+    // `entryAngle` and `entrySweep` are optional and `normalizeBeam` keeps them absent rather than
+    // seeding them, because an angle of 0 is a real bearing that must not be confused with not
+    // having asked for one. Guarded on the binding's own line, for the bindings audit.
+    const angleOpts = { label: "entry angle", min: 0, max: 360, step: 0.5 };
+    const sweepOpts = { label: "entry sweep", min: 0, max: 180, step: 1 };
+    if (beam.entryAngle !== undefined) f.addBinding(beam, "entryAngle", angleOpts);
+    if (beam.entrySweep !== undefined) f.addBinding(beam, "entrySweep", sweepOpts);
+    f.addBinding(beam, "incidence", { min: -89, max: 89, step: 0.5 });
+    f.addBinding(beam, "entry", { min: 0, max: 1, step: 0.001 });
+    // Only meaningful when no `entryAngle` is set — on a round cross-section a face index picks
+    // one of ninety-six facets and slides within it, which is a handle with nothing to drive.
+    f.addBinding(beam, "face", { min: 0, max: 15, step: 1 });
+
+    // --- the solid it refracts through, when no item is named ---
+    const shape = f.addFolder({ title: "Cross-section", expanded: false });
+    shape.addBinding(beam, "radius", { min: 0.02, max: 8, step: 0.005 });
+    shape.addBinding(beam, "sides", { min: 3, max: 128, step: 1 });
+    shape.addBinding(beam, "rotation", { min: -Math.PI, max: Math.PI, step: 0.001 });
+    shape.addBinding(beam, "z", { min: -8, max: 8, step: 0.01 });
+
+    // --- optics ---
+    const optics = f.addFolder({ title: "Optics", expanded: true });
+    // The Cauchy base — the index at INFINITE wavelength, not at 550nm. Across the visible band
+    // the real index sits well above this, which is why 1.2 is a normal-looking number here.
+    optics.addBinding(beam, "ior", { min: 1.001, max: 2.5, step: 0.001 });
+    optics.addBinding(beam, "dispersion", { min: 0, max: 0.4, step: 0.001 });
+    optics.addBinding(beam, "width", { min: 0.001, max: 0.4, step: 0.001 });
+    optics.addBinding(beam, "distance", { min: 0.5, max: 30, step: 0.1 });
+
+    // --- how bright, and how smooth ---
+    const look = f.addFolder({ title: "Look", expanded: true });
+    look.addBinding(beam, "exposure", { min: 0, max: 400, step: 1 });
+    look.addBinding(beam, "intensity", { min: 0, max: 4, step: 0.01 });
+    look.addBinding(beam, "edgeFalloff", { label: "edge falloff", min: 1, max: 64, step: 0.5 });
+    look.addBinding(beam, "falloffRate", { label: "falloff rate", min: 0, max: 12, step: 0.05 });
+    look.addBinding(beam, "falloffPower", { label: "falloff power", min: 0, max: 12, step: 0.05 });
+    look.addBinding(beam, "revealSeconds", { label: "reveal s", min: 0, max: 12, step: 0.1 });
+    // Wavelength vertices and width slices: the smoothness of the sheet, and its cost. Structural
+    // in spirit — they resize the geometry — but `applyBeam` rebuilds it from its key either way.
+    look.addBinding(beam, "samples", { min: 8, max: 256, step: 1 });
+    look.addBinding(beam, "slices", { min: 1, max: 64, step: 1 });
+
+    const caustic = f.addFolder({ title: "Caustic", expanded: false });
+    caustic.addBinding(beam, "causticStrength", { label: "strength", min: 0, max: 6, step: 0.01 });
+    caustic.addBinding(beam, "causticCoverage", { label: "coverage", min: 0, max: 1, step: 0.01 });
+    caustic.addBinding(beam, "causticRateScale", { label: "rate", min: 0, max: 2, step: 0.01 });
+    caustic.addBinding(beam, "causticPowerScale", { label: "power", min: 0, max: 2, step: 0.01 });
+    caustic.addBinding(beam, "causticFarBrightness", {
+      label: "far bright",
+      min: 0,
+      max: 1,
+      step: 0.005,
+    });
+    caustic.addBinding(beam, "causticFarDesaturation", {
+      label: "far desat",
+      min: 0,
+      max: 1,
+      step: 0.005,
+    });
+    caustic.addBinding(beam, "causticNormalInfluence", {
+      label: "normal infl",
+      min: 0,
+      max: 2,
+      step: 0.01,
+    });
+    caustic.addBinding(beam, "causticNormalElevation", {
+      label: "normal elev",
+      min: 0,
+      max: 90,
+      step: 0.5,
+    });
+  }
+
   private addInteraction(pane: Pane): void {
     const f = pane.addFolder({ title: "Interaction", expanded: false });
     const it = this.config.interaction;

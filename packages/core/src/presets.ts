@@ -1021,7 +1021,7 @@ export function prism(): SceneConfig {
       // actively harmful: focus 40 against a camera 1.25 units back put EVERY pixel at maximum
       // defocus, so the whole frame carried a 24-tap gather at full radius. That permanent smear
       // was the difference between this reading as soft and the reference reading as clean.
-      focus: 1.25,
+      focus: 2.05,
       range: 1,
       aperture: 0,
       // Saturation-weighted bloom against a black frame is doing the opposite of its usual job
@@ -1409,139 +1409,85 @@ export function materials(): SceneConfig {
  * temple tabs are square stubs off the outer edges — no arm is drawn, but the hinge is enough to
  * turn a symmetrical ornament into an object with a front and a back.
  */
-const SPECTACLES =
-  // The frame, clockwise from the top-left rim corner: rim, bridge, rim, temple tab, and back.
-  // The bridge's underside SLOPES — 96,32 to 146,48 — and that is optics, not styling. A bar with
-  // parallel faces refracts a ray twice by equal and opposite amounts: it comes out displaced and
-  // perfectly parallel to how it went in, which is to say white. An apex between the faces is what
-  // makes a prism a prism, and seventeen degrees of it is what fans this one.
-  "M30 8 L78 8 A18 18 0 0 1 96 26 L96 24 L146 24 L146 26 A18 18 0 0 1 164 8 " +
-  "L212 8 A18 18 0 0 1 230 26 L230 30 L242 30 L242 42 L230 42 L230 52 " +
-  "A18 18 0 0 1 212 70 L164 70 A18 18 0 0 1 146 52 L146 48 L96 32 L96 52 " +
-  "A18 18 0 0 1 78 70 L30 70 A18 18 0 0 1 12 52 L12 42 L0 42 L0 30 L12 30 " +
-  "L12 26 A18 18 0 0 1 30 8 Z " +
-  // The two openings, inset a constant 11 all round so the frame has one thickness.
-  "M39 19 L69 19 A16 16 0 0 1 85 35 L85 43 A16 16 0 0 1 69 59 L39 59 A16 16 0 0 1 23 43 " +
-  "L23 35 A16 16 0 0 1 39 19 Z " +
-  "M173 19 L203 19 A16 16 0 0 1 219 35 L219 43 A16 16 0 0 1 203 59 L173 59 A16 16 0 0 1 157 43 " +
-  "L157 35 A16 16 0 0 1 173 19 Z";
-
 /**
- * One drawn object with a beam through its bridge — the demonstration of the `path` kind.
+ * Two nearly-flat lenses, overlapping, with one beam through both.
  *
- * Every other preset composes shapes the language describes with numbers. This one shows the case
- * it cannot: a silhouette with no radius, pasted in from a drawing, carrying its own holes. A pair
- * of spectacles is the clearest example there is, because nobody would try to build one out of
- * lathes and everyone recognises whether it came out right.
+ * A `disc` is a lathe, so its slice in the beam's plane is a CIRCLE — and a circle is a lens: it
+ * refracts every ray toward its own axis, so the beam converges rather than simply bending. Two of
+ * them in series is the cheapest optic that does something a single prism cannot, and the fan
+ * arriving at the second element has already begun to separate, so each wavelength meets it at its
+ * own angle.
  *
- * Built on `prism`, so the optics, the dust and the dark room are that scene's and only the solid
- * in the light's way is new. What makes it possible at all is that the tracer no longer requires a
- * convex cross-section: this outline turns back on itself at the bridge and at both temple tabs,
- * and until the clipper learned to scan a re-entrant polygon edge by edge it was refused outright.
- *
- * SQUARE TO THE LENS, unlike the pose a still of this shape would want. `crossSectionFor` applies
- * the item's roll and nothing else, because a `path` is drawn in the sheet's own plane — so tilting
- * it about X or Y would leave the traced outline describing a shape that is no longer on screen.
- * That is the same reason `cascade` laid its lathes flat, and it is a constraint of beam scenes
- * rather than of the shape.
- *
- * THE BEAM GOES THROUGH THE BRIDGE, which is not an aesthetic choice. `crossSectionFor` reads the
- * first subpath only, so the tracer sees a filled silhouette where the mesh has two lens openings —
- * any route across an opening would bend light through air that the mesh draws as empty. The bridge
- * is the one part of the frame with clear air both above and below it, so the traced path and the
- * rendered solid agree along its whole length. It is also the smallest prism in the language: a
- * bar a tenth of a unit deep, which is exactly enough to fan.
+ * OVERLAPPING BY A SLIVER, and that sliver is the constraint the aim has to respect. The tracer
+ * walks solids one at a time: it enters the nearest, leaves it, then looks for the next. A ray that
+ * leaves the first element INSIDE the second cannot enter it — from inside, every crossing ahead
+ * points outward, so `clipEntry` reports nothing and the second lens is skipped in silence. The
+ * beam therefore crosses where the two do not overlap, which the trace below is checked against
+ * rather than assumed.
  */
-function spectacles(): SceneConfig {
+/** One nearly-flat element of {@link doublet}, laid flat so its circular section is the slice the
+ *  beam's sheet cuts. */
+function lensElement(name: string, r: number, x: number, y: number, ior: number) {
+  return {
+    name,
+    shape: { ...createShape("disc"), kind: "disc" as const, r, thickness: 0.11, sides: 96 },
+    position: { x, y, z: 0 },
+    // -90 degrees about X lays the lathe axis along Z, which is what puts the disc's circular
+    // section in the sheet's own plane and its face square to the camera.
+    rotation: { x: -Math.PI / 2, y: 0, z: 0 },
+    scale: { x: 1, y: 1, z: 1 },
+    material: {
+      kind: "glass" as const,
+      albedo: "#eef1f6",
+      density: 0.3,
+      absorption: { x: 1, y: 1, z: 0.54 },
+      ior,
+      dispersion: 0.05,
+      rim: 0.5,
+      specular: 1.15,
+      emission: 0,
+      saturation: 1,
+    },
+    motion: { kind: "none" as const, axis: "y" as const, rate: 0, amount: 0 },
+    phase: 0,
+  };
+}
+
+function doublet(): SceneConfig {
   const base = prism();
   return {
     ...base,
-    /**
-     * A cool key and a warm rim, where `prism` has no lamps at all.
-     *
-     * That preset can do without them because its solid sits on the camera axis with its faces
-     * nearly square to the view, described entirely by the studio reflecting off them. A frame is
-     * mostly hole and mostly edge: with only the studio to go on, everything the beam does not
-     * touch is black on black, and the shape stops being spectacles and becomes a lit bar.
-     */
     lamps: [
-      { x: 0.2, y: 0.64, r: 0.26, color: "#9fc4ff", intensity: 1.35 },
-      { x: 0.8, y: 0.36, r: 0.24, color: "#ffb066", intensity: 1.15 },
+      { x: 0.26, y: 0.66, r: 0.26, color: "#9fc4ff", intensity: 1.3 },
+      { x: 0.74, y: 0.34, r: 0.24, color: "#ffb066", intensity: 1.1 },
     ],
     lampGain: 1.5,
     backdropLamps: 0.05,
-    /**
-     * Resized to the scene, which `prism` never had to do because it carries no lamps.
-     *
-     * The plate is a world-space rectangle and lamps are positioned in ITS uv, so the inherited
-     * 26x20 put a lamp at u=0.24 nearly seven units off to the left of a frame two thirds of a unit
-     * wide. What reached the glass was the far tail of a Gaussian — enough to tint the near rim and
-     * leave the far one black on black, which read as a lighting bug rather than as a lamp in the
-     * wrong postcode.
-     */
-    plate: { z: -2.2, scale: { x: 3.4, y: 2.1 }, offset: { x: 0.5, y: 0.5 } },
+    // Sized to the scene. `prism` carries no lamps, so its 26x20 plate never had to line up with
+    // one; inherited unchanged it puts a lamp several units outside a frame one unit across.
+    plate: { z: -2.2, scale: { x: 3.2, y: 2.0 }, offset: { x: 0.5, y: 0.5 } },
+    // Pulled back from `prism`'s 1.25. The optics are absolute — moving the camera reframes without
+    // touching a single angle, where rescaling the lenses would have meant re-solving the aim.
+    camera: { ...base.camera, distance: 2.05 },
     items: [
-      {
-        name: "spectacles",
-        shape: {
-          ...createShape("path"),
-          kind: "path",
-          outline: SPECTACLES,
-          r: 0.66,
-          depth: 0.12,
-          // Explicit and small. The default is measured off the narrowest limb — the bridge — and
-          // would land near here anyway, but the bridge is the one part the light crosses, so the
-          // size of the bevel eating into it is stated rather than inferred.
-          fillet: 0.006,
-        },
-        position: { x: 0, y: 0, z: 0 },
-        rotation: { x: 0, y: 0, z: 0 },
-        scale: { x: 1, y: 1, z: 1 },
-        material: {
-          kind: "glass",
-          albedo: "#eef1f6",
-          density: 0.4,
-          absorption: { x: 1, y: 1, z: 0.54 },
-          ior: 1.62,
-          dispersion: 0.06,
-          // High, where `cascade` runs its solids at 0.15 for the opposite reason. A Fresnel rim
-          // covering most of a shape's width turns a fat solid into a white cutout — but this one
-          // is nearly all edge, and the room lights it hard from one side only. Without the rim the
-          // FAR frame is black on black and the scene reads as one lens, not a pair.
-          rim: 1.4,
-          specular: 1.2,
-          emission: 0.06,
-          saturation: 1,
-        },
-        motion: { kind: "none", axis: "y", rate: 0, amount: 0 },
-        phase: 0,
-      },
+      // Different indices, so the second element is not a second copy of the first refraction.
+      lensElement("front", 0.4, -0.36, 0.06, 1.52),
+      lensElement("back", 0.36, 0.36, -0.06, 1.71),
     ],
     beam: {
       ...base.beam!,
-      targets: ["spectacles"],
-      // 90° is straight up from the outline's centre, which leaves through the top of the bridge —
-      // the centre sits inside that bar, so the bearing and the face it names are the same thing.
-      entryAngle: 90,
-      // Measured, not guessed: the fan widens with incidence — 9 degrees at normal, 16 by +20 — and
-      // then the blue end passes the critical angle on the sloped face and starts bouncing inside
-      // the bar instead of leaving it. Fourteen is near the wide end of the band that keeps every
-      // wavelength on ONE route, which is what lets adjacent samples join into a sheet at all.
-      incidence: 14,
-      // Narrow, because the face is narrow. The bearing pivots about a point inside the bridge, so
-      // sixty degrees only walks the impact point a third of the way along its top edge — and past
-      // that the ray leaves through a rim instead of the bar.
-      entrySweep: 60,
+      targets: ["front", "back"],
+      entryAngle: 157,
+      incidence: 8,
+      entrySweep: 14,
     },
     interaction: {
       ...base.interaction,
       bindings: [
-        // Asymmetric, and bounded by the same measurement: below -40 nothing changes but the fan
-        // narrows, and above +20 the spectrum splinters into unconnected streaks.
-        { source: "pointerY", target: "beamIncidence", from: -34, to: 18, smoothing: 0.55 },
+        { source: "pointerY", target: "beamIncidence", from: -20, to: 20, smoothing: 0.55 },
         { source: "pointerX", target: "beamEntry", from: 1, to: 0, smoothing: 0.5 },
-        { source: "pointerX", target: "cameraYaw", from: -3, to: 3, smoothing: 0.45 },
-        { source: "pointerY", target: "cameraPitch", from: -2.5, to: 2.5, smoothing: 0.45 },
+        { source: "pointerX", target: "cameraYaw", from: -3.5, to: 3.5, smoothing: 0.45 },
+        { source: "pointerY", target: "cameraPitch", from: -3, to: 3, smoothing: 0.45 },
       ],
     },
   };
@@ -1555,7 +1501,7 @@ export const PRESETS: Record<string, () => SceneConfig> = {
   reactions,
   materials,
   prism,
-  spectacles,
+  doublet,
 };
 
 export const PRESET_NAMES = Object.keys(PRESETS);

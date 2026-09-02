@@ -220,6 +220,19 @@ shape as though the pocket were not there.
 ## Rendering without a browser
 
 ```bash
+pnpm sweep doublet beam.incidence=-16,-8,0,8,16      # one labelled contact sheet
+pnpm sweep doublet beam.entryAngle=150,157,164 beam.incidence=0,8,16
+pnpm preset:from ~/Downloads/scene.json --base prism  # tuned scene → pasteable source
+```
+
+`sweep` exists because tuning asks "which of these" far more often than "is this one right", and
+answering that one PNG at a time costs a browser launch per guess. It launches once and returns a
+single labelled grid — one axis is a row, two make a grid. `preset:from` closes the other
+direction: `gallery:build` writes JSON out of the presets and nothing came back, so a scene tuned
+in the studio had no route into `presets.ts` but retyping. It prints the DIFFERENCE against a base
+preset, not the whole config, because what a preset contains should be what somebody chose.
+
+```bash
 pnpm render assembly                          # → assembly.png at 1920×1080
 pnpm render gallery/skewer.json -o hero.png
 pnpm render --all -d renders/ -w 1200 -h 630

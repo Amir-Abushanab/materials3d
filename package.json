@@ -37,7 +37,9 @@
     "tsl:smoke": "pnpm --filter @materials3d/core build && node scripts/tsl-engine-smoke.mjs",
     "tsl:chrome": "node scripts/real-chrome-smoke.mjs",
     "typecheck": "pnpm -r typecheck",
-    "version": "changeset version"
+    "version": "changeset version",
+    "sweep": "node scripts/sweep.mjs",
+    "preset:from": "node scripts/preset-from-config.mjs"
   },
   "devDependencies": {
     "@changesets/changelog-github": "^0.7.0",

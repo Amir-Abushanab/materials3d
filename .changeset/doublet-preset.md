@@ -2,7 +2,7 @@
 "@materials3d/core": minor
 ---
 
-Replace the `cascade` preset with `spectacles`: a drawn silhouette with a beam through it.
+Replace the `cascade` preset with `doublet`: two overlapping lenses in one beam.
 
 Every other preset composes shapes the language describes with numbers. This one shows the case it
 cannot — an outline with no radius, pasted in from a drawing, carrying its own holes — and then

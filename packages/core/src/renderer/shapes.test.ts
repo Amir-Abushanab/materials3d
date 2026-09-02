@@ -4,7 +4,9 @@ import {
   createItem,
   createMotion,
   createShape,
+  DEFAULT_OUTLINE,
   FRAME_ASPECT,
+  MAX_OUTLINE,
   normalizeShape,
 } from "../config/model";
 import { bakeScatter, expandScatter, frameFov, resolveItems } from "./MaterialRenderer";
@@ -18,6 +20,7 @@ import {
   disc,
   droplet,
   hex,
+  pathShape,
   ring,
   rod,
   slab,
@@ -493,5 +496,187 @@ describe("cuts", () => {
 
   it("a slab's optical path is its depth, not its width", () => {
     expect(defaultPath({ ...createShape("slab"), len: 9, depth: 0.6 })).toBeCloseTo(0.3);
+  });
+});
+
+/**
+ * The `path` kind: an arbitrary silhouette, given as SVG path data.
+ *
+ * The parser has its own suite next door. What is tested here is the part that turns a pasted `d`
+ * into a solid in THIS scene's units — the flip, the fit and the holes — because those are the
+ * three places where a shape can come out mirrored, invisible or filled in, and all three look
+ * like a broken renderer rather than a convention.
+ */
+describe("path outlines", () => {
+  /** A 10x10 square, drawn in SVG's y-down coordinates. */
+  const SQUARE = "M0 0 H10 V10 H0 Z";
+
+  /** A fillet small enough to isolate the fit from the bevel's lip, which is measured on its own
+   *  below. Zero is not available: `0` means "pick a proportional one" everywhere in this module. */
+  const HAIRLINE = { fillet: 0.001 };
+
+  it("fits an outline so its longer half-extent is the radius", () => {
+    // The whole point of the fit: the same drawing at two viewBox scales renders identically, so
+    // a path pasted from any tool arrives at a size that can be found in the viewport.
+    const small = bounds(pathShape({ outline: "M0 0 H1 V1 H0 Z", r: 2, depth: 0.4, ...HAIRLINE }));
+    const large = bounds(
+      pathShape({ outline: "M0 0 H1000 V1000 H0 Z", r: 2, depth: 0.4, ...HAIRLINE }),
+    );
+    expect(small.max.x).toBeCloseTo(large.max.x, 3);
+    expect(small.max.x).toBeCloseTo(2, 2);
+  });
+
+  it("fits the longer axis and lets the shorter one follow", () => {
+    // Aspect is the drawing's own property; scaling each axis to `r` would stretch every paste
+    // into a square.
+    const box = bounds(pathShape({ outline: "M0 0 H40 V10 H0 Z", r: 2, depth: 0.4, ...HAIRLINE }));
+    expect(box.max.x - box.min.x).toBeCloseTo(4, 2);
+    expect(box.max.y - box.min.y).toBeCloseTo(1, 2);
+  });
+
+  it("grows the drawing by the bevel's lip rather than insetting it", () => {
+    // The documented trade: depth is compensated because a config asked for it, the outline is
+    // not because correctly insetting an arbitrary contour is a polygon-offset problem. Asserted
+    // rather than tolerated, so the day someone does inset it, this says so.
+    const box = bounds(pathShape({ outline: SQUARE, r: 2, depth: 0.6, fillet: 0.1 }));
+    expect(box.max.x).toBeCloseTo(2.1, 2);
+  });
+
+  it("flips y, so a shape drawn pointing down renders pointing down", () => {
+    // SVG's y grows downward and three's grows up. Unflipped, every paste renders upside down —
+    // which reads as a bug in the shape rather than in the convention.
+    const box = bounds(pathShape({ outline: "M0 0 L10 0 L5 10 Z", r: 2, depth: 0.4 }));
+    // The apex is the lone vertex on its side, so the triangle's centroid sits away from it: the
+    // half holding the two base corners is the wider one.
+    const geometry = pathShape({ outline: "M0 0 L10 0 L5 10 Z", r: 2, depth: 0.4 });
+    const ys = Array.from({ length: geometry.getAttribute("position").count }, (_, i) =>
+      geometry.getAttribute("position").getY(i),
+    );
+    const below = ys.filter((y) => y < 0).length;
+    const above = ys.filter((y) => y > 0).length;
+    expect(box.min.y).toBeLessThan(0);
+    // Fewer vertices at the bottom than the top: the apex is down there, where SVG put it.
+    expect(below).toBeLessThan(above);
+  });
+
+  it("comes out the depth it was asked for, bevel included", () => {
+    // `defaultPath` hands this straight to Beer-Lambert, so a solid thicker than it claims
+    // absorbs more light than the scene was authored for.
+    const box = bounds(pathShape({ outline: SQUARE, r: 2, depth: 0.6 }));
+    expect(box.max.z - box.min.z).toBeCloseTo(0.6, 2);
+  });
+
+  it("treats every subpath after the first as a hole", () => {
+    const solid = pathShape({ outline: SQUARE, r: 2, depth: 0.4 });
+    const holed = pathShape({ outline: `${SQUARE} M3 3 H7 V7 H3 Z`, r: 2, depth: 0.4 });
+    expect(triangleCount(holed)).toBeGreaterThan(triangleCount(solid));
+    // A hole, not a second body: the silhouette has not grown.
+    expect(bounds(holed).max.x).toBeCloseTo(bounds(solid).max.x, 2);
+  });
+
+  it("honours cuts on top of the outline's own holes", () => {
+    const plain = pathShape({ outline: SQUARE, r: 2, depth: 0.4 });
+    const carved = pathShape({ outline: SQUARE, r: 2, depth: 0.4, cuts: [SLOT] });
+    expect(triangleCount(carved)).toBeGreaterThan(triangleCount(plain));
+  });
+
+  it("clamps the bevel to a hole too narrow to survive it", () => {
+    // Extrude offsets a hole's contour outward to form its lip, so a bevel wider than half the
+    // hole's short side turns it inside out and the shape renders with a black knot.
+    const geometry = pathShape({ outline: `${SQUARE} M4.9 2 H5.1 V8 H4.9 Z`, r: 4, depth: 0.6 });
+    expect(isFinitePositions(geometry)).toBe(true);
+    // The clamp is visible from outside: a narrower hole leaves a narrower lip on the outline.
+    const wide = bounds(pathShape({ outline: `${SQUARE} M3 3 H7 V7 H3 Z`, r: 4, depth: 0.6 }));
+    expect(bounds(geometry).max.x).toBeLessThan(wide.max.x);
+  });
+
+  it("falls back to the default outline rather than vanishing", () => {
+    // `buildShape` has to return geometry for every config. A shape that disappeared on a typo
+    // would look like a renderer fault instead of the typo it is.
+    const garbage = pathShape({ outline: "not a path at all", r: 2, depth: 0.4, ...HAIRLINE });
+    expect(isFinitePositions(garbage)).toBe(true);
+    expect(bounds(garbage).max.x).toBeCloseTo(2, 2);
+  });
+
+  it("survives an outline with no area on one axis", () => {
+    const line = pathShape({ outline: "M0 0 H10 H20 H30 Z", r: 2, depth: 0.4 });
+    expect(isFinitePositions(line)).toBe(true);
+  });
+
+  it("routes the path kind through buildShape", () => {
+    const geometry = buildShape(normalizeShape({ kind: "path", r: 2, depth: 0.5, fillet: 0.001 }));
+    expect(isFinitePositions(geometry)).toBe(true);
+    expect(bounds(geometry).max.x).toBeCloseTo(2, 2);
+  });
+
+  it("a path's optical path is its depth, like the other extrusions", () => {
+    expect(defaultPath({ ...createShape("path"), depth: 0.5 })).toBeCloseTo(0.25);
+  });
+
+  it("gives a path shape a default outline and no other kind one", () => {
+    expect(normalizeShape({ kind: "path" }).outline).toBe(DEFAULT_OUTLINE);
+    expect(normalizeShape({ kind: "rod" }).outline).toBeUndefined();
+  });
+
+  it("keeps an authored outline across a change of kind", () => {
+    // The studio edits one shape object and lets the kind decide what it reads. Dropping this on
+    // a switch away would destroy the only field here a user types rather than drags.
+    expect(normalizeShape({ kind: "rod", outline: SQUARE }).outline).toBe(SQUARE);
+  });
+
+  it("turns the bevel off for a negative fillet", () => {
+    // A drawn silhouette is the one shape here whose fine detail a bevel visibly fattens, so it is
+    // the one that can refuse one. `0` cannot mean this: it already means "pick a proportional one".
+    const box = bounds(pathShape({ outline: SQUARE, r: 2, depth: 0.6, fillet: -1 }));
+    expect(box.max.x).toBeCloseTo(2, 4);
+    expect(box.max.z - box.min.z).toBeCloseTo(0.6, 4);
+  });
+
+  it("leaves a negative fillet inert on the kinds that cannot honour it", () => {
+    // A lathe with no fillet collapses its corner arc onto a point and hands the mesh a fan of
+    // degenerate triangles. `resolveFillet` tests `> 0`, so a negative reads as "proportional".
+    const plain = bounds(buildShape({ ...createShape("rod"), r: 0.5, len: 4 }));
+    const negative = bounds(buildShape({ ...createShape("rod"), r: 0.5, len: 4, fillet: -1 }));
+    expect(negative.max.x).toBeCloseTo(plain.max.x, 4);
+    expect(isFinitePositions(buildShape({ ...createShape("rod"), fillet: -1 }))).toBe(true);
+  });
+
+  it("scales the default bevel off the narrowest limb, not the bounding box", () => {
+    // The case that motivates it: a 1.5-wide spike on a 100-wide body. A bevel sized off the box
+    // comes out wider than the spike, and the spike renders as a fat stripe with no flat left.
+    const spike = "M0 0 H100 V40 H51 V90 H49.5 V40 H0 Z";
+    const thin = bounds(pathShape({ outline: spike, r: 4, depth: 0.5 }));
+    const solid = bounds(pathShape({ outline: SQUARE, r: 4, depth: 0.5 }));
+    // Both are fitted to the same radius, so what differs is the lip the bevel adds.
+    expect(thin.max.x - 4).toBeLessThan((solid.max.x - 4) / 2);
+  });
+
+  it("keeps a fine-featured outline finite", () => {
+    const spike = "M0 0 H100 V40 H51 V90 H49.5 V40 H0 Z";
+    expect(isFinitePositions(pathShape({ outline: spike, r: 4, depth: 0.5 }))).toBe(true);
+  });
+
+  it("reads a whole svg document as well as a bare d", () => {
+    const svg = `<svg viewBox="0 0 10 10"><path d="M0 0 H10 V10 H0 Z"/></svg>`;
+    expect(normalizeShape({ kind: "path", outline: svg }).outline).toBe("M0 0 H10 V10 H0 Z");
+  });
+
+  it("cuts an over-long outline between commands, not inside a number", () => {
+    // A blind slice can halve a coordinate; the contour then goes NaN, gets dropped, and the shape
+    // silently becomes the default star with nothing to say why.
+    const long = `M0 0 ${"L12.5 12.5 ".repeat(500)}Z`;
+    const capped = normalizeShape({ kind: "path", outline: long }).outline!;
+    expect(capped.length).toBeLessThanOrEqual(MAX_OUTLINE);
+    expect(capped.endsWith("L12.5 12.5")).toBe(true);
+    // And what survives still draws.
+    expect(isFinitePositions(pathShape({ outline: capped, r: 2 }))).toBe(true);
+  });
+
+  it("caps an outline at a length a share link can carry", () => {
+    const huge = `M0 0 ${"L1 1 ".repeat(2000)}Z`;
+    expect(huge.length).toBeGreaterThan(MAX_OUTLINE);
+    expect(normalizeShape({ kind: "path", outline: huge }).outline!.length).toBeLessThanOrEqual(
+      MAX_OUTLINE,
+    );
   });
 });

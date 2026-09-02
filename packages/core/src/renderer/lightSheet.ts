@@ -33,6 +33,7 @@
  *      characteristic bright core and soft ends.
  */
 import * as THREE from "three";
+import { fitOutline, isConvex, traceableOutline } from "./svgPath";
 
 /** Visible range, in nanometres. */
 const LAMBDA_MIN = 400;
@@ -203,11 +204,11 @@ export function wavelengthToBeamRgb(nm: number, target = new THREE.Color()): THR
  * Adapted from Vercel's vgpu (MIT) — see THIRD-PARTY-NOTICES.md.
  */
 /**
- * The polygon a lathe cuts in the beam's plane, or undefined if it cuts nothing the tracer can use.
+ * The polygon a shape cuts in the beam's plane, or undefined if it cuts nothing the tracer can use.
  *
  * The tracer is shape-agnostic — it refracts against edges, and a circle is a polygon with enough
  * of them — so making a beam follow a sphere needs nothing but the right outline. What it cannot do
- * is guess. Two things have to be read per kind:
+ * is guess. Three things have to be read per kind:
  *
  *   `sides` counts FACES on a prism and radial SEGMENTS everywhere else, so the two are read
  *   differently and everything round becomes a smooth ring at the mesh's own segment count. A
@@ -216,21 +217,38 @@ export function wavelengthToBeamRgb(nm: number, target = new THREE.Color()): THR
  *   The slice is taken at the lathe's widest section, which is only the sheet's own plane when the
  *   shape is centred on it. A `cone` tapers, so its half-height slice is half its base.
  *
- * Undefined for the kinds whose slice is not a convex polygon at all, and returning a circle for
+ *   `beamRotation` applies to the lathes and NOT to `path`. It exists to reconcile conventions: a
+ *   lathe's cross-section is generated here from scratch, in XZ, and the beam's default rotation is
+ *   what puts a vertex at the top to match a `prism` rolled -90° about X. A `path` is drawn in XY
+ *   already — the sheet's own plane — so the same rotation would spin the drawn outline away from
+ *   where the mesh actually sits. Only the item's own `roll` applies to it.
+ *
+ * Undefined for the kinds whose slice the tracer cannot make sense of, and returning a circle for
  * them — which is what this used to do for six of eleven kinds — is not a rough approximation but
  * a different solid: a `ring` is an annulus with a hole the light should cross, `slab` and `arrow`
  * are extrusions whose cross-section is their outline rather than anything lathed, and a `blob` is
- * bumpy by construction. Convexity is not a detail here; the clipping the tracer runs on assumes
- * it, so a non-convex outline would not merely look wrong, it would report crossings that are not
- * there.
+ * bumpy by construction.
+ *
+ * `path` is the one kind that answers per SHAPE rather than per kind, because its outline is
+ * authored. It does not have to be convex — `clipEntry` scans a re-entrant outline edge by edge —
+ * only SIMPLE. A self-crossing contour is refused, and that is the one gate worth keeping: a
+ * figure-of-eight has no inside for the tracer's entering-and-leaving bookkeeping to be right
+ * about, so it would not look approximate, it would look random.
  */
 export function crossSectionFor(
-  kind: string,
-  r: number,
-  sides: number,
-  rotation: number,
+  shape: { kind: string; r: number; sides: number; outline?: string },
+  beamRotation: number,
+  roll: number,
   centre?: { x: number; y: number },
 ): THREE.Vector2[] | undefined {
+  const { kind, r, sides } = shape;
+  if (kind === "path") {
+    if (!shape.outline) return undefined;
+    const [outer] = fitOutline(shape.outline, r);
+    if (!outer) return undefined;
+    const traceable = traceableOutline(outer, r);
+    return traceable && posePolygon(traceable, roll, centre);
+  }
   const segments = Math.max(3, Math.round(sides));
   const radius =
     kind === "prism" || kind === "hex"
@@ -243,7 +261,23 @@ export function crossSectionFor(
           : 0;
   if (radius <= 0) return undefined;
   const count = kind === "hex" ? 6 : kind === "prism" ? segments : segments;
-  return prismCrossSection(radius, count, rotation, centre);
+  return prismCrossSection(radius, count, beamRotation + roll, centre);
+}
+
+/** Spin a drawn outline about its own centre and put it where the item stands. `prismCrossSection`
+ *  does the same for a generated polygon by construction; this one already has its points. */
+function posePolygon(
+  polygon: readonly THREE.Vector2[],
+  rotation: number,
+  centre?: { x: number; y: number },
+): THREE.Vector2[] {
+  const cos = Math.cos(rotation);
+  const sin = Math.sin(rotation);
+  const ox = centre?.x ?? 0;
+  const oy = centre?.y ?? 0;
+  return polygon.map(
+    (p) => new THREE.Vector2(ox + p.x * cos - p.y * sin, oy + p.x * sin + p.y * cos),
+  );
 }
 
 export function aimBeamAtAngle(
@@ -417,6 +451,15 @@ export interface PreparedPolygon {
   /** Centre the regularity and the angular window are measured about. */
   readonly cx: number;
   readonly cy: number;
+  /**
+   * Set when the outline turns the same way at every vertex, which decides WHICH CLIPPER it gets.
+   *
+   * A convex polygon is the intersection of its edges' half-planes, so Cyrus-Beck finds entry and
+   * exit in one pass of dots and divides. A re-entrant one is not, and has to be scanned edge by
+   * edge as segments. Both are correct; the first is materially cheaper, and every lathe
+   * cross-section in the language is convex, so the fast path is the one almost everything takes.
+   */
+  readonly convex: boolean;
 }
 
 export function preparePolygon(
@@ -473,7 +516,22 @@ export function preparePolygon(
       regular = false;
     }
   }
-  return { points: poly, count, ax, ay, ex, ey, nx, ny, circumradius, phase, regular, cx, cy };
+  return {
+    points: poly,
+    count,
+    ax,
+    ay,
+    ex,
+    ey,
+    nx,
+    ny,
+    circumradius,
+    phase,
+    regular,
+    cx,
+    cy,
+    convex: isConvex(poly),
+  };
 }
 
 /**
@@ -659,6 +717,72 @@ function clipConvex(
   return clipEnterEdge >= 0 && clipExitEdge >= 0;
 }
 
+/**
+ * Where a ray ENTERS a solid, whatever shape it is.
+ *
+ * Convex outlines go to Cyrus-Beck, which answers entry and exit together and is what every lathe
+ * cross-section in the language uses. A re-entrant outline cannot: it is not the intersection of
+ * its half-planes, so a half-plane test reports crossings on the far side of a notch that the ray
+ * never makes, which is the failure that used to keep drawn silhouettes out of a beam's path.
+ *
+ * The general answer is the nearest forward crossing where the ray is heading INWARD — against the
+ * edge's outward normal — and lands between that edge's endpoints. Both qualifiers matter: without
+ * the direction test a ray leaving through the far wall counts as an entry, and without the segment
+ * test every edge's infinite line does.
+ *
+ * `SURFACE_EPS` is applied here, not left to the caller. A ray stepping on from a previous exit
+ * starts exactly on this solid's boundary, so the edge it just left crosses at t ≈ 0 — and
+ * returning that would make the caller skip the solid as "behind the ray", which is precisely what
+ * has to work for a beam to leave a notch and come back into the same shape.
+ */
+function clipEntry(poly: PreparedPolygon, ox: number, oy: number, dx: number, dy: number): boolean {
+  if (poly.convex) return clipConvex(poly, ox, oy, dx, dy);
+  const { count, ax, ay, nx, ny } = poly;
+  let bestT = Infinity;
+  let bestEdge = -1;
+  for (let i = 0; i < count; i++) {
+    const denominator = dx * nx[i] + dy * ny[i];
+    if (denominator >= 0) continue; // parallel, or heading out through this edge
+    const t = ((ax[i] - ox) * nx[i] + (ay[i] - oy) * ny[i]) / denominator;
+    if (t <= SURFACE_EPS || t >= bestT) continue;
+    if (!onSegment(poly, i, ox, oy, dx, dy, t)) continue;
+    bestT = t;
+    bestEdge = i;
+  }
+  if (bestEdge < 0) return false;
+  clipEnterT = bestT;
+  clipEnterEdge = bestEdge;
+  return true;
+}
+
+/**
+ * Where a ray already INSIDE a solid leaves it. The mirror of {@link clipEntry}: nearest forward
+ * crossing where the ray is heading OUTWARD.
+ *
+ * Requiring the outward direction rather than taking the nearest crossing of any kind is what
+ * keeps the refraction honest — the exit normal is read straight off this edge, so picking an
+ * inward-facing one would refract the ray through a wall it is not standing at.
+ */
+function clipExit(poly: PreparedPolygon, ox: number, oy: number, dx: number, dy: number): boolean {
+  if (poly.convex) return clipConvex(poly, ox, oy, dx, dy);
+  const { count, ax, ay, nx, ny } = poly;
+  let bestT = Infinity;
+  let bestEdge = -1;
+  for (let i = 0; i < count; i++) {
+    const denominator = dx * nx[i] + dy * ny[i];
+    if (denominator <= 0) continue;
+    const t = ((ax[i] - ox) * nx[i] + (ay[i] - oy) * ny[i]) / denominator;
+    if (t <= SURFACE_EPS || t >= bestT) continue;
+    if (!onSegment(poly, i, ox, oy, dx, dy, t)) continue;
+    bestT = t;
+    bestEdge = i;
+  }
+  if (bestEdge < 0) return false;
+  clipExitT = bestT;
+  clipExitEdge = bestEdge;
+  return true;
+}
+
 /** Positive for counter-clockwise winding, which decides which perpendicular faces outward. */
 function windingSign(poly: THREE.Vector2[]): number {
   let area = 0;
@@ -807,7 +931,7 @@ export function traceSolids(
     let nearest = -1;
     let nearestT = Infinity;
     for (let i = 0; i < solids.length; i++) {
-      if (!clipConvex(solids[i].outline, fromX, fromY, heading.x, heading.y)) continue;
+      if (!clipEntry(solids[i].outline, fromX, fromY, heading.x, heading.y)) continue;
       if (clipEnterT <= SURFACE_EPS || clipEnterT >= nearestT) continue;
       nearestT = clipEnterT;
       nearest = i;
@@ -815,7 +939,7 @@ export function traceSolids(
     if (nearest < 0) break;
 
     const { outline, ior } = solids[nearest];
-    clipConvex(outline, fromX, fromY, heading.x, heading.y);
+    clipEntry(outline, fromX, fromY, heading.x, heading.y);
     const entryEdge = clipEnterEdge;
     const entryNormal = traceNormal;
     entryNormal.set(outline.nx[entryEdge], outline.ny[entryEdge]);
@@ -835,7 +959,7 @@ export function traceSolids(
     let escaped = false;
     for (let b = 0; b <= MAX_BOUNCES; b++) {
       // From INSIDE, so the near clip is behind the ray and the far one is the surface it leaves by.
-      if (!clipConvex(outline, position.x, position.y, inside.x, inside.y)) break;
+      if (!clipExit(outline, position.x, position.y, inside.x, inside.y)) break;
       const exitEdge = clipExitEdge;
       if (clipExitT <= SURFACE_EPS) break;
       position = new THREE.Vector2(

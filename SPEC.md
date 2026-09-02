@@ -389,6 +389,7 @@ geometry in this visual language.
 | `disc({ r, thickness, fillet })`                 | same primitive, squat                  |
 | `prism({ r, len, sides })` / `hex()`             | low segment count                      |
 | `cone`, `sphere`, `ring({ r, hole, thickness })` |                                        |
+| `pathShape({ outline, r, depth })`               | arbitrary silhouette, as SVG path data |
 | `extrude({ shape, depth, bevel })`, `arrow()`    | **not** lathes — swept 2D paths        |
 
 Flat ends with a small fillet, not hemispheres. The fillet catches the rim
@@ -447,6 +448,20 @@ an exploded shapes composition ("Assembly"), a glass spiral staircase
 ("Staircase"), a set of gooey liquid blobs ("Slimes"), a dispersion rig
 ("Prism"), a hover legend for the interaction layer ("Reactions"), and a swatch
 grid of every material against every shape ("Materials").
+
+**Arbitrary silhouettes.** `path` takes an SVG `d` and extrudes it, for the shapes that cannot be
+described by numbers. Y is flipped and the drawing is refitted so its longer half-extent is `r`, so a
+path pasted from any tool arrives right way up at a findable size; the first subpath is the outline
+and later ones are holes, and a whole `.svg` may be pasted in place of a bare `d`. The bevel is
+sized off the outline's narrowest limb rather than its bounding box, and a negative `fillet`
+removes it. A drawn outline may also be a beam target, convex or re-entrant: the tracer clips a
+convex cross-section by half-planes (Cyrus-Beck, one pass) and scans anything else edge by edge,
+and the multi-solid walk already allows a ray to re-enter a solid it left. Only a SELF-CROSSING
+outline is refused — "inside" is undefined for one, so there is nothing for the trace to be right
+about. It gets the screen-space refraction rather than the traced one — the
+tracer wants bounding planes, which only a faceted lathe can supply (§3.5). `measuredThickness` is
+optional, as it is for the other extrusions: `defaultPath` is `depth / 2`, so the analytic chord
+resolves to the depth face-on, which is the true path through a plate.
 
 **Carve-outs.** Shapes with a flat profile take a list of through-cuts, so a plate can be slotted.
 Implemented as holes in the extruded profile rather than as a boolean solver: `THREE.Shape` already

@@ -367,7 +367,7 @@ const results = await page.evaluate(
           + texture2D(tSrc, vUvIn + vec2(-o.x, o.y)).rgb + texture2D(tSrc, vUvIn + vec2(o.x, o.y)).rgb;
         gl_FragColor = vec4(max(c * 0.25, vec3(0.0)), 1.0);
       }`,
-      tsl: () => passes.bloomDownPass(gpuTex, TSL.vec2(...TEXEL)),
+      tsl: () => passes.bloomDownPass(gpuTex, TSL.vec2(...TEXEL), TSL.float(0)),
     };
     cases.bloomBlur = {
       glsl: `
@@ -389,7 +389,14 @@ const results = await page.evaluate(
       }`,
       glslUniforms: { uSigma: { value: 10 / 3 }, uDir: { value: new GL.Vector2(1, 0) } },
       tsl: () =>
-        passes.bloomBlurPass(gpuTex, 10, TSL.float(10 / 3), TSL.vec2(1, 0), TSL.vec2(...TEXEL)),
+        passes.bloomBlurPass(
+          gpuTex,
+          10,
+          TSL.float(10 / 3),
+          TSL.vec2(1, 0),
+          TSL.vec2(...TEXEL),
+          TSL.float(0),
+        ),
     };
     cases.particleDown = {
       glsl: `
@@ -542,7 +549,7 @@ const results = await page.evaluate(
         tL2: { value: glTex2 },
         uRadius: { value: 0.35 },
       },
-      tsl: () => passes.bloomCompositePass(gpuTex, gpuTex1, gpuTex2, TSL.float(0.35)),
+      tsl: () => passes.bloomCompositePass(gpuTex, gpuTex1, gpuTex2, TSL.float(0.35), TSL.float(0)),
     };
 
     // ---- the post pass -------------------------------------------------------
@@ -652,6 +659,9 @@ const results = await page.evaluate(
       },
       tsl: () =>
         post.postPass({
+          // Plain textures here: nothing in this harness is blit-written, so no row inversion.
+          sourceInverted: TSL.float(0),
+          sceneMirror: TSL.vec2(0, 0),
           color: gpuTex,
           depth: gpuDepth,
           bloom: gpuTex1,
@@ -690,6 +700,9 @@ const results = await page.evaluate(
       },
       tsl: () =>
         post.postPass({
+          // Plain textures here: nothing in this harness is blit-written, so no row inversion.
+          sourceInverted: TSL.float(0),
+          sceneMirror: TSL.vec2(0, 0),
           color: gpuTex,
           depth: gpuDepth,
           bloom: gpuTex1,
@@ -731,6 +744,9 @@ const results = await page.evaluate(
       },
       tsl: () =>
         post.postPass({
+          // Plain textures here: nothing in this harness is blit-written, so no row inversion.
+          sourceInverted: TSL.float(0),
+          sceneMirror: TSL.vec2(0, 0),
           color: gpuTex,
           depth: gpuDepth,
           bloom: gpuTex1,

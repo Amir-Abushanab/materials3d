@@ -36,6 +36,12 @@ export interface PostUniforms {
   bloomAmount: Vec;
   bloomMode: Vec;
   bloomRadius: Vec;
+  /** The scene's own `mirrorH`/`mirrorV`, 1 per mirrored axis. Distinct from `mirror`, which
+   *  folds in the storage inversion and is therefore only good for READS. */
+  sceneMirror: Vec;
+  /** 1 when the source targets are blit-written and therefore stored row-inverted, 0 when they
+   *  are plain textures — as in the parity harness. See `blitUv` in ./passes. */
+  sourceInverted: Vec;
   bloomThresh: Vec;
   caustics: Vec;
   haze: Vec;
@@ -72,7 +78,24 @@ export const postPass = (u: PostUniforms) =>
     // of the frame where the reference puts it at the bottom, which on `skewer` was worth 9 of the
     // 22 levels of difference between the two engines.
     const vUv = mix(uv(), vec2(1).sub(uv()), u.mirror.step(0.5));
-    const screen = uv();
+    // The SCENE's mirror, which is not `u.mirror`. That one is the read correction — the scene
+    // mirror XORed with the storage inversion — and cannot answer "where is this pixel on a
+    // mirrored screen". POST_FRAG has one coordinate for both because nothing it reads is stored
+    // inverted, so its ramps mirror for free; here they have to be told. Without this, turning
+    // `mirrorV` on left the haze band and the caustic pool at the unmirrored end of the frame.
+    const screen = mix(uv(), vec2(1).sub(uv()), u.sceneMirror.step(0.5));
+
+    /**
+     * A neighbour of `vUv`, given an offset expressed the way POST_FRAG expresses it.
+     *
+     * `vUv` is vertically mirrored against the screen — that is what it is FOR — so a raw `+y`
+     * added to it walks DOWN the frame where the reference's identical `+y` walks up. Every gather
+     * in this pass is directional, and the caustic pool is deliberately one-sided, so the mirrored
+     * ones pooled light above the glass instead of below it. Worth 3.9 of `skewer`'s difference
+     * from the WebGL engine, with the depth-of-field and bloom spirals worth another 1.2 between
+     * them.
+     */
+    const near = (o: Vec): Vec => vUv.add(vec2(o.x, mix(o.y, o.y.negate(), u.sourceInverted)));
 
     const dC = decodeDepth(texture(u.depth, vUv)).mul(u.far);
     const r0 = dC.sub(u.focus).abs().div(u.range).clamp(0, 1).pow(1.2).mul(u.aperture).mul(u.scale);
@@ -89,7 +112,7 @@ export const postPass = (u: PostUniforms) =>
       const a = fi * GOLDEN_ANGLE;
       const dir = vec2(Math.cos(a), Math.sin(a));
       const rad = r0.mul(Math.sqrt(fi / u.dofTaps));
-      const uv2 = vUv.add(dir.mul(rad).div(u.res));
+      const uv2 = near(dir.mul(rad).div(u.res));
 
       // Occlusion guard: a sample in FRONT of this fragment contributes only in proportion to its
       // own circle of confusion, so a sharp foreground shape does not smear over a blurred one.
@@ -101,7 +124,7 @@ export const postPass = (u: PostUniforms) =>
 
       const g = texture(
         u.color,
-        vUv.add(dir.mul(u.bloomRadius.mul(u.scale).mul(Math.sqrt(fi / u.dofTaps))).div(u.res)),
+        near(dir.mul(u.bloomRadius.mul(u.scale).mul(Math.sqrt(fi / u.dofTaps))).div(u.res)),
       ).rgb;
       glow.addAssign(g.mul(saturation(g).sub(u.bloomThresh).max(0)));
     }
@@ -119,7 +142,12 @@ export const postPass = (u: PostUniforms) =>
     // doubles the halo.
     const bloom = select(
       u.bloomMode.greaterThan(0.5),
-      texture(u.bloom, vUv).rgb.mul(u.bloomAmount),
+      // V-FLIPPED relative to `vUv` when the source is a blit-written target: the pyramid is one
+      // and the colour target is not, so the two taps in this pass genuinely need different
+      // conventions. See `blitUv` in ./passes.
+      texture(u.bloom, vec2(vUv.x, mix(vUv.y, float(1).sub(vUv.y), u.sourceInverted))).rgb.mul(
+        u.bloomAmount,
+      ),
       glow.div(u.dofTaps).mul(u.bloomAmount),
     );
     const col = straight.add(bloom).toVar();
@@ -132,7 +160,7 @@ export const postPass = (u: PostUniforms) =>
     const caus = vec3(0).toVar();
     for (let k = 0; k < u.causticTaps; k++) {
       const o = (k + 1) / u.causticTaps;
-      const c = texture(u.color, vUv.add(vec2(Math.sin(o * 9) * 0.012, o * 0.2))).rgb;
+      const c = texture(u.color, near(vec2(Math.sin(o * 9) * 0.012, o * 0.2))).rgb;
       caus.addAssign(c.mul(saturation(c)).mul(1 - o));
     }
     const pool = caus.div(u.causticTaps).mul(screen.y.smoothstep(0.46, 0)).mul(u.caustics).mul(3.2);

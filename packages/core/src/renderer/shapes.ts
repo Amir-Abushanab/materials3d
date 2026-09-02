@@ -7,7 +7,8 @@
 
 import * as THREE from "three";
 import { fbmSimplex3d } from "../util/noise";
-import type { CutConfig, ShapeConfig } from "../config/model";
+import { DEFAULT_OUTLINE, type CutConfig, type ShapeConfig } from "../config/model";
+import { fitOutline, narrowestFeature } from "./svgPath";
 
 export interface RodOptions {
   r?: number;
@@ -74,6 +75,18 @@ export interface SlabOptions {
   depth?: number;
   /** Corner radius. */
   r?: number;
+  fillet?: number;
+  cuts?: readonly CutConfig[];
+}
+
+export interface PathOptions {
+  /** SVG path data — or a whole `<svg>` document; see {@link ShapeConfig.outline}. */
+  outline?: string;
+  /** Half-extent the outline is fitted to, on its LONGER axis. */
+  r?: number;
+  depth?: number;
+  /** Positive is a literal bevel radius, `0` picks one from the outline's narrowest limb, and
+   *  NEGATIVE turns the bevel off — the one kind here that can refuse one. */
   fillet?: number;
   cuts?: readonly CutConfig[];
 }
@@ -464,6 +477,101 @@ export function slab({
   );
 }
 
+/** The smaller side of a contour's bounding box — the widest bevel that contour can survive. */
+function minSpan(contour: readonly THREE.Vector2[]): number {
+  let minX = Infinity;
+  let maxX = -Infinity;
+  let minY = Infinity;
+  let maxY = -Infinity;
+  for (const p of contour) {
+    minX = Math.min(minX, p.x);
+    maxX = Math.max(maxX, p.x);
+    minY = Math.min(minY, p.y);
+    maxY = Math.max(maxY, p.y);
+  }
+  return Math.min(maxX - minX, maxY - minY);
+}
+
+/**
+ * An arbitrary silhouette, given as SVG path data and extruded toward the lens.
+ *
+ * The escape hatch, and the only builder here that takes a string. Everything else in this module
+ * describes a solid with numbers because the solids it describes CAN be — a rod has a radius — and
+ * the shapes this is for cannot: a pair of spectacles has no radius, only an outline. Authored in
+ * XY and swept along Z like `slab` and `arrow`, so it is already flat to the camera.
+ *
+ * `fitOutline` does the reorienting and refitting that make a pasted `d` land in scene units; see
+ * there for why each half of it is necessary.
+ *
+ * The DEPTH is compensated for the bevel and the outline is not, which is not an oversight either
+ * way. Depth is a number the config asked for and `defaultPath` hands straight to Beer-Lambert, so
+ * a solid a bevel's width thicker than it claims absorbs visibly more light than the scene was
+ * authored for. The outline cannot be compensated on the same terms: correctly insetting an
+ * arbitrary contour is a polygon-offset problem whose answer for a non-convex one is not even a
+ * single contour. So the drawing comes out as drawn, plus the bevel's own lip — the trade `arrow`
+ * makes, for the same reason. What keeps that lip from swamping fine detail is the default bevel
+ * being measured against the outline's NARROWEST limb rather than its bounding box, and a negative
+ * `fillet` turning it off outright.
+ */
+export function pathShape({
+  outline,
+  r = 2,
+  depth = 0.6,
+  fillet,
+  cuts = [],
+}: PathOptions = {}): THREE.BufferGeometry {
+  // An unparseable outline falls back rather than throwing: `buildShape` has to return geometry
+  // for every config, and a shape that vanished would look like a renderer fault rather than like
+  // the typo it is.
+  let placed = fitOutline(outline ?? DEFAULT_OUTLINE, r);
+  if (placed.length === 0) placed = fitOutline(DEFAULT_OUTLINE, r);
+
+  const [outer, ...holes] = placed;
+  // A drawn silhouette is the one shape here whose detail a bevel can visibly fatten, so it is
+  // also the one that can refuse a bevel outright — see ShapeConfig.fillet.
+  const bevel =
+    fillet !== undefined && fillet < 0 ? 0 : pathBevel(outer, holes, cuts, depth, r, fillet);
+
+  const shape = new THREE.Shape(outer);
+  for (const hole of holes) shape.holes.push(new THREE.Path(hole));
+  for (const cut of cuts) shape.holes.push(cutPath(cut, bevel));
+  return extrude({ shape, depth: Math.max(0.01, depth - bevel * 2), bevel });
+}
+
+/**
+ * The bevel a drawn outline can carry.
+ *
+ * Four clamps, and they exist for different reasons. The proportional DEFAULT is the narrowest
+ * limb rather than the bounding box, because that is what a bevel on a hand-drawn shape actually
+ * has to fit inside. `bevelFor` then applies the box, the depth and the carve-outs. And each
+ * subpath hole gets the protection `bevelFor` gives a cut, because extrude offsets a hole's
+ * contour OUTWARD to form its lip: one wider than half the hole's short side turns it inside out
+ * and the shape renders with a black knot where the opening should be.
+ *
+ * One bevel serves the WHOLE outline — `ExtrudeGeometry` has a single `bevelSize` — so a shape
+ * with one fine limb comes out less rounded everywhere, not just along the limb. That is the right
+ * way round: a uniform slightly-crisper edge reads as a design choice, a limb swallowed by its own
+ * fillet reads as a broken mesh.
+ */
+function pathBevel(
+  outer: readonly THREE.Vector2[],
+  holes: readonly THREE.Vector2[][],
+  cuts: readonly CutConfig[],
+  depth: number,
+  r: number,
+  fillet: number | undefined,
+): number {
+  const feature = narrowestFeature(outer);
+  const proportional = Math.min(
+    Number.isFinite(feature) ? feature * 0.22 : Infinity,
+    r * 0.04,
+    depth * 0.25,
+  );
+  let bevel = bevelFor(resolveFillet(fillet, proportional), cuts, minSpan(outer), depth);
+  for (const hole of holes) bevel = Math.min(bevel, (minSpan(hole) / 2) * 0.45);
+  return Math.max(0, bevel);
+}
+
 /**
  * A plate's outline as a polygon, at the SAME vertex angles its lathe would use.
  *
@@ -530,6 +638,8 @@ export function buildShape(shape: ShapeConfig): THREE.BufferGeometry {
   switch (kind) {
     case "slab":
       return slab({ w: len, h: thickness, depth, r, fillet, cuts });
+    case "path":
+      return pathShape({ outline: shape.outline, r, depth, fillet, cuts });
     case "droplet":
       return droplet({ r, len, sides });
     case "blob":
@@ -580,6 +690,7 @@ export function defaultPath(shape: ShapeConfig): number {
       return shape.r / 2;
     case "arrow":
     case "slab":
+    case "path":
       return shape.depth / 2;
     case "droplet":
       // Spherical through the belly, thin at the tip — the same over-absorption trade the

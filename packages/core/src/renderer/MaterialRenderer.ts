@@ -69,6 +69,7 @@ import {
   BLOOM_COMPOSITE_FRAG,
   BLOOM_DOWN_FRAG,
   BLIT_FRAG,
+  BLIT_ALPHA_FRAG,
   BLIT_OPAQUE_FRAG,
   ENV_BAKE_FRAG,
   ENV_BLUR_FRAG,
@@ -1204,6 +1205,11 @@ export class MaterialRenderer implements Engine {
     "wallWp",
     "wallOccl",
     "wallFp",
+    // The uniform is `indexOf + 1`, so padding to index 19 puts the first lamp tap at 20 — the
+    // number the shader tests. Keep the pad count in step if a wall probe is ever added.
+    ...Array.from({ length: 7 }, (_, i) => `__wallPad${i}`),
+    "bgLampRgb",
+    "bgLampA",
   ];
 
   private applyBackground(): void {
@@ -1856,16 +1862,10 @@ export class MaterialRenderer implements Engine {
     // `ring` in the list simply is not in the light's way.
     const sections = targets
       .map((c) => ({
-        polygon: crossSectionFor(
-          c.shape.kind,
-          c.shape.r,
-          c.shape.sides,
-          beam.rotation + c.rotation.z,
-          {
-            x: c.position.x,
-            y: c.position.y,
-          },
-        ),
+        polygon: crossSectionFor(c.shape, beam.rotation, c.rotation.z, {
+          x: c.position.x,
+          y: c.position.y,
+        }),
         ior: c.material.ior,
       }))
       .filter((s): s is { polygon: THREE.Vector2[]; ior: number } => s.polygon !== undefined);
@@ -2199,7 +2199,12 @@ export class MaterialRenderer implements Engine {
   /** Whether a dev harness has asked for a material intermediate instead of the composed frame.
    *  Never set in production, where this is false and post runs normally. */
   private probeActive(): boolean {
-    return Number((globalThis as Record<string, unknown>)["__glslProbe"] ?? 0) > 0;
+    // Two ways in: a material probe index, or a dump-only name that asks for a whole target and
+    // deliberately leaves the material index at zero so the shapes render normally.
+    return (
+      Number((globalThis as Record<string, unknown>)["__glslProbe"] ?? 0) > 0 ||
+      Boolean((globalThis as Record<string, unknown>)["__glslDump"])
+    );
   }
 
   /** Copy a scratch target into one mip of the environment texture. */
@@ -2714,10 +2719,11 @@ export class MaterialRenderer implements Engine {
     //
     // The node engine does the same thing at the same point, so the two stay comparable.
     if (this.probeActive()) {
+      const wantAlpha = (globalThis as Record<string, unknown>)["__glslProbeName"] === "coloralpha";
       this.probeBlit ??= new THREE.ShaderMaterial({
         vertexShader: POST_VERT,
         // Opaque: a target dump must not composite itself away through a depth it stores in alpha.
-        fragmentShader: BLIT_OPAQUE_FRAG,
+        fragmentShader: wantAlpha ? BLIT_ALPHA_FRAG : BLIT_OPAQUE_FRAG,
         uniforms: { tSrc: { value: null } },
         depthTest: false,
         depthWrite: false,
@@ -2726,6 +2732,10 @@ export class MaterialRenderer implements Engine {
       // depth passes can be compared directly rather than through everything that reads them.
       const probe = Number((globalThis as Record<string, unknown>)["__glslProbe"] ?? 0);
       const named = (globalThis as Record<string, unknown>)["__glslProbeName"];
+      // `bloom0`..`bloom3` are the blurred pyramid levels and `bloomC` the composite, so the two
+      // engines' bloom chains can be compared level by level instead of only at the frame.
+      const bloomLevel =
+        typeof named === "string" && /^bloom[0-3]$/.test(named) ? Number(named.slice(5)) : -1;
       this.probeBlit.uniforms.tSrc.value =
         named === "front"
           ? this.depthRT.texture
@@ -2733,7 +2743,11 @@ export class MaterialRenderer implements Engine {
             ? this.backRT.texture
             : named === "plate"
               ? this.bgRT.texture
-              : this.colorRT.texture;
+              : bloomLevel >= 0 && this.bloomLevels
+                ? this.bloomLevels[bloomLevel].a.texture
+                : named === "bloomC" && this.bloomLevels
+                  ? this.bloomLevels[0].b.texture
+                  : this.colorRT.texture;
       void probe;
       // Its OWN quad, not the bloom one. The bloom quad is set up for reduced-size mip passes, and
       // borrowing it put the probe image a pixel off from what post produces — which then reads as

@@ -1268,6 +1268,11 @@ export const BACKDROP_FRAG = /* glsl */ `
 
     vec2 p = (vUv - 0.5) * uSize / uPlateScale + uPlateOffset;
     vec4 lp = plate(p);
+    // Dev taps for the lamp overlay, sharing uWallProbe's slot space — see the wall taps above.
+    if (uWallProbe > 19.5) {
+      if (uWallProbe < 20.5) { gl_FragColor = vec4(lp.rgb, 1.0); return; }
+      gl_FragColor = vec4(vec3(lp.a), 1.0); return;
+    }
     gl_FragColor = vec4(mix(c, lp.rgb, lp.a * uShow), 1.0);
   }`;
 
@@ -1657,6 +1662,13 @@ export const BLIT_FRAG = /* glsl */ `
  * about one percent opacity, which reads as the two engines holding completely different plates
  * when they do not. The node engine's dump has always forced alpha; this is its twin.
  */
+/** A target's ALPHA as greyscale, so coverage can be diffed the way colour is. */
+export const BLIT_ALPHA_FRAG = /* glsl */ `
+  precision highp float;
+  uniform sampler2D tSrc;
+  varying vec2 vUvIn;
+  void main(){ gl_FragColor = vec4(vec3(texture2D(tSrc, vUvIn).a), 1.0); }`;
+
 export const BLIT_OPAQUE_FRAG = /* glsl */ `
   precision highp float;
   uniform sampler2D tSrc;

@@ -137,7 +137,11 @@ export const finishPass = (u: FinishUniforms) =>
     // channels independently walks the colour toward whichever primary rounds up first.
     TSL.If(u.dither.greaterThan(0.001), () => {
       const px = u.ditherScale.max(1);
-      const blockUv = TSL.screenCoordinate
+      // `fragCoord`, NOT `screenCoordinate` — the same correction every other pattern here makes.
+      // This one feeds `src`, so getting it wrong does not just mirror the lattice: each block took
+      // its colour from the opposite row of the frame. Alone among the finish effects, dither was
+      // 54 levels from the WebGL engine.
+      const blockUv = fragCoord
         .div(px)
         .floor()
         .add(0.5)

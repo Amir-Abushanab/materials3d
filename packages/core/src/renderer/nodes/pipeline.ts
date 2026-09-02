@@ -11,7 +11,12 @@
  *   MAIN    the same frame again, now refracting the plate.
  *   POST    depth of field, bloom, tone mapping, to the screen.
  *
- * The node renderer's `renderAsync` means every one of these is awaited rather than issued, so the
+ * These are ISSUED, not awaited. `renderAsync` is deprecated as of three r181 in favour of
+ * `render()` plus a single `await renderer.init()`, and awaiting it per pass cost about 10ms a
+ * frame here — a frame is fifteen-odd passes, and that overhead did not vary with scene complexity
+ * because it was never about the scene. It also removes every suspension point from `draw`, which
+ * is where this engine's visibility save/restore used to interleave with itself. The old note
+ * read: the renderer's `renderAsync` means every one of these is awaited rather than issued, so the
  * loop is async end to end where the WebGL engine's is not.
  */
 import * as THREE from "three/webgpu";
@@ -52,7 +57,21 @@ export const BLOOM_TAPS = [6, 10, 14, 18] as const;
 const makeTarget = (w: number, h: number, options: object) =>
   new THREE.RenderTarget(Math.max(1, Math.floor(w)), Math.max(1, Math.floor(h)), options);
 
-export function createTargets(width: number, height: number, hdr: boolean): PassTargets {
+/**
+ * Allocate the pass targets at the SCENE resolution, except `finish`.
+ *
+ * `width`/`height` are the quality-scaled render size; `outWidth`/`outHeight` are the full
+ * drawing-buffer size. The reference draws the scene and post at the former and resolves the finish
+ * pass at the latter, because the finish effects — dither lattice, halftone cell, paper grain — are
+ * authored in DEVICE pixels and must not be scaled by quality.
+ */
+export function createTargets(
+  width: number,
+  height: number,
+  outWidth: number,
+  outHeight: number,
+  hdr: boolean,
+): PassTargets {
   const base = {
     minFilter: THREE.LinearFilter,
     magFilter: THREE.LinearFilter,
@@ -85,14 +104,18 @@ export function createTargets(width: number, height: number, hdr: boolean): Pass
     }),
     plate: makeTarget(width, height, scene),
     color: makeTarget(width, height, scene),
-    finish: makeTarget(width, height, scene),
+    finish: makeTarget(outWidth, outHeight, scene),
+    // ROUND, not floor, and not the bare quotient: the reference rounds, and at 900x540 flooring
+    // gives level 2 a 112x67 target where it has 113x68. That is a different sampling grid for the
+    // widest level the composite reads, which is precisely the broad wash — worth ~3 levels of
+    // mean difference on `prism`.
     bloom: BLOOM_DIVISORS.map((d) => ({
-      a: makeTarget(width / d, height / d, {
+      a: makeTarget(Math.max(1, Math.round(width / d)), Math.max(1, Math.round(height / d)), {
         ...base,
         type: THREE.HalfFloatType,
         depthBuffer: false,
       }),
-      b: makeTarget(width / d, height / d, {
+      b: makeTarget(Math.max(1, Math.round(width / d)), Math.max(1, Math.round(height / d)), {
         ...base,
         type: THREE.HalfFloatType,
         depthBuffer: false,
@@ -101,17 +124,23 @@ export function createTargets(width: number, height: number, hdr: boolean): Pass
   };
 }
 
-export function resizeTargets(t: PassTargets, width: number, height: number): void {
+export function resizeTargets(
+  t: PassTargets,
+  width: number,
+  height: number,
+  outWidth: number,
+  outHeight: number,
+): void {
   const w = Math.max(1, Math.floor(width));
   const h = Math.max(1, Math.floor(height));
   t.front.setSize(w, h);
   t.back.setSize(w, h);
   t.plate.setSize(w, h);
   t.color.setSize(w, h);
-  t.finish.setSize(w, h);
+  t.finish.setSize(Math.max(1, Math.floor(outWidth)), Math.max(1, Math.floor(outHeight)));
   BLOOM_DIVISORS.forEach((d, i) => {
-    t.bloom[i].a.setSize(Math.max(1, Math.floor(w / d)), Math.max(1, Math.floor(h / d)));
-    t.bloom[i].b.setSize(Math.max(1, Math.floor(w / d)), Math.max(1, Math.floor(h / d)));
+    t.bloom[i].a.setSize(Math.max(1, Math.round(w / d)), Math.max(1, Math.round(h / d)));
+    t.bloom[i].b.setSize(Math.max(1, Math.round(w / d)), Math.max(1, Math.round(h / d)));
   });
 }
 
@@ -150,15 +179,15 @@ export class FullScreenQuad {
    * `level` targets one mip rather than the base, which is how the environment chain is written:
    * eight blurs, each landing in the level it belongs to, inside a single texture.
    */
-  async blit(
+  blit(
     renderer: THREE.WebGPURenderer,
     material: THREE.NodeMaterial,
     target: THREE.RenderTarget | null,
     level = 0,
-  ): Promise<void> {
+  ): void {
     this.mesh.material = material;
     renderer.setRenderTarget(target, 0, level);
-    await renderer.renderAsync(this.scene, this.camera);
+    renderer.render(this.scene, this.camera);
   }
 
   dispose(): void {

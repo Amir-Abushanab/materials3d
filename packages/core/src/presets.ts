@@ -1261,6 +1261,9 @@ const SWATCH: Record<
   droplet: { shape: { r: 0.7, len: 1.9 }, rotation: [0, 0, 0] },
   blob: { shape: { r: 0.8, seed: 4, bump: 0.55 }, rotation: [0.2, 0.6, 0] },
   slab: { shape: { len: 1.5, thickness: 1.5, depth: 0.4, r: 0.34 }, rotation: [0.24, 0.34, 0.1] },
+  // No outline given, so the swatch draws DEFAULT_OUTLINE — which is the honest thing for this
+  // column to show: `path` has no shape of its own until one is authored into it.
+  path: { shape: { r: 0.8, depth: 0.4 }, rotation: [0.2, 0.3, 0.08] },
 };
 
 /**
@@ -1293,7 +1296,7 @@ const SWATCH_PATH: Partial<Record<ShapeKind, number>> = {
 };
 
 /**
- * Every material kind against every shape kind: seven rows, eleven columns, one swatch each.
+ * Every material kind against every shape kind: seven rows, twelve columns, one swatch each.
  *
  * A legend rather than a composition, like {@link reactions} — and built by iterating
  * {@link MATERIAL_KINDS} and {@link SHAPE_KINDS} rather than by listing the pairs, so it cannot

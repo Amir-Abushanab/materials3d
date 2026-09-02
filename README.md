@@ -129,10 +129,64 @@ with `sides: 6`. That one observation covers most of the geometry in this visual
 | `prism({ r, len, sides })` / `hex()`             | low segment count                           |
 | `cone`, `sphere`, `ring({ r, hole, thickness })` |                                             |
 | `slab({ w, h, depth, r, cuts })`                 | rounded-rectangular plate, flat to the lens |
+| `pathShape({ outline, r, depth, cuts })`         | an arbitrary silhouette, as SVG path data   |
 | `extrude({ shape, depth, bevel })`, `arrow()`    | **not** lathes — swept 2D paths             |
 
 Flat ends with a small fillet, not hemispheres. The fillet catches the rim highlight and the flat
 face reads as an ellipse when tilted — a strong glass cue that a capsule loses.
+
+### Arbitrary silhouettes
+
+The lathes and the slab cover shapes that can be described by numbers. `path` is for the ones that
+cannot — a pair of spectacles has no radius, only an outline — and it takes that outline as SVG path
+data, the `d` attribute a vector tool puts on your clipboard:
+
+```js
+{ kind: "path", r: 4.2, depth: 0.55,
+  outline: "M8 26 Q8 6 34 6 L66 6 Q92 6 92 26 ... Z M20 38 A30 20 0 1 0 80 38 ... Z" }
+```
+
+You can paste the whole `.svg` file instead — every `<path>` in it is read, in document order,
+which lands on the outline-then-holes rule below for free. Nothing but `<path>` is read, and
+`transform` attributes are ignored: a translate or scale is absorbed by the refit, a rotate is not.
+
+Two things are normalized on the way in, and both are what make pasting simply work. **Y is
+flipped**, because SVG's grows downward and three's grows up — unflipped, every paste renders upside
+down. And the drawing is **scaled about its own centre until its longer half-extent is `r`**, so a
+path authored in a 0–1000 viewBox and one authored in a unit square arrive at the same size, and `r`
+is the handle that resizes either.
+
+The **first subpath is the outline and every later one is a hole** — a contract rather than a
+winding rule, because a containment test that guesses wrong silently turns a hole into a second
+body. `cuts` still apply on top, and remain the better tool for a round or slotted opening since
+they are numeric.
+
+The bevel's default is measured against the outline's **narrowest limb**, not its bounding box —
+the temple arm of a pair of glasses beside the width of its lenses is the case that needs it. One
+bevel serves the whole outline, so a shape with one fine limb comes out a little crisper
+everywhere. A **negative `fillet` turns the bevel off** entirely; `0` still means "pick a
+proportional one", as it does on every other kind.
+
+A drawn outline can also be a **`beam` target**, like a prism — including a re-entrant one. The
+tracer picks its clipper per shape: a convex cross-section gets Cyrus–Beck half-plane clipping (one
+pass, and what every lathe uses), anything else is scanned edge by edge as segments. A ray can
+leave a notch and come back into the same solid, so a beam crosses a "C" as glass, air, glass.
+
+The one outline refused is a **self-crossing** one. A figure-of-eight has no inside, so the
+tracer's entering-and-leaving bookkeeping has nothing to be right about — it would not look
+approximate, it would look random. Outlines are simplified (Douglas–Peucker, so points are spent
+where the shape bends rather than uniformly) before that test, since simplification only removes
+crossings that rounding put there.
+
+What `path` does not get is **traced refraction**: the glass shader intersects the refracted ray
+against bounding _planes_, which only a `prism` or `hex` of 3–8 sides can supply, so an arbitrary
+outline falls back to the screen-space refraction. That still reads as glass; it just is not a real
+interior path, and there is no back-glass contribution.
+
+`measuredThickness` is optional here, exactly as it is for `slab` and `arrow`. `defaultPath` hands
+Beer–Lambert `depth / 2`, and the analytic chord is `2 · path · ndv^0.4` — face-on that is the
+depth, which is the true optical path through an extrusion. Turn it on when a bevel or a varying
+cross-section is doing visible work, not as a requirement.
 
 Rotational symmetry is a trap: a lathed shape spun about its own axis of symmetry is _literally_
 invisible, since the normal distribution is identical every frame. Either break the symmetry or

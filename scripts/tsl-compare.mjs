@@ -58,6 +58,23 @@ const fmt = (v) => `(${v.map((n) => (n / 255).toFixed(3)).join(", ")})`;
 /** How many frames to render before capturing. Two by default, so a first-frame bake settles. */
 const frames = Number(flag("frames", 2));
 /**
+ * Milliseconds to wait after constructing each renderer, before capturing.
+ *
+ * Zero by default. Needed only for scenes whose content arrives asynchronously — a background
+ * image or video loads through a callback, and without a wait BOTH engines capture the fallback
+ * colour and agree perfectly about a picture neither of them drew.
+ */
+const settle = Number(flag("settle", 0));
+/**
+ * Scene time to capture at, in seconds. Both engines take an explicit time in `captureImage`, so a
+ * comparison at t is DETERMINISTIC — unlike `--loop`, which lets both run on the wall clock and
+ * compares whatever frames happen to land.
+ *
+ * This is the only axis that tests MOTION. Two of the worst bugs in this port — a double-rate clock
+ * and interaction bindings applied before motions rather than after — were both invisible at t=0.
+ */
+const atTime = Number(flag("time", 0));
+/**
  * Run the node engine's rAF loop before capturing, instead of only awaited draws.
  *
  * The two are not the same test. `captureImage` awaits each draw; the loop fires them without
@@ -117,6 +134,8 @@ const result = await page.evaluate(
     frameCount,
     runLoop,
     shiftSpec,
+    settleMs,
+    sceneTime,
   ]) => {
     const gl = await import(base + "bundle.js");
     const { NodeMaterialRenderer } = await import(base + "dist/renderer/NodeMaterialRenderer.js");
@@ -125,7 +144,7 @@ const result = await page.evaluate(
 
     const region = cropSpec ? cropSpec.split(",").map(Number) : [0, 0, w, h];
     const grab = async (renderer) => {
-      const blob = await renderer.captureImage("image/png", 0.92, 0);
+      const blob = await renderer.captureImage("image/png", 0.92, sceneTime);
       const bitmap = await createImageBitmap(blob);
       const c = document.createElement("canvas");
       c.width = region[2];
@@ -188,8 +207,36 @@ const result = await page.evaluate(
       "wallWp",
       "wallOccl",
       "wallFp",
+      "color",
+      "coloralpha",
+      "bloom0",
+      "bloom1",
+      "bloom2",
+      "bloom3",
+      "bloomC",
+      "bgLampRgb",
+      "bgLampA",
     ];
-    globalThis["__glslProbe"] = Math.max(0, GLSL_PROBES.indexOf(probeName));
+    // DUMP-ONLY names ask for a whole render target, not a material intermediate. They must NOT
+    // set the material probe index: that index substitutes an intermediate into every shape's
+    // shader, so asking for the colour target used to hand back a frame whose shapes were flat
+    // grey probe output — and the node engine, which matches probes by NAME, rendered them
+    // normally. The resulting "difference" was entirely this tool's.
+    const DUMP_PROBES = [
+      "front",
+      "back",
+      "plate",
+      "color",
+      "coloralpha",
+      "bloom0",
+      "bloom1",
+      "bloom2",
+      "bloom3",
+      "bloomC",
+    ];
+    const isDump = DUMP_PROBES.includes(probeName);
+    globalThis["__glslDump"] = isDump;
+    globalThis["__glslProbe"] = isDump ? 0 : Math.max(0, GLSL_PROBES.indexOf(probeName));
     // Named separately: `front`/`back` select a TARGET to blit rather than a shader intermediate.
     globalThis["__glslProbeName"] = probeName || undefined;
     const a = new gl.MaterialRenderer(host, cfg, {
@@ -197,6 +244,7 @@ const result = await page.evaluate(
       preserveDrawingBuffer: true,
     });
     a.setOutputSize({ width: w, height: h });
+    if (settleMs) await new Promise((done) => setTimeout(done, settleMs));
     const glCanvas = await grab(a);
     globalThis["__glslProbe"] = 0;
     a.dispose();
@@ -206,9 +254,10 @@ const result = await page.evaluate(
     globalThis["__tslDebug"] = probeName || undefined;
     const b = new NodeMaterialRenderer(host, cfg, { respectReducedMotion: false });
     b.setOutputSize({ width: w, height: h });
+    if (settleMs) await new Promise((done) => setTimeout(done, settleMs));
     // Two frames. The first may bake the room and rebuild the item materials; the second is drawn
     // through the finished state, which is what a consumer actually sees.
-    for (let i = 1; i < frameCount; i++) await b.captureImage("image/png", 0.92, 0);
+    for (let i = 1; i < frameCount; i++) await b.captureImage("image/png", 0.92, sceneTime);
     if (runLoop) {
       b.start();
       await new Promise((done) => setTimeout(done, 600));
@@ -288,7 +337,21 @@ const result = await page.evaluate(
       samples,
     };
   },
-  [url, scene, width, height, probe, crop, gl_label(scene), at, frames, loop, shift],
+  [
+    url,
+    scene,
+    width,
+    height,
+    probe,
+    crop,
+    gl_label(scene),
+    at,
+    frames,
+    loop,
+    shift,
+    settle,
+    atTime,
+  ],
 );
 
 console.log(result.stats);

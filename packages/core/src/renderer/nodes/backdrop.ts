@@ -273,20 +273,29 @@ export interface BackdropUniforms {
   plateScale: Vec;
   plateOffset: Vec;
   show: Vec;
+  /** Dev tap: a backdrop intermediate to return instead of the composed colour. Never set in
+   *  production, where it is undefined and every tap compiles out. */
+  probe?: string;
 }
 
 export const backdropPass = (u: BackdropUniforms) =>
   Fn(([uvIn]: [Vec]) => {
-    // TWO coordinates, for the same reason the post pass has two. `uvIn` is the VISIBLE rectangle
-    // — this quad is exactly the frame — and `planeUv` is where that sits on the oversized world
-    // plane BACKDROP_FRAG actually draws on.
+    // TWO coordinates, for the same reason the post pass has two. `uvIn` is the OVERSIZED PLANE's
+    // own uv, straight off the geometry, and `fuv` is the visible rectangle within it.
     //
-    // Gradients and images are authored against the visible rectangle, so they take `uvIn`. The
+    // Gradients and images are authored against the visible rectangle, so they take `fuv`. The
     // vertical ramp, the wall and the lamp overlay are authored against the PLANE: the reference
     // oversizes it deliberately so the ramp is calibrated against a fixed 160x110 span rather than
-    // against whatever the camera happens to frame, and the screen sees a middle slice of it.
-    const planeUv = uvIn.sub(0.5).mul(u.frame).add(0.5).toVar();
-    const fuv = uvIn.toVar();
+    // against whatever the camera happens to frame, and the screen sees a slice of it.
+    //
+    // This derivation runs in the direction BACKDROP_FRAG's does, plane -> frame, because it is
+    // fed by the same world-space plane. It used to run the other way, reconstructing the plane uv
+    // from a full-screen quad as `(uvIn - 0.5) * frame + 0.5` — which silently assumed the camera
+    // looks at the plane's CENTRE. It does not: `camera.lookAt.y` is nonzero in most presets, so
+    // the slice the camera really sees is off-centre and everything authored against the plane
+    // landed shifted. On `skewer` that put the lamp overlay 138px low.
+    const planeUv = uvIn.toVar();
+    const fuv = uvIn.sub(0.5).div(u.frame.max(1e-4)).add(0.5).toVar();
     const ramp = rampAt(u.stops, u.stopCount, u.maxStops);
 
     // IMAGE. `cover` and `contain` differ only in which way the aspect comparison goes, so they
@@ -362,6 +371,8 @@ export const backdropPass = (u: BackdropUniforms) =>
     // The lamps, faintly, over whatever the backdrop turned out to be — so a scene sits in a room
     // rather than in front of a flat card.
     const p = planeUv.sub(0.5).mul(u.size).div(u.plateScale).add(u.plateOffset);
-    const lamp = u.lamps(p);
+    const lamp = u.lamps(p).toVar();
+    if (u.probe === "bgLampRgb") return vec4(lamp.rgb, 1);
+    if (u.probe === "bgLampA") return vec4(vec3(lamp.a), 1);
     return vec4(mix(c, lamp.rgb, lamp.a.mul(u.show)), 1);
   });

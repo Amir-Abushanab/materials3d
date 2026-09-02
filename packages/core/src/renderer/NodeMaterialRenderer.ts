@@ -251,15 +251,17 @@ export class NodeMaterialRenderer implements Engine {
   /**
    * The draw in flight, if any — this renderer's ONE piece of concurrency control.
    *
-   * `draw()` is async and yields at every `renderAsync`, and it mutates shared state across those
-   * yields: `passIndex`, the plate binding, the clear colour, `scene.overrideMaterial` and the
-   * visibility of the backdrop and beam. Firing it from `requestAnimationFrame` without awaiting
-   * therefore lets two draws interleave, and the damage latches: the second draw reads the flags
-   * the first has already cleared, saves `false` as "was visible", and restores that — so the
-   * backdrop and beam stay hidden for every frame afterwards.
+   * KEPT, though `draw()` no longer yields mid-frame. Every pass is now issued through the
+   * synchronous `render()` rather than awaited through the deprecated `renderAsync`, so the
+   * interleaving this guards against cannot currently happen — but `draw` is still an async
+   * function, it still mutates shared state a partial run would corrupt (`passIndex`, the plate
+   * binding, the clear colour, `scene.overrideMaterial`, and the visibility of the backdrop and
+   * beam), and one `await` reintroduced anywhere inside it brings the hazard straight back.
    *
-   * It never reproduced under a software adapter, where those awaits resolve almost immediately.
-   * It shows up on a real GPU, where they do not.
+   * What that looked like: two draws interleaved, the second read the flags the first had already
+   * cleared, saved `false` as "was visible" and restored that — so the backdrop and beam stayed
+   * hidden for every frame afterwards. It never reproduced under a software adapter, where the
+   * awaits resolved almost immediately, and showed up only on a real GPU.
    */
   private drawing: Promise<void> | null = null;
   private time = 0;
@@ -311,6 +313,17 @@ export class NodeMaterialRenderer implements Engine {
    * a flip baked into the graph would make that comparison a lie.
    */
   private readonly sourceFlip = uniform(TSL.vec2(0, 1));
+  /** 1: every blit-written target on this backend is stored row-inverted. Constant here and 0 in
+   *  the parity harness, which feeds the same passes plain textures — see `blitUv` in ./nodes/passes. */
+  private readonly blitFlip = uniform(1);
+  /** `mirrorH`/`mirrorV` alone, for post's SCREEN coordinate — `sourceFlip` has the storage
+   *  inversion folded in and cannot serve that role. */
+  private readonly sceneMirror = uniform(TSL.vec2(0, 0));
+  /** The full drawing buffer, for the finish pass — whose patterns are authored in DEVICE pixels
+   *  and so must not shrink with `quality`. `resolution` is the quality-scaled scene size. */
+  private readonly outputResolution = uniform(TSL.vec2(1, 1));
+  /** `quality`, keeping post's gather radii the same fraction of a smaller frame. */
+  private readonly postScale = uniform(1);
   /**
    * 0 while drawing the plate, 1 while drawing the main pass.
    *
@@ -347,7 +360,11 @@ export class NodeMaterialRenderer implements Engine {
   /** Camera orbit, and the scratch the picking and projection helpers reuse. */
   private yaw = 0;
   private pitch = 0;
+  private targetYaw = 0;
+  private targetPitch = 0;
   private distance = 0;
+  /** One signal for every DOM listener this renderer owns, so `dispose` drops them together. */
+  private readonly listeners = new AbortController();
   private outputSize?: { width: number; height: number };
   private frameCallback: ((time: number) => void) | null = null;
   private readonly raycaster = new THREE.Raycaster();
@@ -408,6 +425,8 @@ export class NodeMaterialRenderer implements Engine {
   private readonly bgImageAspect = uniform(1);
   private readonly bgImageOffset = uniform(TSL.vec2(0.5, 0.5));
   private bgImageTexture?: THREE.Texture;
+  private bgVideo?: HTMLVideoElement;
+  private bgMediaUrl?: string;
   private bgImageNode?: Vec;
   // The wall. Every one of these is authored, and the defaults are the reference's.
   private readonly wallExtent = uniform(TSL.vec2(1, 1));
@@ -615,6 +634,11 @@ export class NodeMaterialRenderer implements Engine {
     this.scene.add(this.backdrop);
     // `init()` is async on this renderer — it negotiates a device before anything can draw — so
     // every entry point awaits this rather than assuming a ready renderer the way WebGL allows.
+    // Seeded from the config, as the WebGL engine seeds it in its constructor. The `|| cam.distance`
+    // fallbacks elsewhere hide a zero when nothing has written it, but the wheel handler ADDS to
+    // this — from zero the first notch clamps straight to an end stop instead of nudging.
+    this.distance = this.config.camera.distance;
+    this.bindOrbit();
     this.ready = this.renderer.init().then(() => {
       this.applyConfig();
       // Targets FIRST: an item's graph captures the plate texture, and building before the target
@@ -707,7 +731,7 @@ export class NodeMaterialRenderer implements Engine {
     let source = envScratch(ENV_WIDTH, height);
     this.envPasses ??= this.buildEnvPasses();
     const previous = this.renderer.getRenderTarget();
-    await this.quad.blit(this.renderer, this.envPasses.bake, source);
+    this.quad.blit(this.renderer, this.envPasses.bake, source);
     await this.copyIntoLevel(source, 0);
 
     for (let level = 1; level < ENV_LEVELS; level++) {
@@ -719,11 +743,11 @@ export class NodeMaterialRenderer implements Engine {
       (this.envBlurTexel.value as THREE.Vector2).set(1 / w, 1 / h);
       (this.envBlurDir.value as THREE.Vector2).set(1, 0);
       this.envBlurCompensate.value = 1;
-      await this.quad.blit(this.renderer, this.envPasses.blur, horizontal);
+      this.quad.blit(this.renderer, this.envPasses.blur, horizontal);
       this.envPasses.blurSource.value = horizontal.texture;
       (this.envBlurDir.value as THREE.Vector2).set(0, 1);
       this.envBlurCompensate.value = 0;
-      await this.quad.blit(this.renderer, this.envPasses.blur, vertical);
+      this.quad.blit(this.renderer, this.envPasses.blur, vertical);
       await this.copyIntoLevel(vertical, level);
       horizontal.dispose();
       source.dispose();
@@ -836,6 +860,12 @@ export class NodeMaterialRenderer implements Engine {
     // Brightness from the sixteenth-res UNTHRESHOLDED field, hue from a mid bloom level. Two
     // different textures on purpose: the field is broad enough to say whether light reaches a
     // grain at all, and far too broad to say what colour it is.
+    // NOT v-flipped, though both levels are blit-written and everything else that reads them is —
+    // see `blitUv` in ./nodes/passes. A flip was added here by symmetry with those and it was
+    // wrong: this pass is drawn with the SCENE, and the uv it is handed already runs in the same
+    // direction as the stored rows, so flipping lit every grain from the mirror image of the frame.
+    // Worth 1.4 of `prism` in a LIVE frame and invisible to every static comparison, which is how
+    // it survived. Reported by a person looking at the studio.
     const shade = dustPass({
       light: (uvNode: Vec) => TSL.texture(t.bloom[3].a.texture, uvNode),
       color: (uvNode: Vec) => TSL.texture(t.bloom[1].a.texture, uvNode),
@@ -895,12 +925,13 @@ export class NodeMaterialRenderer implements Engine {
   private async copyIntoLevel(source: THREE.RenderTarget, level: number): Promise<void> {
     if (!this.envTarget || !this.envPasses) return;
     this.envPasses.copySource.value = source.texture;
-    await this.quad.blit(this.renderer, this.envPasses.copy, this.envTarget, level);
+    this.quad.blit(this.renderer, this.envPasses.copy, this.envTarget, level);
   }
 
   private buildBackdrop(): THREE.Mesh {
     const material = new THREE.NodeMaterial();
     material.fragmentNode = backdropPass({
+      probe: devProbe(),
       mode: this.bgMode,
       gradType: this.bgGradType,
       top: this.top,
@@ -957,13 +988,14 @@ export class NodeMaterialRenderer implements Engine {
       plateOffset: this.plateOffset,
       show: this.bgShow,
     })(uv()) as never;
-    // CLIP SPACE directly, bypassing the model-view-projection. Without this the quad is a
-    // two-unit plane at the world origin, which a perspective camera draws as a small square in
-    // the middle of the scene — and the "background" you then see is the renderer's clear colour.
-    material.vertexNode = vec4(TSL.positionGeometry.xy, 0, 1) as never;
+    // A REAL world-space plane, on the normal model-view-projection path, placed and scaled to
+    // match the WebGL engine's backdrop exactly — see `resize`. It is deliberately not a
+    // full-screen clip-space quad: everything authored against the plane (the ramp, the wall, the
+    // lamp overlay) needs the plane's OWN uv, and that can only be reconstructed from a screen
+    // quad by assuming the camera looks at the plane's centre, which it does not.
     material.depthWrite = false;
     material.depthTest = false;
-    const mesh = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), material);
+    const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), material);
     mesh.frustumCulled = false;
     mesh.renderOrder = -1000;
     return mesh;
@@ -980,6 +1012,82 @@ export class NodeMaterialRenderer implements Engine {
     this.placeholder.needsUpdate = true;
     this.bgImageNode ??= TSL.texture(this.bgImageTexture ?? this.placeholder);
     return this.bgImageNode;
+  }
+
+  /**
+   * Load (or drop) the backdrop image / video to match the config.
+   *
+   * A twin of the WebGL engine's `syncBackgroundMedia`, down to the URL key: a slider drag calls
+   * the background apply on every frame, and re-requesting the same file each time would be a
+   * request storm. A video takes precedence over a still when both are set.
+   *
+   * The texture is swapped INTO the existing node rather than rebuilt around it, so a picture
+   * arriving does not recompile the backdrop.
+   */
+  private syncBackgroundMedia(): void {
+    const c = this.config;
+    const wanted =
+      c.backgroundMode === "image" ? (c.backgroundVideoUrl ?? c.backgroundImageUrl) : undefined;
+    if (wanted === this.bgMediaUrl) return;
+    this.bgMediaUrl = wanted;
+    this.disposeMedia();
+    const node = this.backgroundImage() as unknown as { value: THREE.Texture };
+    if (!wanted) {
+      this.bgHasImage.value = 0;
+      if (this.placeholder) node.value = this.placeholder;
+      return;
+    }
+
+    if (c.backgroundVideoUrl && wanted === c.backgroundVideoUrl) {
+      const video = document.createElement("video");
+      video.src = wanted;
+      video.loop = true;
+      video.muted = true;
+      video.playsInline = true;
+      video.crossOrigin = "anonymous";
+      const texture = new THREE.VideoTexture(video);
+      // Display-space throughout, like every other colour source here.
+      texture.colorSpace = THREE.NoColorSpace;
+      this.bgVideo = video;
+      this.bgImageTexture = texture;
+      video.addEventListener("loadedmetadata", () => {
+        this.bgImageAspect.value = video.videoWidth / Math.max(1, video.videoHeight);
+        void this.drawGuarded();
+      });
+      void video.play().catch(() => {
+        // Autoplay can be refused; the first frame still shows once metadata lands.
+      });
+      node.value = texture;
+      this.bgHasImage.value = 1;
+      return;
+    }
+
+    new THREE.TextureLoader().load(wanted, (texture) => {
+      // A late load must not overwrite a newer one.
+      if (this.bgMediaUrl !== wanted) {
+        texture.dispose();
+        return;
+      }
+      texture.colorSpace = THREE.NoColorSpace;
+      texture.wrapS = THREE.ClampToEdgeWrapping;
+      texture.wrapT = THREE.ClampToEdgeWrapping;
+      this.bgImageTexture = texture;
+      node.value = texture;
+      this.bgHasImage.value = 1;
+      this.bgImageAspect.value = texture.image.width / Math.max(1, texture.image.height);
+      void this.drawGuarded();
+    });
+  }
+
+  private disposeMedia(): void {
+    this.bgImageTexture?.dispose();
+    this.bgImageTexture = undefined;
+    if (this.bgVideo) {
+      this.bgVideo.pause();
+      this.bgVideo.removeAttribute("src");
+      this.bgVideo.load();
+      this.bgVideo = undefined;
+    }
   }
 
   /**
@@ -1158,7 +1266,16 @@ export class NodeMaterialRenderer implements Engine {
             dispersion: u.dispersion,
             roughness: u.roughness,
             plate,
-          })(view, normal, TSL.screenCoordinate),
+            // `gl_FragCoord`'s convention, not `screenCoordinate`'s: the cone's per-pixel rotation
+            // is a hash of the FLOORED pixel, so counting rows from the top instead of the bottom
+            // gives a different bearing at every pixel. It does not shift the frosting, it
+            // reshuffles it — which is why it showed up as speckle over the frosted row of
+            // `materials` and as nothing at all anywhere else.
+          })(
+            view,
+            normal,
+            TSL.vec2(TSL.screenCoordinate.x, this.resolution.y.sub(TSL.screenCoordinate.y)),
+          ),
         );
       }).Else(() => {
         cone.assign(
@@ -1461,7 +1578,7 @@ export class NodeMaterialRenderer implements Engine {
       .filter((c): c is NonNullable<typeof c> => c !== undefined);
     const sections = targets
       .map((c) =>
-        crossSectionFor(c.shape.kind, c.shape.r, c.shape.sides, beam.rotation + c.rotation.z, {
+        crossSectionFor(c.shape, beam.rotation, c.rotation.z, {
           x: c.position.x,
           y: c.position.y,
         }),
@@ -1807,6 +1924,7 @@ export class NodeMaterialRenderer implements Engine {
       c.backgroundImagePosition.x,
       c.backgroundImagePosition.y,
     );
+    this.syncBackgroundMedia();
 
     this.applyGrounding();
   }
@@ -1850,7 +1968,7 @@ export class NodeMaterialRenderer implements Engine {
     return passMaterial(
       finishPass({
         source: this.finishSource,
-        res: this.resolution,
+        res: this.outputResolution,
         inner: this.fnInner,
         innerDensity: this.fnInnerDensity,
         innerDecay: this.fnInnerDecay,
@@ -1896,8 +2014,11 @@ export class NodeMaterialRenderer implements Engine {
     // The scene's own mirror composes with the target flip: mirroring vertically means NOT
     // flipping, because the source is already inverted.
     (this.sourceFlip.value as THREE.Vector2).set(c.mirrorH ? 1 : 0, c.mirrorV ? 0 : 1);
+    (this.sceneMirror.value as THREE.Vector2).set(c.mirrorH ? 1 : 0, c.mirrorV ? 1 : 0);
     this.grain.value = p.grain;
-    const [hr, hg, hb] = parseHex(c.background);
+    // `post.hazeColor`, NOT `background`. They are near-neighbours in most presets, so reading the
+    // wrong one shows up as a faint gradient over the haze band rather than as a wrong colour.
+    const [hr, hg, hb] = parseHex(p.hazeColor);
     (this.hazeColor.value as THREE.Vector3).set(hr, hg, hb);
 
     const lamps = c.lamps.slice(0, MAX_LAMPS);
@@ -1911,6 +2032,8 @@ export class NodeMaterialRenderer implements Engine {
     this.lampLo.value = c.lampGate.lo;
     this.lampHi.value = c.lampGate.hi;
     this.plateZ.value = c.plate.z;
+    // The backdrop plane hangs off `plate.z` too, and a plate move does not force a resize.
+    if (this.backdrop) this.backdrop.position.z = c.plate.z - 14;
     (this.plateScale.value as THREE.Vector2).set(c.plate.scale.x, c.plate.scale.y);
     (this.plateOffset.value as THREE.Vector2).set(c.plate.offset.x, c.plate.offset.y);
     (this.clearGlass.value as THREE.Vector3).set(...rgb(c.clearGlass));
@@ -1960,21 +2083,53 @@ export class NodeMaterialRenderer implements Engine {
    * to run again after a resize replaces one. Node graphs are compiled per material, so rebuilding
    * is not free — but it happens on resize, not per frame.
    */
+  /**
+   * Gather counts for the post pass, from `quality` — the twin of the WebGL engine's
+   * `postDefines`.
+   *
+   * Unrolled in JavaScript rather than looped in the graph, so these are build-time numbers and a
+   * change has to rebuild the pass. `quality` is part of the structural test in `setConfig`, which
+   * is what makes that safe. They used to be hard-coded at 12 and 6 against the reference's 24 and
+   * 10, so every gather in the pass sampled a different set of points: worth about 1.0 of
+   * `skewer`'s difference through the caustic pool and another 0.9 through depth of field.
+   */
+  private postTaps(): { dofTaps: number; causticTaps: number } {
+    const q = this.config.quality;
+    return {
+      dofTaps: q >= 0.85 ? 24 : q >= 0.6 ? 16 : 10,
+      causticTaps: q >= 0.6 ? 10 : 6,
+    };
+  }
+
   private buildPasses(t: PassTargets): void {
     this.passes = {
       extract: passMaterial(bloomExtractPass(t.color.texture, this.bloomThreshold, texel(t.color))),
       down: BLOOM_DIVISORS.slice(1).map((_, i) =>
-        passMaterial(bloomDownPass(t.bloom[i].a.texture, texel(t.bloom[i].a))),
+        passMaterial(bloomDownPass(t.bloom[i].a.texture, texel(t.bloom[i].a), this.blitFlip)),
       ),
       blur: BLOOM_DIVISORS.map((_, i) => {
         const taps = BLOOM_TAPS[i];
         const sigma = TSL.float(taps / 3);
         return {
           h: passMaterial(
-            bloomBlurPass(t.bloom[i].a.texture, taps, sigma, TSL.vec2(1, 0), texel(t.bloom[i].a)),
+            bloomBlurPass(
+              t.bloom[i].a.texture,
+              taps,
+              sigma,
+              TSL.vec2(1, 0),
+              texel(t.bloom[i].a),
+              this.blitFlip,
+            ),
           ),
           v: passMaterial(
-            bloomBlurPass(t.bloom[i].b.texture, taps, sigma, TSL.vec2(0, 1), texel(t.bloom[i].a)),
+            bloomBlurPass(
+              t.bloom[i].b.texture,
+              taps,
+              sigma,
+              TSL.vec2(0, 1),
+              texel(t.bloom[i].a),
+              this.blitFlip,
+            ),
           ),
         };
       }),
@@ -1993,6 +2148,7 @@ export class NodeMaterialRenderer implements Engine {
             TSL.float(BLOOM_TAPS.at(-1)! / 3),
             TSL.vec2(1, 0),
             texel(t.bloom[3].a),
+            this.blitFlip,
           ),
         ),
         blurV: passMaterial(
@@ -2002,6 +2158,7 @@ export class NodeMaterialRenderer implements Engine {
             TSL.float(BLOOM_TAPS.at(-1)! / 3),
             TSL.vec2(0, 1),
             texel(t.bloom[3].a),
+            this.blitFlip,
           ),
         ),
       },
@@ -2011,6 +2168,7 @@ export class NodeMaterialRenderer implements Engine {
           t.bloom[1].a.texture,
           t.bloom[2].a.texture,
           this.bloomRadius,
+          this.blitFlip,
         ),
       ),
       post: passMaterial(
@@ -2023,14 +2181,15 @@ export class NodeMaterialRenderer implements Engine {
           focus: this.focus,
           range: this.range,
           aperture: this.aperture,
-          scale: TSL.float(1),
+          scale: this.postScale,
           far: FAR,
-          dofTaps: 12,
-          causticTaps: 6,
+          ...this.postTaps(),
           bloomAmount: this.bloomAmount,
           bloomMode: this.bloomMode,
           bloomRadius: this.bloomRadius,
           bloomThresh: this.bloomThreshold,
+          sourceInverted: this.blitFlip,
+          sceneMirror: this.sceneMirror,
           caustics: this.caustics,
           haze: this.haze,
           hazeTop: this.hazeTop,
@@ -2056,13 +2215,13 @@ export class NodeMaterialRenderer implements Engine {
    */
   private async renderBloom(t: PassTargets): Promise<void> {
     if (!this.passes) return;
-    await this.quad.blit(this.renderer, this.passes.extract, t.bloom[0].a);
+    this.quad.blit(this.renderer, this.passes.extract, t.bloom[0].a);
     for (let i = 0; i < BLOOM_DIVISORS.length; i++) {
-      if (i > 0) await this.quad.blit(this.renderer, this.passes.down[i - 1], t.bloom[i].a);
-      await this.quad.blit(this.renderer, this.passes.blur[i].h, t.bloom[i].b);
-      await this.quad.blit(this.renderer, this.passes.blur[i].v, t.bloom[i].a);
+      if (i > 0) this.quad.blit(this.renderer, this.passes.down[i - 1], t.bloom[i].a);
+      this.quad.blit(this.renderer, this.passes.blur[i].h, t.bloom[i].b);
+      this.quad.blit(this.renderer, this.passes.blur[i].v, t.bloom[i].a);
     }
-    await this.quad.blit(this.renderer, this.passes.composite, t.bloom[0].b);
+    this.quad.blit(this.renderer, this.passes.composite, t.bloom[0].b);
     if (this.config.dust && this.config.dust.count > 0) await this.renderParticleField(t);
   }
 
@@ -2077,9 +2236,9 @@ export class NodeMaterialRenderer implements Engine {
   private async renderParticleField(t: PassTargets): Promise<void> {
     if (!this.passes?.particle) return;
     const light = t.bloom[3];
-    await this.quad.blit(this.renderer, this.passes.particle.down, light.a);
-    await this.quad.blit(this.renderer, this.passes.particle.blurH, light.b);
-    await this.quad.blit(this.renderer, this.passes.particle.blurV, light.a);
+    this.quad.blit(this.renderer, this.passes.particle.down, light.a);
+    this.quad.blit(this.renderer, this.passes.particle.blurH, light.b);
+    this.quad.blit(this.renderer, this.passes.particle.blurV, light.a);
   }
 
   /**
@@ -2121,7 +2280,7 @@ export class NodeMaterialRenderer implements Engine {
       const previous = item.mesh.material;
       item.mesh.material = bg.material;
       this.backGlassScene.add(item.mesh);
-      await this.renderer.renderAsync(this.backGlassScene, this.camera);
+      this.renderer.render(this.backGlassScene, this.camera);
       this.backGlassScene.remove(item.mesh);
       item.mesh.material = previous;
       home?.add(item.mesh);
@@ -2544,17 +2703,104 @@ export class NodeMaterialRenderer implements Engine {
     return this;
   }
 
+  /**
+   * Drag to orbit, wheel to zoom — the twin of the WebGL engine's `bindOrbit`.
+   *
+   * This engine had `yaw`, `pitch` and `distance`, and `updateCamera` read all three, but NOTHING
+   * ever wrote them: the whole control block was missed in the port, so a scene with `orbit` on was
+   * simply inert here while the WebGL engine orbited and zoomed. It survived every comparison in
+   * this directory because they all drive the pointer, and none of them turns a wheel.
+   */
+  private bindOrbit(): void {
+    const canvas = this.canvas;
+    const { signal } = this.listeners;
+    let dragging = false;
+    let px = 0;
+    let py = 0;
+    canvas.addEventListener(
+      "pointerdown",
+      (e) => {
+        // SECONDARY button (right, or middle as the 3D-app convention). The primary belongs to
+        // whatever is layered on top — the studio marquee-selects with it, and a left-drag that
+        // orbited underneath a rubber band would make selection impossible.
+        if (!this.config.orbit || (e.button !== 2 && e.button !== 1)) return;
+        dragging = true;
+        px = e.clientX;
+        py = e.clientY;
+        canvas.setPointerCapture(e.pointerId);
+      },
+      { signal },
+    );
+    const end = (): void => {
+      dragging = false;
+    };
+    canvas.addEventListener("pointerup", end, { signal });
+    canvas.addEventListener("pointercancel", end, { signal });
+    canvas.addEventListener(
+      "pointermove",
+      (e) => {
+        if (!dragging || !this.config.orbit) return;
+        // Clamped hard: this is a hero composition, not a model viewer. Past these angles the lamp
+        // field slides out from behind the glass and the illusion goes with it.
+        this.targetYaw = THREE.MathUtils.clamp(
+          this.targetYaw + (e.clientX - px) * 0.002,
+          -0.42,
+          0.42,
+        );
+        this.targetPitch = THREE.MathUtils.clamp(
+          this.targetPitch - (e.clientY - py) * 0.0014,
+          -0.16,
+          0.26,
+        );
+        px = e.clientX;
+        py = e.clientY;
+        this.renderIfIdle();
+      },
+      { signal },
+    );
+    canvas.addEventListener(
+      "wheel",
+      (e) => {
+        if (!this.config.orbit) return;
+        e.preventDefault();
+        const base = this.config.camera.distance;
+        this.distance = THREE.MathUtils.clamp(
+          this.distance + e.deltaY * 0.03,
+          base * 0.6,
+          base * 1.6,
+        );
+        this.renderIfIdle();
+      },
+      // NOT passive: the handler calls `preventDefault` to stop the page scrolling under the
+      // gesture, and a passive listener is forbidden from doing that.
+      { signal, passive: false },
+    );
+  }
+
+  /** Redraw only when the loop is not already doing it. */
+  private renderIfIdle(): void {
+    if (!this.running && !this.capturing) this.renderOnce();
+  }
+
   /** Put the camera back where the scene asked for it. Snaps rather than eases — it is a reset. */
   resetCamera(): void {
     this.yaw = 0;
     this.pitch = 0;
+    this.targetYaw = 0;
+    this.targetPitch = 0;
     this.distance = this.config.camera.distance;
-    this.updateCamera();
+    this.updateCamera(false);
     this.renderOnce();
   }
 
-  private updateCamera(): void {
+  private updateCamera(ease = false): void {
     const cam = this.config.camera;
+    // Eased toward the drag target on animated frames, snapped everywhere else — the same split
+    // the WebGL engine makes, so a reset lands rather than easing toward a target the loop may not
+    // be running to advance.
+    const k = ease ? 0.07 : 1;
+    this.yaw += (this.targetYaw - this.yaw) * k;
+    this.pitch += (this.targetPitch - this.pitch) * k;
     // The zoom binding is a multiplier over the authored distance (2 = twice as close); the orbit
     // ones are degrees ADDED to the drag-orbit, so a scene can have both and they compose rather
     // than fight over the same variable.
@@ -2601,7 +2847,11 @@ export class NodeMaterialRenderer implements Engine {
     const h = this.outputSize?.height || this.container.clientHeight || 1;
     // An explicit output size is a request for EXACTLY that many pixels — a headless render must
     // not be silently doubled by the display's ratio.
-    const ratio = this.outputSize ? 1 : Math.min(globalThis.devicePixelRatio || 1, 2);
+    // `dprMax`, not a hard 2: the config's ceiling is the whole point of the setting, and the
+    // WebGL engine honours it.
+    const ratio = this.outputSize
+      ? 1
+      : Math.min(globalThis.devicePixelRatio || 1, this.config.dprMax);
     this.renderer.setPixelRatio(ratio);
     this.renderer.setSize(w, h, this.ownsCanvas);
     this.camera.aspect = w / h;
@@ -2631,16 +2881,30 @@ export class NodeMaterialRenderer implements Engine {
       Math.min(1, (visibleH * this.camera.aspect) / bw),
       Math.min(1, visibleH / bh),
     );
+    if (this.backdrop) {
+      this.backdrop.scale.set(bw, bh, 1);
+      this.backdrop.position.z = backdropZ;
+    }
 
-    const pw = Math.max(1, Math.floor(w * ratio));
-    const ph = Math.max(1, Math.floor(h * ratio));
-    (this.resolution.value as THREE.Vector2).set(pw, ph);
+    // The drawing buffer, then the SCENE resolution within it. `quality` below 1 renders the scene
+    // and post smaller and lets the blit to the screen upscale, exactly as the WebGL engine does —
+    // it used to be ignored here entirely, which made the setting a no-op on this engine and left
+    // the two renderers 2.06 apart at quality 0.5.
+    const pw = Math.max(1, Math.round(w * ratio));
+    const ph = Math.max(1, Math.round(h * ratio));
+    const rw = Math.max(1, Math.round(pw * this.config.quality));
+    const rh = Math.max(1, Math.round(ph * this.config.quality));
+    (this.resolution.value as THREE.Vector2).set(rw, rh);
+    (this.outputResolution.value as THREE.Vector2).set(pw, ph);
+    // Gather radii are authored in full-resolution pixels; scaling by `quality` keeps them the
+    // same fraction of the frame when the scene renders smaller than the canvas.
+    this.postScale.value = this.config.quality;
     const hdr = this.config.post.toneMap !== "none";
     if (!this.targets) {
-      this.targets = createTargets(pw, ph, hdr);
+      this.targets = createTargets(rw, rh, pw, ph, hdr);
       this.buildPasses(this.targets);
     } else {
-      resizeTargets(this.targets, pw, ph);
+      resizeTargets(this.targets, rw, rh, pw, ph);
       // The graphs hold texture references, and a resize replaces the underlying storage — for the
       // items too, which sample the plate.
       this.buildPasses(this.targets);
@@ -2655,7 +2919,7 @@ export class NodeMaterialRenderer implements Engine {
       // Before the targets exist there is nothing to compose, so draw straight to the screen
       // rather than skipping the frame entirely and showing whatever was there before.
       this.renderer.setRenderTarget(null);
-      await this.renderer.renderAsync(this.scene, this.camera);
+      this.renderer.render(this.scene, this.camera);
       return;
     }
     // The bindings write into live uniforms, so they run before anything reads them. Also seeds
@@ -2682,7 +2946,7 @@ export class NodeMaterialRenderer implements Engine {
     );
     this.applyInteraction();
     this.retraceBeamIfMoved();
-    this.updateCamera();
+    this.updateCamera(true);
     // The traced planes are world-space, so they follow the pose and have to be recomputed after it.
     for (const entry of this.items) this.applyPrismPlanes(entry);
     // The wall's contact shadows follow the poses too.
@@ -2727,7 +2991,7 @@ export class NodeMaterialRenderer implements Engine {
     this.scene.overrideMaterial = this.frontDepthMaterial;
     this.renderer.setClearColor(this.depthClear, 1);
     this.renderer.setRenderTarget(t.front);
-    await this.renderer.renderAsync(this.scene, this.camera);
+    this.renderer.render(this.scene, this.camera);
     this.scene.overrideMaterial = null;
     this.renderer.setClearColor(previousClear0, previousClearAlpha0);
     if (this.backdrop) this.backdrop.visible = backdropWasVisible0;
@@ -2753,7 +3017,7 @@ export class NodeMaterialRenderer implements Engine {
     const previousClearAlpha = this.renderer.getClearAlpha();
     this.renderer.setClearColor(0x000000, 1);
     this.renderer.setRenderTarget(t.back);
-    await this.renderer.renderAsync(this.scene, this.camera);
+    this.renderer.render(this.scene, this.camera);
     this.scene.overrideMaterial = null;
     this.renderer.setClearColor(previousClear, previousClearAlpha);
     if (this.backdrop) this.backdrop.visible = backdropWasVisible;
@@ -2765,7 +3029,7 @@ export class NodeMaterialRenderer implements Engine {
     this.passIndex.value = 0;
     this.bindPlate(false);
     this.renderer.setRenderTarget(t.plate);
-    await this.renderer.renderAsync(this.scene, this.camera);
+    this.renderer.render(this.scene, this.camera);
     if (this.beamMesh) this.beamMesh.visible = beamWasVisible;
     if (this.causticMesh) this.causticMesh.visible = beamWasVisible;
 
@@ -2777,7 +3041,7 @@ export class NodeMaterialRenderer implements Engine {
     this.passIndex.value = 1;
     this.bindPlate(true);
     this.renderer.setRenderTarget(t.color);
-    await this.renderer.renderAsync(this.scene, this.camera);
+    this.renderer.render(this.scene, this.camera);
 
     // 3. Bloom, between main and post so it sees the frame while it still has range to work with.
     await this.renderBloom(t);
@@ -2789,7 +3053,7 @@ export class NodeMaterialRenderer implements Engine {
       this.debugEnv ??= passMaterial(
         vec4(TSL.texture(this.envTexture(), uv()).level(TSL.float(level)).rgb, 1),
       );
-      await this.quad.blit(this.renderer, this.debugEnv, null);
+      this.quad.blit(this.renderer, this.debugEnv, null);
       return;
     }
     if (dump === "platealpha") {
@@ -2805,7 +3069,32 @@ export class NodeMaterialRenderer implements Engine {
           1,
         ),
       );
-      await this.quad.blit(this.renderer, this.debugAlpha, null);
+      this.quad.blit(this.renderer, this.debugAlpha, null);
+      return;
+    }
+    // The bloom pyramid, level by level — `bloom0`..`bloom3` are the blurred levels and `bloomC`
+    // the composite. Not cached: unlike `debugBlit` these differ per name.
+    if (dump === "coloralpha") {
+      this.quad.blit(
+        this.renderer,
+        passMaterial(
+          vec4(
+            TSL.vec3(TSL.texture(t.color.texture, TSL.vec2(uv().x, TSL.float(1).sub(uv().y))).a),
+            1,
+          ),
+        ),
+        null,
+      );
+      return;
+    }
+    const bloomLevel = dump && /^bloom[0-3]$/.test(dump) ? Number(dump.slice(5)) : -1;
+    if (bloomLevel >= 0 || dump === "bloomC") {
+      const src = bloomLevel >= 0 ? t.bloom[bloomLevel].a.texture : t.bloom[0].b.texture;
+      // Same flip as `debugColor` below, NOT `screenUV` like the plate/back/front dumps: these are
+      // pyramid levels of the colour target and have to land in the colour target's orientation.
+      // Dumped through `screenUV` they came back mirrored top-to-bottom, which reads as a large
+      // difference concentrated on whatever is off-centre — here, the beam.
+      this.quad.blit(this.renderer, passMaterial(vec4(TSL.texture(src, uv()).rgb, 1)), null);
       return;
     }
     if (dump === "plate" || dump === "back" || dump === "front" || dump?.startsWith("plate:")) {
@@ -2817,7 +3106,7 @@ export class NodeMaterialRenderer implements Engine {
       // against the WebGL engine's, which blits its targets unflipped. They used to flip so a
       // human saw the target upright, which made every comparison a mirror image.
       this.debugBlit ??= passMaterial(vec4(TSL.texture(src, TSL.screenUV).rgb, 1));
-      await this.quad.blit(this.renderer, this.debugBlit, null);
+      this.quad.blit(this.renderer, this.debugBlit, null);
       return;
     }
     // ANY OTHER PROBE IS A MATERIAL INTERMEDIATE, substituted into the main pass — so blit the
@@ -2838,7 +3127,7 @@ export class NodeMaterialRenderer implements Engine {
       this.debugColor ??= passMaterial(
         vec4(TSL.texture(t.color.texture, TSL.vec2(uv().x, TSL.float(1).sub(uv().y))).rgb, 1),
       );
-      await this.quad.blit(this.renderer, this.debugColor, null);
+      this.quad.blit(this.renderer, this.debugColor, null);
       return;
     }
 
@@ -2848,10 +3137,10 @@ export class NodeMaterialRenderer implements Engine {
     if (this.needsFinish()) {
       this.finishMaterial ??= this.buildFinishMaterial(t.finish.texture);
       if (this.finishSource) this.finishSource.value = t.finish.texture;
-      await this.quad.blit(this.renderer, this.passes.post, t.finish);
-      await this.quad.blit(this.renderer, this.finishMaterial, null);
+      this.quad.blit(this.renderer, this.passes.post, t.finish);
+      this.quad.blit(this.renderer, this.finishMaterial, null);
     } else {
-      await this.quad.blit(this.renderer, this.passes.post, null);
+      this.quad.blit(this.renderer, this.passes.post, null);
     }
 
     // 6. Dust — additively over the FINISHED frame, in display space.
@@ -2867,7 +3156,7 @@ export class NodeMaterialRenderer implements Engine {
       this.renderer.setRenderTarget(null);
       const wasAutoClear = this.renderer.autoClear;
       this.renderer.autoClear = false;
-      await this.renderer.renderAsync(this.dustScene, this.camera);
+      this.renderer.render(this.dustScene, this.camera);
       this.renderer.autoClear = wasAutoClear;
     }
     this.frameCallback?.(this.time);
@@ -3031,6 +3320,17 @@ export class NodeMaterialRenderer implements Engine {
 
   async captureImage(mime = "image/webp", quality?: number, time?: number): Promise<Blob> {
     if (time !== undefined) this.time = time;
+    // Strip the live interaction state, exactly as the WebGL engine does. `applyBindings` already
+    // writes the REST values while `capturing` — see `draw` — but the CAMERA is posed from these
+    // four, and leaving them live meant a capture was framed from wherever the last pointer had
+    // swung it. They are not zero at rest either: before any pointer arrives the sources read 0
+    // rather than their midpoint, so a scene binding `cameraYaw` captured from the binding's
+    // `from` end. This was found and fixed in the WebGL engine and never mirrored here, which is
+    // its own lesson about porting a fix to one of two engines.
+    this.interactionTime = 0;
+    this.interactionZoom = 1;
+    this.interactionSceneOut.orbitYaw = 0;
+    this.interactionSceneOut.orbitPitch = 0;
     // Waits rather than skipping: a capture has to reflect the time it was asked for, so returning
     // whatever frame happened to be in flight would hand back the previous one.
     await this.exclusive(() => undefined);
@@ -3050,6 +3350,8 @@ export class NodeMaterialRenderer implements Engine {
   }
 
   dispose(): void {
+    this.listeners.abort();
+    this.disposeMedia();
     this.stop();
     this.interaction?.dispose();
     this.interaction = undefined;

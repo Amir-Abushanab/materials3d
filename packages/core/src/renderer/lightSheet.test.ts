@@ -24,9 +24,13 @@ function presetBeam(): BeamOptions {
   const beam = ensureSceneConfig(PRESETS.prism()).beam;
   if (!beam) throw new Error("the prism preset must carry a beam");
   return {
-    polygon: crossSectionFor("prism", beam.radius, beam.sides, beam.rotation)!,
+    polygon: crossSectionFor(
+      { kind: "prism", r: beam.radius, sides: beam.sides },
+      beam.rotation,
+      0,
+    )!,
     ...aimBeamAtAngle(
-      crossSectionFor("prism", beam.radius, beam.sides, beam.rotation)!,
+      crossSectionFor({ kind: "prism", r: beam.radius, sides: beam.sides }, beam.rotation, 0)!,
       beam.entryAngle ?? 0,
       beam.incidence,
       beam.width,
@@ -294,26 +298,85 @@ describe("crossSectionFor", () => {
     // A lathe with 72 segments is a 72-gon optically as well as visually. Tracing some other
     // number puts the bend a fraction of a degree off the edge it is drawn on, and refracts a
     // deliberately faceted low-poly shape as if it were smooth.
-    expect(crossSectionFor("sphere", 1, 72, Math.PI / 2)!).toHaveLength(72);
-    expect(crossSectionFor("rod", 1, 16, Math.PI / 2)!).toHaveLength(16);
-    expect(crossSectionFor("prism", 1, 3, Math.PI / 2)!).toHaveLength(3);
+    expect(crossSectionFor({ kind: "sphere", r: 1, sides: 72 }, Math.PI / 2, 0)!).toHaveLength(72);
+    expect(crossSectionFor({ kind: "rod", r: 1, sides: 16 }, Math.PI / 2, 0)!).toHaveLength(16);
+    expect(crossSectionFor({ kind: "prism", r: 1, sides: 3 }, Math.PI / 2, 0)!).toHaveLength(3);
   });
 
   it("refuses the kinds whose slice is not a convex polygon", () => {
     // Returning a circle for these is not a rough approximation, it is a different solid — and the
     // tracer's clipping assumes convexity, so it would report crossings that are not there.
     for (const kind of ["ring", "slab", "arrow", "blob"]) {
-      expect(crossSectionFor(kind, 1, 72, Math.PI / 2)).toBeUndefined();
+      expect(crossSectionFor({ kind, r: 1, sides: 72 }, Math.PI / 2, 0)).toBeUndefined();
     }
   });
 
+  it("traces a convex drawn outline", () => {
+    // `path` is the one kind that answers "maybe": its outline is authored, so convexity is a
+    // property of the shape rather than of the kind.
+    const lozenge = crossSectionFor(
+      { kind: "path", r: 2, sides: 72, outline: "M0 0 H40 V20 H0 Z" },
+      0,
+      0,
+    );
+    expect(lozenge).toBeDefined();
+    expect(Math.max(...lozenge!.map((p) => p.x))).toBeCloseTo(2, 4);
+  });
+
+  it("traces a re-entrant drawn outline too", () => {
+    // Convexity used to be the gate. It is now only a choice of clipper — a star is a perfectly
+    // good solid and the tracer follows one.
+    const star =
+      "M50 0 L61.8 33.8 L97.6 34.5 L69 56.2 L79.4 90.5 L50 70 L20.6 90.5 L31 56.2 L2.4 34.5 L38.2 33.8 Z";
+    expect(crossSectionFor({ kind: "path", r: 2, sides: 72, outline: star }, 0, 0)).toBeDefined();
+  });
+
+  it("refuses a self-crossing drawn outline", () => {
+    // The one gate worth keeping: a figure-of-eight has no inside, so entering and leaving it has
+    // nothing to be right about.
+    const bowtie = "M0 0 L10 10 L10 0 L0 10 Z";
+    expect(
+      crossSectionFor({ kind: "path", r: 2, sides: 72, outline: bowtie }, 0, 0),
+    ).toBeUndefined();
+  });
+
+  it("has nothing to trace for a path with no outline", () => {
+    expect(crossSectionFor({ kind: "path", r: 2, sides: 72 }, 0, 0)).toBeUndefined();
+  });
+
+  it("spares a drawn outline the beam's own rotation, and applies the item's roll", () => {
+    // `beamRotation` reconciles the LATHE convention — a lathe's slice is generated here in XZ and
+    // the default rotation is what puts a vertex at the top. A path is drawn in XY already, so the
+    // same rotation would spin the outline away from where the mesh actually sits.
+    const shape = { kind: "path", r: 2, sides: 72, outline: "M0 0 H40 V20 H0 Z" };
+    const spun = crossSectionFor(shape, Math.PI / 2, 0)!;
+    const still = crossSectionFor(shape, 0, 0)!;
+    expect(spun.map((p) => [p.x, p.y])).toEqual(still.map((p) => [p.x, p.y]));
+    const rolled = crossSectionFor(shape, 0, Math.PI / 2)!;
+    expect(Math.max(...rolled.map((p) => p.y))).toBeCloseTo(2, 4);
+  });
+
+  it("puts a drawn outline where the item stands", () => {
+    const moved = crossSectionFor(
+      { kind: "path", r: 1, sides: 72, outline: "M0 0 H10 V10 H0 Z" },
+      0,
+      0,
+      { x: 5, y: -2 },
+    )!;
+    expect(Math.max(...moved.map((p) => p.x))).toBeCloseTo(6, 4);
+    expect(Math.min(...moved.map((p) => p.y))).toBeCloseTo(-3, 4);
+  });
+
   it("slices a cone at its half-height, not its base", () => {
-    const [first] = crossSectionFor("cone", 2, 72, 0)!;
+    const [first] = crossSectionFor({ kind: "cone", r: 2, sides: 72 }, 0, 0)!;
     expect(Math.hypot(first.x, first.y)).toBeCloseTo(1, 9);
   });
 
   it("puts the outline where the solid is", () => {
-    const moved = crossSectionFor("prism", 1, 3, Math.PI / 2, { x: 5, y: -2 })!;
+    const moved = crossSectionFor({ kind: "prism", r: 1, sides: 3 }, Math.PI / 2, 0, {
+      x: 5,
+      y: -2,
+    })!;
     expect(moved[0].x).toBeCloseTo(5, 9);
     expect(moved[0].y).toBeCloseTo(-1, 9);
     // Still regular about its own centre, which is what keeps the angular fast path available.
@@ -321,22 +384,22 @@ describe("crossSectionFor", () => {
   });
 
   it("ignores the field on a hex, whose builder does too", () => {
-    expect(crossSectionFor("hex", 1, 3, Math.PI / 2)).toHaveLength(6);
-    expect(crossSectionFor("hex", 1, 72, Math.PI / 2)!).toHaveLength(6);
+    expect(crossSectionFor({ kind: "hex", r: 1, sides: 3 }, Math.PI / 2, 0)).toHaveLength(6);
+    expect(crossSectionFor({ kind: "hex", r: 1, sides: 72 }, Math.PI / 2, 0)!).toHaveLength(6);
   });
 
   it("matches the lathe's own vertex angles", () => {
     // LatheGeometry sweeps from 0 and the item is rotated -90 about X, which puts a vertex at the
     // top in world XY. If these disagree the beam refracts through a solid that is rotated off
     // the visible one, and the error is a few degrees — visible, and hard to attribute.
-    const [apex] = crossSectionFor("prism", 4, 3, Math.PI / 2)!;
+    const [apex] = crossSectionFor({ kind: "prism", r: 4, sides: 3 }, Math.PI / 2, 0)!;
     expect(apex.x).toBeCloseTo(0, 9);
     expect(apex.y).toBeCloseTo(4, 9);
   });
 });
 
 describe("aimBeamAtAngle", () => {
-  const triangle = crossSectionFor("prism", 1, 3, Math.PI / 2)!;
+  const triangle = crossSectionFor({ kind: "prism", r: 1, sides: 3 }, Math.PI / 2, 0)!;
 
   it("hits the outline at the requested bearing", () => {
     // 30 degrees is the midpoint of the upper-right face on a triangle at this rotation.
@@ -357,7 +420,7 @@ describe("aimBeamAtAngle", () => {
   it("keeps the whole beam clear of a vertex", () => {
     // 90 degrees IS the apex. A beam striking a corner splits between two faces and the tracer
     // follows only one, so half of it would silently vanish.
-    const hexagon = crossSectionFor("hex", 1, 6, Math.PI / 2)!;
+    const hexagon = crossSectionFor({ kind: "hex", r: 1, sides: 6 }, Math.PI / 2, 0)!;
     const width = 0.08;
     const { origin, direction } = aimBeamAtAngle(hexagon, 90, 0, width, 5);
     const hit = origin.clone().addScaledVector(direction, 5);
@@ -368,7 +431,7 @@ describe("aimBeamAtAngle", () => {
   it("is continuous across a face boundary, unlike a face index", () => {
     // The point this parameterization exists for: sweeping the bearing walks the outline instead
     // of jumping when it crosses a vertex.
-    const circle = crossSectionFor("sphere", 1, 3, Math.PI / 2)!;
+    const circle = crossSectionFor({ kind: "sphere", r: 1, sides: 3 }, Math.PI / 2, 0)!;
     let previous: THREE.Vector2 | undefined;
     for (let a = 0; a <= 360; a += 3) {
       const { origin, direction } = aimBeamAtAngle(circle, a, 0, 0.001, 5);
@@ -385,7 +448,7 @@ describe("the angular fast path", () => {
     // falling back to the full scan when it does not. This pins BOTH halves — that the two paths
     // are indistinguishable, and that the fast one really fires, since a window that silently
     // never triggered would pass an agreement test trivially.
-    const smooth = crossSectionFor("sphere", 1, 72, Math.PI / 2)!;
+    const smooth = crossSectionFor({ kind: "sphere", r: 1, sides: 72 }, Math.PI / 2, 0)!;
     const fastOutline = preparePolygon(smooth);
     const scanOutline = preparePolygon(smooth, false);
     expect(fastOutline.regular).toBe(true);
@@ -425,13 +488,10 @@ function cascadeSolids() {
   const named = (name: string) => scene.items.find((i) => i.name === name)!;
   return (beam.targets ?? []).map((name) => {
     const item = named(name);
-    const polygon = crossSectionFor(
-      item.shape.kind,
-      item.shape.r,
-      item.shape.sides,
-      beam.rotation + item.rotation.z,
-      { x: item.position.x, y: item.position.y },
-    )!;
+    const polygon = crossSectionFor(item.shape, beam.rotation, item.rotation.z, {
+      x: item.position.x,
+      y: item.position.y,
+    })!;
     return { outline: preparePolygon(polygon), ior: item.material.ior ?? 1.5 };
   });
 }
@@ -504,5 +564,110 @@ describe("the cascade preset's route", () => {
     // Adjacent wavelengths only join into a quad when their topologies match, so a route that
     // splinters draws unconnected streaks instead of a spectrum.
     expect(routes.size).toBeLessThanOrEqual(2);
+  });
+});
+
+/**
+ * Tracing a re-entrant solid.
+ *
+ * The clipper the tracer has always used is Cyrus-Beck, which treats each edge as a HALF-PLANE and
+ * is therefore convex-only: on a notched outline it reports crossings on the far side of the notch
+ * that the ray never makes. These cover the general scan that replaces it for such shapes, and the
+ * property that matters most — that the two agree wherever both are valid.
+ */
+/** One traced solid from a bare outline. */
+function solid(points: THREE.Vector2[], ior = 1.5): Solid {
+  return { outline: preparePolygon(points), ior };
+}
+
+describe("re-entrant cross-sections", () => {
+  /** A "C" opening to the right. A ray sent UP its open side crosses glass, air, glass. */
+  const C_SHAPE = [
+    [-3, -3],
+    [3, -3],
+    [3, -2],
+    [-1, -2],
+    [-1, 2],
+    [3, 2],
+    [3, 3],
+    [-3, 3],
+  ].map(([x, y]) => new THREE.Vector2(x, y));
+
+  it("knows which clipper an outline needs", () => {
+    expect(preparePolygon(prismCrossSection(1, 6, 0)).convex).toBe(true);
+    expect(preparePolygon(C_SHAPE).convex).toBe(false);
+  });
+
+  it("crosses the same solid twice when the ray passes through its notch", () => {
+    // Straight up x = 1, which is inside the notch: the ray enters the lower arm, leaves it into
+    // the gap, then enters the upper arm. Cyrus-Beck cannot express this — the notch is not a
+    // half-plane of the outline, so the far arm is invisible to it.
+    const path = traceSolids([solid(C_SHAPE)], new THREE.Vector2(1, -10), new THREE.Vector2(0, 1));
+    expect(path).toBeDefined();
+    // Entry, exit, entry, exit — four surface points, all on ONE solid.
+    expect(path!.points.length).toBeGreaterThanOrEqual(4);
+    expect(path!.solids.every((i) => i === 0)).toBe(true);
+  });
+
+  it("puts the notch where the geometry says it is", () => {
+    // At an index of ~1 the ray barely bends, so the crossings land on the real walls: the lower
+    // arm spans y = -3 to -2, the gap runs to y = 2, and the upper arm ends at y = 3.
+    const path = traceSolids(
+      [solid(C_SHAPE, 1.0001)],
+      new THREE.Vector2(1, -10),
+      new THREE.Vector2(0, 1),
+    )!;
+    const ys = path.points.map((p) => p.y);
+    expect(ys).toHaveLength(4);
+    expect(ys[0]).toBeCloseTo(-3, 2);
+    expect(ys[1]).toBeCloseTo(-2, 2);
+    expect(ys[2]).toBeCloseTo(2, 2);
+    expect(ys[3]).toBeCloseTo(3, 2);
+  });
+
+  it("crosses once where the notch is not in the way", () => {
+    // Same solid, same direction, but up its solid back — one entry and one exit.
+    const path = traceSolids(
+      [solid(C_SHAPE, 1.0001)],
+      new THREE.Vector2(-2, -10),
+      new THREE.Vector2(0, 1),
+    )!;
+    expect(path.points).toHaveLength(2);
+    expect(path.points[0].y).toBeCloseTo(-3, 2);
+    expect(path.points[1].y).toBeCloseTo(3, 2);
+  });
+
+  it("misses a solid the ray only passes beside", () => {
+    expect(
+      traceSolids([solid(C_SHAPE)], new THREE.Vector2(-10, 9), new THREE.Vector2(1, 0)),
+    ).toBeUndefined();
+  });
+
+  it("agrees with Cyrus-Beck wherever both are valid", () => {
+    // The strongest check available: a convex outline traced normally, against the same outline
+    // with one collinear point nudged into a shallow reflex vertex so it takes the general scan.
+    // The shapes differ by a thousandth of a unit; the traced path must not.
+    const square = [
+      new THREE.Vector2(-2, -2),
+      new THREE.Vector2(0, -2),
+      new THREE.Vector2(2, -2),
+      new THREE.Vector2(2, 2),
+      new THREE.Vector2(-2, 2),
+    ];
+    const dented = square.map((p, i) => (i === 1 ? new THREE.Vector2(0, -1.999) : p.clone()));
+    expect(preparePolygon(square).convex).toBe(true);
+    expect(preparePolygon(dented).convex).toBe(false);
+
+    const origin = new THREE.Vector2(-8, -0.7);
+    const direction = new THREE.Vector2(1, 0.14).normalize();
+    const viaHalfPlanes = traceSolids([solid(square)], origin, direction)!;
+    const viaScan = traceSolids([solid(dented)], origin, direction)!;
+    expect(viaScan.points).toHaveLength(viaHalfPlanes.points.length);
+    for (const [i, point] of viaHalfPlanes.points.entries()) {
+      expect(viaScan.points[i].x).toBeCloseTo(point.x, 2);
+      expect(viaScan.points[i].y).toBeCloseTo(point.y, 2);
+    }
+    expect(viaScan.direction.x).toBeCloseTo(viaHalfPlanes.direction.x, 3);
+    expect(viaScan.direction.y).toBeCloseTo(viaHalfPlanes.direction.y, 3);
   });
 });

@@ -36,6 +36,7 @@ import {
   MAX_MESH_POINTS,
   MAX_STOPS,
   MOTION_KINDS,
+  DEFAULT_OUTLINE,
   SHAPE_KINDS,
   defaultSides,
   type SceneConfig,
@@ -637,6 +638,7 @@ export class ControlPanel {
 
   dispose(): void {
     hideControlHint(); // an open tooltip is anchored to DOM about to vanish
+    this.flushTyping();
     this.pane.dispose();
   }
 
@@ -646,6 +648,7 @@ export class ControlPanel {
 
   private rebuild(): void {
     hideControlHint();
+    this.flushTyping();
     const view = this.captureView();
     this.itemFolders.clear();
     this.pane.dispose();
@@ -773,11 +776,92 @@ export class ControlPanel {
     return binding;
   }
 
+  /**
+   * Rebuild the panel when a kind change crosses into or out of `path`.
+   *
+   * `outline` is the one shape field that exists on a single kind, because it is the one that
+   * cannot be a number — every other control here is meaningful enough on every kind to just show
+   * it and let the builder ignore it, but a `d` string on a rod is noise. That makes the CONTROL
+   * SET depend on the kind, which a renderer rebuild alone does not notice: the scene would
+   * repaint as a star while the panel still offered no way to change it.
+   *
+   * Seeding the outline on the way in is the same move {@link retargetsSides} makes for `sides` —
+   * a field the new kind reads has to hold something before the panel binds to it.
+   */
+  private retargetsOutline<T extends { on: (event: "change", cb: () => void) => unknown }>(
+    binding: T,
+    shape: ShapeConfig,
+  ): T {
+    let wasPath = shape.kind === "path";
+    binding.on("change", () => {
+      if (this.syncing || (shape.kind === "path") === wasPath) return;
+      wasPath = shape.kind === "path";
+      if (wasPath) shape.outline ??= DEFAULT_OUTLINE;
+      this.rebuild();
+    });
+    return binding;
+  }
+
+  /**
+   * The outline field, on the one kind that reads it. See {@link retargetsOutline}.
+   *
+   * Seeded before binding rather than assumed present: Tweakpane picks its widget from the VALUE
+   * and throws on `undefined`, and `outline` is absent on every kind but `path`. The guard sits on
+   * the binding's own line because the bindings audit reads these call sites out of the source and
+   * skips the ones an inline `if` shows to be conditional — this is the same
+   * conditionally-shown optional as `material.path` and `material.tint`.
+   */
+  private addOutline(f: FolderApi, shape: ShapeConfig): void {
+    if (shape.kind !== "path") return;
+    shape.outline ??= DEFAULT_OUTLINE;
+    const label = { label: "outline (svg d)" };
+    if (shape.outline) this.typedStructural(f.addBinding(shape, "outline", label));
+  }
+
   private structural<T extends { on: (event: "change", cb: () => void) => unknown }>(
     binding: T,
   ): T {
     binding.on("change", () => this.hooks.onChange(true));
     return binding;
+  }
+
+  /** Pending {@link typedStructural} timer, so a disposed panel cannot fire one. */
+  private typingTimer: ReturnType<typeof setTimeout> | undefined;
+
+  /**
+   * A structural binding whose changes are coalesced while the user is still typing.
+   *
+   * A structural change rebuilds every shape's geometry, and for a text field that fires once per
+   * KEYSTROKE. Most fields here are sliders and steppers where that is exactly right — the scene
+   * tracking a drag is the point. Path outlines are the exception: they are typed or pasted, and
+   * re-extruding a few thousand contour points per character is tens of milliseconds of jank each
+   * time, for frames nobody looks at because the `d` is half-written.
+   *
+   * The delay is short enough to read as instant on a paste (one change event, one rebuild) and
+   * long enough to swallow a burst of typing. History is untouched by this: `onChange` still marks
+   * the edit dirty, just once at the end of the burst rather than once per character.
+   */
+  private typedStructural<T extends { on: (event: "change", cb: () => void) => unknown }>(
+    binding: T,
+    delay = 200,
+  ): T {
+    binding.on("change", () => {
+      clearTimeout(this.typingTimer);
+      this.typingTimer = setTimeout(() => {
+        this.typingTimer = undefined;
+        this.hooks.onChange(true);
+      }, delay);
+    });
+    return binding;
+  }
+
+  /** Land a pending typed edit NOW. Called before the panel goes away, so the last keystrokes of
+   *  an outline are not lost to a rebuild or a dispose that beat the timer. */
+  private flushTyping(): void {
+    if (this.typingTimer === undefined) return;
+    clearTimeout(this.typingTimer);
+    this.typingTimer = undefined;
+    this.hooks.onChange(true);
   }
 
   private addScene(pane: Pane): void {
@@ -1362,13 +1446,17 @@ export class ControlPanel {
       );
       this.structural(f.addBinding(scatter, "seed", { min: 0, max: 9999, step: 1 }));
       this.structural(
-        this.retargetsSides(
-          f.addBinding(scatter.shape, "kind", {
-            options: Object.fromEntries(SHAPE_KINDS.map((k) => [k, k])),
-          }),
+        this.retargetsOutline(
+          this.retargetsSides(
+            f.addBinding(scatter.shape, "kind", {
+              options: Object.fromEntries(SHAPE_KINDS.map((k) => [k, k])),
+            }),
+            scatter.shape,
+          ),
           scatter.shape,
         ),
       );
+      this.addOutline(f, scatter.shape);
       this.structural(
         f.addBinding(scatter.shape, "r", { label: "radius", min: 0.05, max: 6, step: 0.01 }),
       );
@@ -1691,13 +1779,17 @@ export class ControlPanel {
 
   private addItem(f: FolderApi, item: ItemConfig): void {
     this.structural(
-      this.retargetsSides(
-        f.addBinding(item.shape, "kind", {
-          options: Object.fromEntries(SHAPE_KINDS.map((k) => [k, k])),
-        }),
+      this.retargetsOutline(
+        this.retargetsSides(
+          f.addBinding(item.shape, "kind", {
+            options: Object.fromEntries(SHAPE_KINDS.map((k) => [k, k])),
+          }),
+          item.shape,
+        ),
         item.shape,
       ),
     );
+    this.addOutline(f, item.shape);
     this.structural(
       f.addBinding(item.shape, "r", { label: "radius", min: 0.02, max: 8, step: 0.01 }),
     );

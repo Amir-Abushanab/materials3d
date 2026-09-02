@@ -99,14 +99,35 @@ export const bloomExtractPass = (src: Texture, threshold: Vec, texel: Vec) =>
     return vec4(c.mul(b.sub(t).max(soft).div(b.max(0.0001))), 1);
   })();
 
+/**
+ * The uv to read a source with, given whether a PREVIOUS BLIT wrote it.
+ *
+ * Every blit into a render target on this backend stores its rows inverted relative to the uv it
+ * was drawn with, so a pass that reads another pass's output sees it upside down. One blit hides
+ * this — two undo each other — but the bloom pyramid is a CHAIN, and the orientation therefore
+ * alternated level by level: 0 inverted, 1 upright, 2 inverted. The composite then summed levels
+ * that disagreed, so every halo arrived with a mirror image of itself across the frame's middle.
+ * On `prism` that was most of the remaining difference from the WebGL engine.
+ *
+ * A UNIFORM rather than a baked-in flip, and that is the whole point: the parity harness feeds
+ * these passes plain textures, where no inversion exists, and hard-coding one would make that
+ * comparison a lie about a pass that is otherwise a faithful twin of its GLSL original. The
+ * renderer passes 1; the harness passes 0.
+ *
+ * Not for the scene targets, which are not stored this way — which is why `bloomExtractPass` reads
+ * the colour target at a plain `uv()`.
+ */
+export const blitUv = (flip: Vec): Vec => vec2(uv().x, TSL.mix(uv().y, float(1).sub(uv().y), flip));
+
 /** Halve the resolution with a 4-tap box, which is the only correct way down a pyramid. */
-export const bloomDownPass = (src: Texture, texel: Vec) =>
+export const bloomDownPass = (src: Texture, texel: Vec, flip: Vec) =>
   Fn(() => {
     const o = texel.mul(0.5);
-    const c = texture(src, uv().add(vec2(o.x.negate(), o.y.negate())))
-      .add(texture(src, uv().add(vec2(o.x, o.y.negate()))))
-      .add(texture(src, uv().add(vec2(o.x.negate(), o.y))))
-      .add(texture(src, uv().add(vec2(o.x, o.y))));
+    const p = blitUv(flip).toVar();
+    const c = texture(src, p.add(vec2(o.x.negate(), o.y.negate())))
+      .add(texture(src, p.add(vec2(o.x, o.y.negate()))))
+      .add(texture(src, p.add(vec2(o.x.negate(), o.y))))
+      .add(texture(src, p.add(vec2(o.x, o.y))));
     return vec4(max(c.mul(0.25).rgb, vec3(0)), 1);
   })();
 
@@ -122,10 +143,18 @@ export const bloomDownPass = (src: Texture, texel: Vec) =>
  * centre. A nearest-filtered source would silently snap every pair to one of its two taps and
  * narrow the kernel with no other sign.
  */
-export const bloomBlurPass = (src: Texture, taps: number, sigma: Vec, dir: Vec, texel: Vec) =>
+export const bloomBlurPass = (
+  src: Texture,
+  taps: number,
+  sigma: Vec,
+  dir: Vec,
+  texel: Vec,
+  flip: Vec,
+) =>
   Fn(() => {
+    const p = blitUv(flip).toVar();
     const total = float(1).toVar();
-    const acc = texture(src, uv()).rgb.toVar();
+    const acc = texture(src, p).rgb.toVar();
     for (let i = 1; i < taps; i += 2) {
       const a = float(i);
       const b = float(i + 1);
@@ -135,8 +164,8 @@ export const bloomBlurPass = (src: Texture, taps: number, sigma: Vec, dir: Vec, 
       const w = wa.add(wb);
       const off = dir.mul(texel).mul(a.mul(wa).add(b.mul(wb)).div(w));
       acc.addAssign(
-        texture(src, uv().add(off))
-          .rgb.add(texture(src, uv().sub(off)).rgb)
+        texture(src, p.add(off))
+          .rgb.add(texture(src, p.sub(off)).rgb)
           .mul(w),
       );
       total.addAssign(w.mul(2));
@@ -150,16 +179,17 @@ export const bloomBlurPass = (src: Texture, taps: number, sigma: Vec, dir: Vec, 
  * Radius moves weight from the near scale to the far one WITHOUT widening any kernel, so the halo
  * grows continuously instead of stepping as taps are added.
  */
-export const bloomCompositePass = (l0: Texture, l1: Texture, l2: Texture, radius: Vec) =>
+export const bloomCompositePass = (l0: Texture, l1: Texture, l2: Texture, radius: Vec, flip: Vec) =>
   Fn(() => {
     const r = radius.clamp(0, 1);
     const w0 = mix(float(1), float(0.55), r);
     const w1 = float(0.8);
     const w2 = mix(float(0.55), float(1), r);
-    const c = texture(l0, uv())
+    const p = blitUv(flip).toVar();
+    const c = texture(l0, p)
       .rgb.mul(w0)
-      .add(texture(l1, uv()).rgb.mul(w1))
-      .add(texture(l2, uv()).rgb.mul(w2));
+      .add(texture(l1, p).rgb.mul(w1))
+      .add(texture(l2, p).rgb.mul(w2));
     return vec4(max(c.div(w0.add(w1).add(w2).max(0.0001)), vec3(0)), 1);
   })();
 

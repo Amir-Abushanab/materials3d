@@ -5,6 +5,7 @@
  */
 
 import { clamp, clamp01 } from "../util/math";
+import { capPathData, extractPathData } from "../util/svg";
 
 /** Fixed-size lamp uniform array. Twelve is what fits comfortably in a uniform block; the loop
  *  breaks at `lamps.length`, so unused slots cost nothing at runtime. */
@@ -700,6 +701,9 @@ export interface MaterialConfig {
  * discs, cones, spheres, rings and droplets; change the *segment count* for prisms, since a
  * hexagon is just a lathe with `sides: 6`. `arrow` (a swept 2D path) and `blob` (a sphere with
  * seeded low-frequency lumps baked into its vertices) are the exceptions.
+ *
+ * `path` is the escape hatch: an arbitrary outline given as SVG path data and extruded, for the
+ * silhouettes none of the above can reach. See {@link ShapeConfig.outline}.
  */
 export type ShapeKind =
   | "rod"
@@ -712,7 +716,8 @@ export type ShapeKind =
   | "arrow"
   | "droplet"
   | "blob"
-  | "slab";
+  | "slab"
+  | "path";
 
 export const SHAPE_KINDS: readonly ShapeKind[] = [
   "rod",
@@ -726,6 +731,7 @@ export const SHAPE_KINDS: readonly ShapeKind[] = [
   "droplet",
   "blob",
   "slab",
+  "path",
 ];
 
 /**
@@ -762,6 +768,27 @@ export interface CutConfig {
 /** Enough to slot a plate several ways over; past this the shape is a grille, not a carve-out. */
 export const MAX_CUTS = 8;
 
+/**
+ * Longest `d` a {@link ShapeConfig.outline} may carry.
+ *
+ * A cap rather than trust, because this string is the one field in the whole model whose size is
+ * unbounded by its meaning: a scene travels as base64 in a URL hash, and one traced photograph
+ * pasted in would take the share link past what a browser will follow. Four thousand characters
+ * is a few hundred curve commands — far more detail than survives being extruded and rendered at
+ * the size these shapes appear.
+ */
+export const MAX_OUTLINE = 4000;
+
+/**
+ * What a `path` shape draws before anything has been authored into it.
+ *
+ * A five-pointed star: recognizably arbitrary — no other kind here can make one — and non-convex,
+ * so the triangulator and the bevel clamp are both exercised by the default rather than only by
+ * whatever a user happens to paste in first.
+ */
+export const DEFAULT_OUTLINE =
+  "M50 0 L61.8 33.8 L97.6 34.5 L69 56.2 L79.4 90.5 L50 70 L20.6 90.5 L31 56.2 L2.4 34.5 L38.2 33.8 Z";
+
 export function createCut(kind: CutKind = "rect"): CutConfig {
   return { kind, x: 0, y: 0, w: 0.6, h: 2.4, r: 0.3, rotation: 0 };
 }
@@ -777,8 +804,15 @@ export interface ShapeConfig {
   len: number;
   /** Thickness (disc, ring) — and the HEIGHT of a slab. */
   thickness: number;
-  /** Corner fillet. Flat ends with a small fillet, not hemispheres: the fillet catches the rim
-   *  highlight and the flat face reads as an ellipse when tilted, which a capsule loses. */
+  /**
+   * Corner fillet. Flat ends with a small fillet, not hemispheres: the fillet catches the rim
+   * highlight and the flat face reads as an ellipse when tilted, which a capsule loses.
+   *
+   * Positive is a literal radius in world units and `0` asks for a proportional one. A NEGATIVE
+   * value means no fillet at all, and only `path` honours it — see the note in `normalizeShape`
+   * for why a lathe cannot. It is there because a drawn silhouette is the one shape here whose
+   * fine detail a bevel can visibly fatten.
+   */
   fillet: number;
   /**
    * Radius of a fillet on ALL of a prism's edges, in world units. 0 keeps the lathe.
@@ -804,6 +838,34 @@ export interface ShapeConfig {
   seed: number;
   /** Lumpiness, 0–1 (blob): how far the surface departs from the underlying sphere. */
   bump: number;
+  /**
+   * The silhouette of a `path` shape, as SVG path data — the `d` attribute of a `<path>`.
+   *
+   * This is the one shape that is not described by numbers, because the shapes it is for cannot
+   * be: a pair of spectacles has no radius. `d` is chosen over a point list for three reasons that
+   * all point the same way — it is what a vector tool puts on the clipboard, it carries curves
+   * without the author pre-tessellating them, and it is several times more compact, which matters
+   * because a scene travels as base64 JSON in a share link.
+   *
+   * Accepts a whole `<svg>` document or fragment as well as a bare `d`: every `<path>` in it is
+   * read, in document order, which lands on the outline-then-holes rule below because that is the
+   * order a vector tool writes a shape and its counters. Nothing but `<path>` is read, and
+   * `transform` attributes are ignored — a translate or scale is absorbed by the refit, a rotate
+   * is not.
+   *
+   * Read in SVG's own conventions and then normalized, which is what makes a pasted path simply
+   * work: Y points DOWN in the source and is flipped, and the outline is scaled about its own
+   * bounding-box centre until its larger half-extent is {@link r}. So a path authored in a
+   * 0–1000 viewBox and one authored in a unit square render at the same size, and `r` is the
+   * handle that resizes either.
+   *
+   * The FIRST subpath is the outline; every later one is a hole. {@link cuts} still apply on top,
+   * and are the better tool for a round or slotted opening since they are numeric and animatable.
+   *
+   * ABSENT ⇒ {@link DEFAULT_OUTLINE}, so a shape switched to `path` in the studio has something
+   * to show before anything has been typed into it.
+   */
+  outline?: string;
   /**
    * Through-cuts in the profile plane. ABSENT ⇒ solid (the common case), which is also why this
    * is optional rather than an empty array: every scene ever exported stays byte-identical.
@@ -1301,6 +1363,8 @@ export function defaultSides(kind: ShapeKind): number {
 export function createShape(kind: ShapeKind = "rod"): ShapeConfig {
   return {
     kind,
+    // Only on the kind that reads it: an outline on a rod would be dead weight in every export.
+    ...(kind === "path" ? { outline: DEFAULT_OUTLINE } : {}),
     r: 0.4,
     len: 8,
     thickness: 0.5,
@@ -1526,8 +1590,13 @@ export function normalizeShape(shape: ShapeInput | undefined): ShapeConfig {
     r: Math.max(0.001, num(shape?.r, base.r)),
     len: Math.max(0.001, num(shape?.len, base.len)),
     thickness: Math.max(0.001, num(shape?.thickness, base.thickness)),
-    // 0 fillet means "pick a proportional one" — see resolveFillet in the shape builders.
-    fillet: Math.max(0, num(shape?.fillet, base.fillet)),
+    // Three states, not two. Positive is a literal radius; `0` means "pick a proportional one"
+    // (see resolveFillet); NEGATIVE means none at all, which only `path` can honour — every other
+    // kind reads a negative exactly as it reads 0, because `resolveFillet` tests `> 0`. That
+    // asymmetry is deliberate: a lathe with no fillet collapses its corner arc onto a single point
+    // and hands the mesh a fan of degenerate triangles, the defect `cone` goes out of its way to
+    // avoid. An extrusion just turns the bevel off.
+    fillet: num(shape?.fillet, base.fillet),
     bevel: Math.max(0, num(shape?.bevel, base.bevel)),
     sides: Math.round(clamp(num(shape?.sides, base.sides), 3, 256)),
     hole: Math.max(0, num(shape?.hole, base.hole)),
@@ -1539,6 +1608,17 @@ export function normalizeShape(shape: ShapeInput | undefined): ShapeConfig {
   };
   // A ring whose hole swallows its outer radius produces degenerate (inside-out) geometry.
   if (out.kind === "ring") out.hole = Math.min(out.hole, out.r * 0.98);
+  // The outline is kept whatever the kind, not just on `path`. The studio edits one shape object
+  // and lets the kind decide what it reads, so dropping it on a switch away would silently
+  // destroy the only field here a user has to type by hand rather than drag.
+  // Markup first, cap second. A pasted `.svg` document is far longer than the cap, so capping the
+  // raw string would truncate the markup and leave the extractor nothing to find.
+  const outline =
+    typeof shape?.outline === "string"
+      ? capPathData(extractPathData(shape.outline), MAX_OUTLINE)
+      : "";
+  if (outline) out.outline = outline;
+  else if (out.kind === "path") out.outline = DEFAULT_OUTLINE;
   const cuts = normalizeCuts(shape?.cuts);
   if (cuts.length > 0) out.cuts = cuts;
   return out;

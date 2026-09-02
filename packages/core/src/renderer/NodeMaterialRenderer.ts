@@ -160,6 +160,7 @@ const bindingUniforms = (
   uDisp: u.dispersion,
   uLens: u.lens,
   uBend: u.bend,
+  uMagnify: u.magnify,
   uRim: u.rim,
   uSpec: u.spec,
   uSat: u.saturation,
@@ -1124,6 +1125,7 @@ export class NodeMaterialRenderer implements Engine {
       density: uniform(m.density),
       lens: uniform(m.lens),
       bend: uniform(m.bend),
+      magnify: uniform(m.magnify),
       dispersion: uniform(m.dispersion),
       emission: uniform(m.emission),
       saturation: uniform(m.saturation),
@@ -1395,11 +1397,21 @@ export class NodeMaterialRenderer implements Engine {
       // over clear glass, and the ordinary plate blends on top with its weight scaled down by the
       // bend. Nested the other way the un-bent branch is what the bent sample blends INTO, and the
       // engines part company at bend 1 — 12.3/255 whole-frame against 0.1 for this order.
-      const base = blend(
+      const plateBase = blend(
         blend(this.clearGlass, sampled, weight.mul(TSL.float(1).sub(u.bend))),
         plain,
         this.passIndex.mul(0.94).mul(u.bend),
       );
+      // MAGNIFY: stop displacing a screen-space sample and look THROUGH the glass instead.
+      //
+      // Everything above moves a sample around the frame, so the furthest it can travel is bounded
+      // by the shape's own size on screen — which is why `bend` fixes a flat middle and still does
+      // not magnify. A lens magnifies because the ray keeps going: refract at the surface, follow
+      // it to the plate, and the further back the plate hangs the more of it a given deviation
+      // sweeps across. `plate()` is the same cast the REFLECTION uses below, pointed along the
+      // refracted direction instead of the mirrored one, which is why this costs the reflective
+      // character nothing.
+      const base = blend(plateBase, plate(inside).rgb, u.magnify);
 
       // Beer-Lambert, over a MEASURED path where the scene asks for one.
       //

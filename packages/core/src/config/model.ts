@@ -636,6 +636,21 @@ export interface MaterialConfig {
    * 0 is every scene authored before this existed, and stays exactly as it was.
    */
   bend: number;
+  /**
+   * How much of the body is a MAGNIFIED view of the plate behind it.
+   *
+   * `bend` fixes a convex solid's flat middle but cannot magnify: it moves a sample around the
+   * FRAME, so the furthest it can travel is bounded by the shape's own size on screen. A lens
+   * magnifies because the ray keeps going — refract at the surface, follow it to the plate, and
+   * the further back the plate hangs the more of it a given deviation sweeps across.
+   *
+   * Reads the analytic lamp field rather than the rendered plate, so it sees no other glass and
+   * cannot sample itself. Reflections are untouched: this only writes what the glass TRANSMITS,
+   * and rim, specular and the environment are computed from their own terms.
+   *
+   * 0 is every scene authored before it existed.
+   */
+  magnify: number;
   lens: number;
   /**
    * Rim highlight strength — the bright edge that sells "glass" at the silhouette.
@@ -1406,6 +1421,7 @@ export function createMaterial(): MaterialConfig {
     dispersion: 0.03,
     lens: 0.055,
     bend: 0,
+    magnify: 0,
     rim: 0.45,
     // 0.35, not the 0.95 this shipped with. The highlight term was widened (a softer lobe, plus a
     // fill key that flat and cylindrical shapes can actually reach), so a unit of `specular` now
@@ -1706,6 +1722,7 @@ export function resolveMaterial(material: Partial<MaterialConfig> | undefined): 
     dispersion: clamp(num(material?.dispersion, base.dispersion), 0, 0.4),
     lens: Math.max(0, num(material?.lens, base.lens)),
     bend: clamp01(num(material?.bend, base.bend)),
+    magnify: clamp01(num(material?.magnify, base.magnify)),
     rim: clamp01(num(material?.rim, base.rim)),
     specular: Math.max(0, num(material?.specular, base.specular)),
     saturation: Math.max(0, num(material?.saturation, base.saturation)),

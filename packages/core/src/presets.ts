@@ -1538,7 +1538,11 @@ function orb(): SceneConfig {
     lampGain: 1.9,
     lampGate: { lo: 0.01, hi: 0.99 },
     backdropLamps: 0.1,
-    plate: { z: -5, scale: { x: 13, y: 9 }, offset: { x: 0.5, y: 0.5 } },
+    // Pushed well back, and with `magnify` on that is what sets the magnification: the refracted
+    // ray sweeps more of the plate the further away it is, so the lamps arrive as distinct lobes
+    // rather than one wash. `bend` alone is indifferent to this — it moves a sample around the
+    // frame, so the plate's distance never enters into it.
+    plate: { z: -14, scale: { x: 13, y: 9 }, offset: { x: 0.5, y: 0.5 } },
     camera: { ...base.camera, fov: 15, distance: 21, lookAt: { x: 0, y: 0, z: 0 }, height: 0 },
     measuredThickness: true,
     transmission: "cone",
@@ -1574,6 +1578,10 @@ function orb(): SceneConfig {
           dispersion: 0.16,
           lens: 0.75,
           bend: 1,
+          // Looking THROUGH the glass rather than displacing a sample of the frame — the ball-lens
+          // half of the pair. Just short of 1 so the bent plate still shows through a little and
+          // the body keeps some of the frame's own colour behind the lamps.
+          magnify: 0.85,
           rim: 1.15,
           specular: 1,
           saturation: 1.35,

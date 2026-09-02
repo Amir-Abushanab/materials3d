@@ -13,6 +13,7 @@
  *   pnpm sweep doublet beam.incidence=-20,-10,0,10,20
  *   pnpm sweep doublet beam.entryAngle=150,157,164 beam.incidence=0,8,16
  *   pnpm sweep gallery/prism.json post.bloom=0,0.3,0.7 -o bloom.png
+ *   pnpm sweep orb +items.0.material.magnify=0,0.5,1     # + creates a missing override
  *
  * One path sweeps a row; two make a grid, the first across and the second down. Values are parsed
  * as JSON when they can be, so `true`, `0.5` and `"#ff0000"` all work.
@@ -130,6 +131,11 @@ async function main() {
          */
         // oxlint-disable-next-line unicorn/consistent-function-scoping
         const put = (object, path, value) => {
+          // A leading `+` means CREATE. An item's `material` is a sparse override set — absent
+          // means "take the resolved default" — so a knob that has never been authored has no path
+          // to write to, and refusing is right for a typo and wrong for adding an override.
+          const create = path.startsWith("+");
+          if (create) path = path.slice(1);
           const keys = path.split(".");
           let node = object;
           for (const key of keys.slice(0, -1)) {
@@ -137,7 +143,9 @@ async function main() {
             node = node[key];
           }
           const last = keys[keys.length - 1];
-          if (node?.[last] === undefined) throw new Error(`no such config path: ${path}`);
+          if (!create && node?.[last] === undefined) {
+            throw new Error(`no such config path: ${path} (prefix with + to create it)`);
+          }
           node[last] = value;
         };
 
@@ -173,7 +181,7 @@ async function main() {
             // Labelled in the image itself. A grid whose cells are only identifiable by counting
             // is one you have to hold the axis order in your head to read.
             // oxlint-disable-next-line unicorn/consistent-function-scoping
-            const short = (p) => p.split(".").pop();
+            const short = (p) => p.replace(/^\+/, "").split(".").pop();
             const text =
               `${short(axes[0].path)} ${axes[0].values[col]}` +
               (axes[1] ? `  ·  ${short(axes[1].path)} ${axes[1].values[row]}` : "");

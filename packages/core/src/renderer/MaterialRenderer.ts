@@ -136,6 +136,7 @@ function pushMaterialUniforms(
   u.uDisp.value = m.dispersion;
   u.uLens.value = m.lens;
   u.uBend.value = m.bend;
+  u.uMagnify.value = m.magnify;
   u.uSigma.value = m.density;
   u.uUseAbsorb.value = m.absorption ? 1 : 0;
   if (m.absorption) {
@@ -772,6 +773,7 @@ export class MaterialRenderer implements Engine {
         uAspect: { value: 1 },
         uConeTransmission: { value: this.config.transmission === "cone" ? 1 : 0 },
         uBend: { value: 0 },
+        uMagnify: { value: 0 },
         tPlain: { value: null },
         uProbe: { value: 0 },
       },

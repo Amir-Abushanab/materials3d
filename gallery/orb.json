@@ -64,7 +64,7 @@
   },
   "backdropLamps": 0.1,
   "plate": {
-    "z": -5,
+    "z": -14,
     "scale": {
       "x": 13,
       "y": 9
@@ -231,6 +231,7 @@
         "dispersion": 0.16,
         "lens": 0.75,
         "bend": 1,
+        "magnify": 0.85,
         "rim": 1.15,
         "specular": 1,
         "saturation": 1.35,

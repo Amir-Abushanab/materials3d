@@ -287,6 +287,8 @@ export const GLASS_FRAG = /* glsl */ `
   // How much of the refraction comes from the real path through the measured thickness rather
   // than the rim-weighted normal offset. 0 is every scene authored before it existed.
   uniform float uBend;
+  // How much of the body is a MAGNIFIED view of the plate — see MaterialConfig.magnify.
+  uniform float uMagnify;
   uniform sampler2D tPlain;
   uniform float uConeTransmission;
   /** 0 in production; a dev harness sets it to dump one intermediate. See the probe below. */
@@ -776,6 +778,26 @@ export const GLASS_FRAG = /* glsl */ `
       dbgGuard = step(vVZ - 0.30, smp.a * FAR);
       dbgPlateA = smp.a * FAR;
       base = mix(base, smp.rgb, 0.94 * dbgGuard * (1.0 - bentPlate));
+
+      // MAGNIFY: stop displacing a screen-space sample and just look through the glass.
+      //
+      // Everything above moves a sample around the FRAME, so the furthest it can ever move is
+      // bounded by the shape's own size on screen — which is why bend fixes the flat disc and
+      // still does not magnify. A lens magnifies because the ray keeps going: refract at the
+      // surface and follow it to the plate, and the further back the plate hangs the more of it a
+      // given angular deviation sweeps across.
+      //
+      // backplate is the same cast the REFLECTION uses two blocks down, pointed along the
+      // refracted direction instead of the reflected one. That is why this costs the reflective
+      // character nothing: rim, specular and the environment are computed from their own terms and
+      // never touch base.
+      //
+      // It reads the analytic lamp field rather than the rendered plate, so it sees no other glass
+      // — the same trade bend makes, for the same reason, and it cannot sample itself at all.
+      if (uMagnify > 0.0){
+        vec3 through = bendDir(V, N, 1.0 / max(uIOR, 1.0));
+        base = mix(base, backplate(vW, through).rgb, uMagnify);
+      }
     }
 
     // Beer-Lambert. The optical path is either MEASURED from the back-face depth pass, or falls

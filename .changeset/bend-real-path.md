@@ -35,9 +35,18 @@ item's `material`, a sparse override set where absent means "take the default". 
 now also INFER whether a change needs geometry rebuilt rather than uniforms pushed, because the
 caller cannot know which fields are baked and a silent no-op costs a round trip to notice.
 
-Ported to the WebGPU/TSL engine, but NOT yet at parity. Both engines carry the same construction —
-a second glass-free target, the refracted ray walked the measured thickness, the exit projected into
-`screenUV`'s top-down convention — and `bend: 0` is byte-identical on both (`prism` renders to the
-same 188685 bytes as before the port). At `bend: 1` they disagree: WebGL grades across the solid,
-the node engine floods it. The remaining difference is in what the glass-free plate contains rather
-than in the offset, since the hard core boundary does clear on both.
+Ported to the WebGPU/TSL engine, and PARTLY at parity. Measured whole-frame against WebGL on a
+glass sphere, mean absolute difference out of 255:
+
+    bend 0    0.16     bend 1   12.30
+
+So a scene that does not bend is unaffected — the shipped presets render byte-identically on the
+node engine, `prism` to the same 188685 bytes as before the port — and a scene that does bend still
+differs between the engines.
+
+One lead, recorded because it is counter-intuitive. Writing the blend in the GLSL engine's order —
+the bent plate into clear glass first, the ordinary plate on top with its weight scaled by the bend
+— takes `bend 1` to 0.10, i.e. parity. It also regresses `bend 0` to 11.31 and moves the shipped
+presets (`prism` 188685 to 165814 bytes, lit 100% to 95.6%), even though at `bend 0` the two forms
+are algebraically identical and `u.bend` probes as exactly zero. TSL is therefore not evaluating
+that expression as written, and that is the thread to pull rather than the blend maths.

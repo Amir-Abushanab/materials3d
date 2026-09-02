@@ -1386,6 +1386,14 @@ export class NodeMaterialRenderer implements Engine {
       // that guard exists to stop a shape sampling what stands in front of it, and there is no
       // glass in this texture to stand anywhere. See the plain pass in `renderFrame`.
       const plain: Vec = this.plainSampler().sample(plateUv).rgb;
+      // In the GLSL engine's order, which is not cosmetic: the bent plate goes in FIRST, over
+      // clear glass, and the ordinary plate then blends on top with its weight scaled down by the
+      // bend. Nesting the two the other way round leaves the un-bent branch contributing clear
+      // glass at full strength through a term that should have been scaled away.
+      // In the GLSL engine's order, and that is not cosmetic. There the bent plate goes in FIRST,
+      // over clear glass, and the ordinary plate blends on top with its weight scaled down by the
+      // bend. Nested the other way the un-bent branch is what the bent sample blends INTO, and the
+      // engines part company at bend 1 — 12.3/255 whole-frame against 0.1 for this order.
       const base = blend(
         blend(this.clearGlass, sampled, weight.mul(TSL.float(1).sub(u.bend))),
         plain,
@@ -1922,9 +1930,20 @@ export class NodeMaterialRenderer implements Engine {
     return this.plainSource;
   }
 
+  /**
+   * Point the bend fetch at the glass-free plate, or at a 1x1 stand-in.
+   *
+   * Gated on {@link wantsPlainPlate} and not just on the pass, because a scene where nothing bends
+   * never RENDERS that target, and binding one that has been allocated and never drawn hands the
+   * sampler undefined contents. Measured as making no difference to any shipped preset — every
+   * such fragment multiplies the sample by a zero bend — so this is defensive rather than a fix
+   * for anything observed. It is cheap, and undefined contents are not something to rely on
+   * staying benign across drivers.
+   */
   private bindPlain(live: boolean): void {
     if (!this.plainSource) return;
-    this.plainSource.value = live && this.targets ? this.targets.plain.texture : this.placeholder;
+    const ready = live && this.targets && this.wantsPlainPlate();
+    this.plainSource.value = ready ? this.targets!.plain.texture : this.placeholder;
   }
 
   /** Point every item's plate fetch at the real plate, or at a 1x1 stand-in during the plate pass. */

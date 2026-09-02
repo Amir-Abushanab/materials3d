@@ -354,6 +354,7 @@ export class NodeMaterialRenderer implements Engine {
   private frontDepthMaterial?: THREE.NodeMaterial;
   private plateSource?: Vec;
   private plainSource?: Vec;
+  private plainPlaceholder?: THREE.DataTexture;
   private debugBlit?: THREE.NodeMaterial;
   private debugColor?: THREE.NodeMaterial;
   private debugEnv?: THREE.NodeMaterial;
@@ -1924,9 +1925,21 @@ export class NodeMaterialRenderer implements Engine {
   /** The glass-free plate, as one swappable texture node — same construction and same reason as
    *  {@link plateSampler}. */
   private plainSampler(): Vec {
-    this.placeholder ??= new THREE.DataTexture(new Uint8Array([0, 0, 0, 255]), 1, 1);
-    this.placeholder.needsUpdate = true;
-    this.plainSource ??= TSL.texture(this.placeholder);
+    // ITS OWN placeholder, and that is the whole point rather than tidiness.
+    //
+    // Node uniforms are uniquified by the texture they reference, so two `TSL.texture()` calls made
+    // against the SAME stand-in collapse into one sampler in the generated shader — one
+    // `uniform sampler2D`, read at two different uvs, with `bindPlate` and `bindPlain` then
+    // overwriting each other's value. Whichever bound last won, so the plate and the glass-free
+    // plate silently swapped depending on which one the graph happened to reference first.
+    //
+    // It surfaced as an algebraically impossible result: reordering two `mix` calls that provably
+    // reduce to the same expression at bend 0 moved the frame and turned 4% of pixels black.
+    // Reading the emitted GLSL is what found it — one `nodeUniform26` where there should have been
+    // two.
+    this.plainPlaceholder ??= new THREE.DataTexture(new Uint8Array([0, 0, 0, 255]), 1, 1);
+    this.plainPlaceholder.needsUpdate = true;
+    this.plainSource ??= TSL.texture(this.plainPlaceholder);
     return this.plainSource;
   }
 
@@ -1943,7 +1956,7 @@ export class NodeMaterialRenderer implements Engine {
   private bindPlain(live: boolean): void {
     if (!this.plainSource) return;
     const ready = live && this.targets && this.wantsPlainPlate();
-    this.plainSource.value = ready ? this.targets!.plain.texture : this.placeholder;
+    this.plainSource.value = ready ? this.targets!.plain.texture : this.plainPlaceholder;
   }
 
   /** Point every item's plate fetch at the real plate, or at a 1x1 stand-in during the plate pass. */

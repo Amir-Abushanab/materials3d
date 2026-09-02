@@ -35,18 +35,24 @@ item's `material`, a sparse override set where absent means "take the default". 
 now also INFER whether a change needs geometry rebuilt rather than uniforms pushed, because the
 caller cannot know which fields are baked and a silent no-op costs a round trip to notice.
 
-Ported to the WebGPU/TSL engine, and PARTLY at parity. Measured whole-frame against WebGL on a
-glass sphere, mean absolute difference out of 255:
+Ported to the node engine, at parity. Whole-frame mean absolute difference against WebGL on a glass
+sphere, out of 255: `bend 0` 0.16, `bend 1` 0.10 — both at the noise floor, and the shipped presets
+render byte-identically (`prism` to the same 188685 bytes as before the port).
 
-    bend 0    0.16     bend 1   12.30
+Getting there turned up a real bug in this port, and it was mine rather than TSL's. Node uniforms
+are uniquified by the TEXTURE they reference, so `plateSampler()` and `plainSampler()` both calling
+`TSL.texture()` against the same 1x1 stand-in collapsed into ONE `uniform sampler2D` in the
+generated shader — read at two different uvs, with the two bind calls then overwriting each other.
+Whichever bound last won, so the plate and the glass-free plate silently swapped depending on which
+one the graph happened to reference first.
 
-So a scene that does not bend is unaffected — the shipped presets render byte-identically on the
-node engine, `prism` to the same 188685 bytes as before the port — and a scene that does bend still
-differs between the engines.
+It surfaced as an algebraically impossible result: reordering two `mix` calls that provably reduce
+to the same expression when the bend term is zero moved the frame and turned 4% of pixels black.
+Five API-level probes each ruled something out and none of them found it — `u.bend` renders as pure
+black, `weight` is non-zero, and `mix(red, plain, t)` renders the solid red that proves
+`mix(a, b, 0) == a`. Dumping the emitted GLSL found it in one diff: one `nodeUniform26` where there
+should have been two. The plain sampler now has its own stand-in texture.
 
-One lead, recorded because it is counter-intuitive. Writing the blend in the GLSL engine's order —
-the bent plate into clear glass first, the ordinary plate on top with its weight scaled by the bend
-— takes `bend 1` to 0.10, i.e. parity. It also regresses `bend 0` to 11.31 and moves the shipped
-presets (`prism` 188685 to 165814 bytes, lit 100% to 95.6%), even though at `bend 0` the two forms
-are algebraically identical and `u.bend` probes as exactly zero. TSL is therefore not evaluating
-that expression as written, and that is the thread to pull rather than the blend maths.
+Worth knowing separately: the headless harness reports its backend as **webgl2**, so these runs
+exercise TSL compiled to GLSL rather than WGSL. The node graph is still what is under test, but
+"the WebGPU engine" is not what is being measured here.

@@ -92,7 +92,9 @@ has one-bit transparency. Set `loopSeconds` in the scene so the clip closes.
 ### Code and embed
 
 **Get code** (keyboard: C) shows the scene as a React component, a `<materials-3d>` element, vanilla
-`createMaterials`, a CDN script tag or JSON, with defaults stripped. **Save embed (.html)** writes a
+`createMaterials`, a CDN script tag or JSON, with defaults stripped. **Copy for your agent** puts a task, the
+scene's snippet and the package's agent skill on the clipboard as one prompt for a coding agent;
+a one-time card bottom-right of the stage offers the same button. **Save embed (.html)** writes a
 single self-contained page with the runtime inlined. **Wallpaper folder (.zip)** wraps that embed
 with a Wallpaper Engine `project.json`, a Lively `LivelyInfo.json` and a preview frame.
 

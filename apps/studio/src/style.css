@@ -426,6 +426,11 @@ dialog::backdrop {
   flex: 1;
 }
 
+.dialog-foot button {
+  flex: none;
+  white-space: nowrap;
+}
+
 #dialog-note {
   color: var(--ink-3);
   font-family: var(--mono);

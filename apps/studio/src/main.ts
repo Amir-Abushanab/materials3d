@@ -32,6 +32,9 @@ import type { CodeEditor, EditorLanguage } from "./ui/CodeEditor";
 import { publishToGallery } from "./publishToGallery";
 import { toast } from "./ui/Toast";
 import { CODE_TARGETS, exportCode, minimalConfig, type CodeTarget } from "./export/exportCode";
+import { buildAgentBrief } from "./export/agentBrief";
+import { createAgentCopyButton } from "./ui/agentCopyButton";
+import { mountAgentHandoffCard } from "./ui/AgentHandoffCard";
 import { exportEmbedHtml, exportWallpaperFolder, saveConfig, saveStill } from "./export/exporters";
 import { recordAnimatedWebp, recordGif, startRecording, type Recording } from "./export/record";
 import {
@@ -331,6 +334,17 @@ function doJump(id: number): void {
 
 // ------------------------------------------------------------------ dialog --
 
+/** The scene as a prompt for a coding agent: task, this scene's snippet, the package's skill. */
+function agentBrief(): string {
+  return buildAgentBrief(config(), codeTarget, presetName === "custom" ? undefined : presetName);
+}
+
+// Permanent home of the "Copy for your agent" button: the Get code dialog's footer, beside Copy.
+const agentButton = createAgentCopyButton(agentBrief);
+dialog
+  .querySelector(".dialog-foot")
+  ?.insertBefore(agentButton, dialog.querySelector('[data-action="dialog-copy"]'));
+
 async function ensureEditor(): Promise<CodeEditor> {
   if (editor) return editor;
   editorLoading ??= import("./ui/CodeEditor").then(({ CodeEditor: Editor }) => {
@@ -402,6 +416,7 @@ async function openDialog(mode: "code" | "json"): Promise<void> {
   applyButton.hidden = mode !== "json";
   saveButton.hidden = mode !== "json";
   embedButton.hidden = mode !== "code";
+  agentButton.hidden = mode !== "code";
   buildDialogTabs();
   dialog.showModal();
   const ready = await ensureEditor();
@@ -1159,6 +1174,8 @@ function boot(): void {
   bindDialog();
   bindFileInput();
   bindShortcuts();
+  // A one-time nudge that the designed scene can be handed to a coding agent.
+  mountAgentHandoffCard(stage, agentBrief);
 }
 
 /**

@@ -169,21 +169,21 @@
         "z": 1
       },
       "material": {
-        "kind": "liquid",
-        "ior": 1.38,
+        "path": 0.84,
         "density": 1.55,
+        "ior": 1.38,
         "dispersion": 0.03,
-        "ripple": 0.62,
-        "rippleScale": 2.1,
-        "flow": 0.45,
         "rim": 0.72,
         "specular": 1.3,
         "saturation": 1.22,
         "emission": 0.06,
+        "ripple": 0.62,
+        "rippleScale": 2.1,
+        "flow": 0.45,
         "iridescence": 0.26,
         "filmNm": 340,
         "tint": "#8ede3c",
-        "path": 0.84
+        "kind": "liquid"
       },
       "motion": {
         "kind": "wobble",
@@ -225,21 +225,21 @@
         "z": 1
       },
       "material": {
-        "kind": "liquid",
-        "ior": 1.38,
+        "path": 0.63,
         "density": 1.55,
+        "ior": 1.38,
         "dispersion": 0.03,
-        "ripple": 0.62,
-        "rippleScale": 2.1,
-        "flow": 0.45,
         "rim": 0.72,
         "specular": 1.3,
         "saturation": 1.22,
         "emission": 0.06,
+        "ripple": 0.62,
+        "rippleScale": 2.1,
+        "flow": 0.45,
         "iridescence": 0.26,
         "filmNm": 340,
         "tint": "#f04fae",
-        "path": 0.63
+        "kind": "liquid"
       },
       "motion": {
         "kind": "wobble",
@@ -281,21 +281,21 @@
         "z": 1
       },
       "material": {
-        "kind": "liquid",
-        "ior": 1.38,
+        "path": 0.714,
         "density": 1.55,
+        "ior": 1.38,
         "dispersion": 0.03,
-        "ripple": 0.62,
-        "rippleScale": 2.1,
-        "flow": 0.45,
         "rim": 0.72,
         "specular": 1.3,
         "saturation": 1.22,
         "emission": 0.06,
+        "ripple": 0.62,
+        "rippleScale": 2.1,
+        "flow": 0.45,
         "iridescence": 0.26,
         "filmNm": 340,
         "tint": "#3fd2e6",
-        "path": 0.714
+        "kind": "liquid"
       },
       "motion": {
         "kind": "wobble",
@@ -337,21 +337,21 @@
         "z": 1
       },
       "material": {
-        "kind": "liquid",
-        "ior": 1.38,
+        "path": 0.48299999999999993,
         "density": 1.55,
+        "ior": 1.38,
         "dispersion": 0.03,
-        "ripple": 0.62,
-        "rippleScale": 2.1,
-        "flow": 0.45,
         "rim": 0.72,
         "specular": 1.3,
         "saturation": 1.22,
         "emission": 0.06,
+        "ripple": 0.62,
+        "rippleScale": 2.1,
+        "flow": 0.45,
         "iridescence": 0.26,
         "filmNm": 340,
         "tint": "#ff9130",
-        "path": 0.48299999999999993
+        "kind": "liquid"
       },
       "motion": {
         "kind": "wobble",
@@ -393,21 +393,21 @@
         "z": 1
       },
       "material": {
-        "kind": "liquid",
-        "ior": 1.38,
+        "path": 0.7979999999999999,
         "density": 1.55,
+        "ior": 1.38,
         "dispersion": 0.03,
-        "ripple": 0.62,
-        "rippleScale": 2.1,
-        "flow": 0.45,
         "rim": 0.72,
         "specular": 1.3,
         "saturation": 1.22,
         "emission": 0.06,
+        "ripple": 0.62,
+        "rippleScale": 2.1,
+        "flow": 0.45,
         "iridescence": 0.26,
         "filmNm": 340,
         "tint": "#9a5ff0",
-        "path": 0.7979999999999999
+        "kind": "liquid"
       },
       "motion": {
         "kind": "wobble",
@@ -449,21 +449,21 @@
         "z": 1
       },
       "material": {
-        "kind": "liquid",
-        "ior": 1.38,
+        "path": 0.42,
         "density": 1.55,
+        "ior": 1.38,
         "dispersion": 0.03,
-        "ripple": 0.62,
-        "rippleScale": 2.1,
-        "flow": 0.45,
         "rim": 0.72,
         "specular": 1.3,
         "saturation": 1.22,
         "emission": 0.06,
+        "ripple": 0.62,
+        "rippleScale": 2.1,
+        "flow": 0.45,
         "iridescence": 0.26,
         "filmNm": 340,
         "tint": "#f5d63c",
-        "path": 0.42
+        "kind": "liquid"
       },
       "motion": {
         "kind": "wobble",
@@ -505,21 +505,21 @@
         "z": 1
       },
       "material": {
-        "kind": "liquid",
-        "ior": 1.38,
+        "path": 0.441,
         "density": 1.55,
+        "ior": 1.38,
         "dispersion": 0.03,
-        "ripple": 0.62,
-        "rippleScale": 2.1,
-        "flow": 0.45,
         "rim": 0.72,
         "specular": 1.3,
         "saturation": 1.22,
         "emission": 0.06,
+        "ripple": 0.62,
+        "rippleScale": 2.1,
+        "flow": 0.45,
         "iridescence": 0.26,
         "filmNm": 340,
         "tint": "#ff5f7a",
-        "path": 0.441
+        "kind": "liquid"
       },
       "motion": {
         "kind": "wobble",

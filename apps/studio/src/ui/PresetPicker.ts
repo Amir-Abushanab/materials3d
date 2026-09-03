@@ -2,7 +2,7 @@
  * The preset picker: a grid of rendered thumbnails rather than a dropdown.
  *
  * A `<select>` can't show an image, and for a renderer whose whole product is the look, a list of
- * words is the wrong control — "Skewer" and "Assembly" mean nothing until you have seen them. The
+ * words is the wrong control: "Skewer" and "Assembly" mean nothing until you have seen them. The
  * thumbnails are real renders of the presets themselves (see thumbs.ts), so they cannot go stale
  * the way a checked-in screenshot would.
  *
@@ -22,7 +22,7 @@ export class PresetPicker {
   constructor(
     parent: HTMLElement,
     private readonly names: string[],
-    private readonly labels: Record<string, string>,
+    private readonly label: (name: string) => string,
     selected: string,
     private readonly hooks: PresetPickerHooks,
   ) {
@@ -40,7 +40,7 @@ export class PresetPicker {
     this.render();
   }
 
-  /** Mark which preset is current — "custom" (or any unknown name) selects nothing. */
+  /** Mark which preset is current: "custom" (or any unknown name) selects nothing. */
   setSelected(name: string): void {
     this.selected = name;
     for (const card of this.el.querySelectorAll<HTMLElement>("[data-preset]")) {
@@ -48,7 +48,7 @@ export class PresetPicker {
     }
   }
 
-  /** Re-read the thumbnail cache — called once generation finishes. */
+  /** Re-read the thumbnail cache, called as each thumbnail lands. */
   refreshThumbs(): void {
     for (const card of this.el.querySelectorAll<HTMLElement>("[data-preset]")) {
       const url = getPresetThumb(card.dataset.preset as string);
@@ -73,7 +73,7 @@ export class PresetPicker {
 
       const label = document.createElement("span");
       label.className = "g3-preset-label";
-      label.textContent = this.labels[name] ?? name;
+      label.textContent = this.label(name);
 
       card.append(image, label);
       this.el.appendChild(card);

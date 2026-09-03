@@ -1,5 +1,5 @@
 /**
- * The full-screen passes, as node graphs — twins of the bloom and blit shaders in `shaders.ts`.
+ * The full-screen passes, as node graphs, twins of the bloom and blit shaders in `shaders.ts`.
  *
  * Each is built as a FACTORY taking its textures and uniforms rather than as a bare `Fn`, because a
  * node graph is compiled once and re-run, so the things that vary per invocation have to be
@@ -7,25 +7,17 @@
  * from the GLSL originals; the arithmetic is intended to be identical, and
  * `scripts/tsl-parity.mjs` is what establishes that it is.
  *
- * Where a loop bound is a compile-time constant in GLSL — the `BLOOM_TAPS` define — it is a plain
+ * Where a loop bound is a compile-time constant in GLSL, the `BLOOM_TAPS` define, it is a plain
  * JavaScript loop here, emitting one unrolled chain of nodes. That is what the define already did,
  * and it keeps the weights computable in JS wherever they do not depend on a uniform.
  */
 import { TSL } from "three/webgpu";
 import type { Texture } from "three/webgpu";
-import { directionFromEquirect, srgbToLinear, studioRoom } from "./common";
-
-/** See `nodes/common` — three's TSL types resolve the wrong overload for a relaxed node. */
-type Vec = any;
+import { directionFromEquirect, max, mix, srgbToLinear, studioRoom, type Vec } from "./common";
 
 const { Fn, float, vec2, vec3, vec4, texture, uv } = TSL;
-const max = (a: Vec, b: Vec): Vec => TSL.max(a, b);
-// The FREE mix, whose (a, b, t) order is pinned by three's own overloads. The fluent `a.mix(b, t)`
-// is not obviously the same order, and getting it backwards here swapped the near and far bloom
-// scales — a 34/255 error that looked like a plausible picture and was caught only by parity.
-const mix = (a: Vec, b: Vec, t: Vec): Vec => TSL.mix(a, b, t);
 
-/** The room, rasterized into an equirectangular map — level 0 of the chain. */
+/** The room, rasterized into an equirectangular map, level 0 of the chain. */
 export const envBakePass = (softbox: Vec, gain: Vec) =>
   Fn(() => vec4(studioRoom(directionFromEquirect(uv()), softbox, gain), 1))();
 
@@ -33,7 +25,7 @@ export const envBakePass = (softbox: Vec, gain: Vec) =>
  * One axis of the blur that builds the chain, with the equirect distortion compensated.
  *
  * A row near a pole covers far less solid angle than one at the equator, so a blur of constant
- * TEXEL width is a blur of wildly varying ANGLE — the poles smear into streaks while the middle
+ * TEXEL width is a blur of wildly varying ANGLE, the poles smear into streaks while the middle
  * barely moves. Dividing the horizontal step by sin(theta) makes the kernel angular instead, which
  * is the only version of it that means anything on a sphere. The vertical pass runs uncompensated:
  * the correction is for rows covering different solid angles, and applying it down the columns
@@ -104,7 +96,7 @@ export const bloomExtractPass = (src: Texture, threshold: Vec, texel: Vec) =>
  *
  * Every blit into a render target on this backend stores its rows inverted relative to the uv it
  * was drawn with, so a pass that reads another pass's output sees it upside down. One blit hides
- * this — two undo each other — but the bloom pyramid is a CHAIN, and the orientation therefore
+ * this, two undo each other, but the bloom pyramid is a CHAIN, and the orientation therefore
  * alternated level by level: 0 inverted, 1 upright, 2 inverted. The composite then summed levels
  * that disagreed, so every halo arrived with a mirror image of itself across the frame's middle.
  * On `prism` that was most of the remaining difference from the WebGL engine.
@@ -114,7 +106,7 @@ export const bloomExtractPass = (src: Texture, threshold: Vec, texel: Vec) =>
  * comparison a lie about a pass that is otherwise a faithful twin of its GLSL original. The
  * renderer passes 1; the harness passes 0.
  *
- * Not for the scene targets, which are not stored this way — which is why `bloomExtractPass` reads
+ * Not for the scene targets, which are not stored this way, which is why `bloomExtractPass` reads
  * the colour target at a plain `uv()`.
  */
 export const blitUv = (flip: Vec): Vec => vec2(uv().x, TSL.mix(uv().y, float(1).sub(uv().y), flip));
@@ -198,7 +190,7 @@ export const bloomCompositePass = (l0: Texture, l1: Texture, l2: Texture, radius
  * sixteenth in ONE step.
  *
  * Chaining four box downsamples would be cheaper but walks over the intermediate levels, and those
- * hold the thresholded bloom the composite still needs. Deliberately UNTHRESHOLDED — this is what a
+ * hold the thresholded bloom the composite still needs. Deliberately UNTHRESHOLDED, this is what a
  * grain of dust sees, and dust is lit by all the light in the room rather than only the part bright
  * enough to bloom.
  */

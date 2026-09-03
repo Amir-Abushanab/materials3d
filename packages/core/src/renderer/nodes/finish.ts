@@ -1,9 +1,9 @@
 /**
- * The finish pass, as a node graph — the twin of FINISH_FRAG.
+ * The finish pass, as a node graph, the twin of FINISH_FRAG.
  *
  * Everything here is a PRINT effect rather than a lighting one: volumetric rays, ordered dither,
  * halftone, a CMYK separation and paper grain. They run after the tone map, over the finished
- * frame, and every one of them is off by default — which is why the pass is skipped entirely
+ * frame, and every one of them is off by default, which is why the pass is skipped entirely
  * unless a scene asks for something.
  *
  * All of them work on STRAIGHT colour and re-premultiply at the end. The frame arrives
@@ -11,19 +11,17 @@
  * the alpha it happens to sit on, which over a transparent background is nonsense.
  */
 import { TSL } from "three/webgpu";
-
-type Vec = any;
+import { hash21, mix, type Vec } from "./common";
 
 const { Fn, float, vec3, vec4, uv, Loop } = TSL;
 // Through a wrapper: three's `vec2` overloads reject a relaxed node. See `nodes/common`.
 const vec2 = (x: Vec, y?: Vec): Vec => (y === undefined ? TSL.vec2(x) : TSL.vec2(x, y));
-const mix = (a: Vec, b: Vec, t: Vec): Vec => TSL.mix(a, b, t);
 
 const LIGHT_SAMPLES = 24;
 const LUMA = [0.2126, 0.7152, 0.0722] as const;
 
 const luma = (c: Vec): Vec => c.dot(vec3(...LUMA));
-/** Saturation, the same discriminator the bloom gather uses — see POST_FRAG. */
+/** Saturation, the same discriminator the bloom gather uses, see POST_FRAG. */
 const sat = (c: Vec): Vec => c.r.max(c.g).max(c.b).sub(c.r.min(c.g).min(c.b));
 
 /**
@@ -69,8 +67,6 @@ export const dotScreen = Fn(([coord, value, angle, cell]: [Vec, Vec, Vec, Vec]) 
   const radius = value.clamp(0, 1).sqrt().mul(0.5);
   return TSL.length(c).smoothstep(radius, radius.sub(0.06));
 });
-
-const hash21 = Fn(([p]: [Vec]) => p.dot(vec2(127.1, 311.7)).sin().mul(43758.5453).fract());
 
 export interface FinishUniforms {
   source: Vec;
@@ -133,11 +129,11 @@ export const finishPass = (u: FinishUniforms) =>
       alpha.assign(alpha.max(luma(scaled)).clamp(0, 1));
     });
 
-    // ORDERED DITHER, quantising LUMINANCE and carrying the hue through unchanged — quantising the
+    // ORDERED DITHER, quantising LUMINANCE and carrying the hue through unchanged, quantising the
     // channels independently walks the colour toward whichever primary rounds up first.
     TSL.If(u.dither.greaterThan(0.001), () => {
       const px = u.ditherScale.max(1);
-      // `fragCoord`, NOT `screenCoordinate` — the same correction every other pattern here makes.
+      // `fragCoord`, NOT `screenCoordinate`, the same correction every other pattern here makes.
       // This one feeds `src`, so getting it wrong does not just mirror the lattice: each block took
       // its colour from the opposite row of the frame. Alone among the finish effects, dither was
       // 54 levels from the WebGL engine.

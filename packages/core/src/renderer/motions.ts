@@ -2,7 +2,7 @@
  * Motion, applied per shape.
  *
  * Each shape carries its own {@link MotionConfig} and its own `phase`, so a composition can have a
- * row of rods rolling on one axis while a disc beside them drifts — which a single scene-wide
+ * row of rods rolling on one axis while a disc beside them drifts, which a single scene-wide
  * driver could never express. The studio's "apply to all shapes" is how you get uniformity back
  * when you want it.
  *
@@ -12,19 +12,20 @@
  */
 
 import type { MotionConfig } from "../config/model";
-import type { FrameCallback, MaterialItem } from "./item";
+import type { EngineItem } from "../engine";
+import type { FrameCallback } from "./item";
 
 /**
  * Snap a frequency so it completes a WHOLE number of cycles in `loopSeconds`.
  *
  * This is what makes a clip loop. Every motion here is a sine or a rotation, so it returns to its
- * starting pose exactly when its argument has advanced a multiple of 2π — which only happens if the
+ * starting pose exactly when its argument has advanced a multiple of 2π, which only happens if the
  * rate divides evenly into the loop. Snapping to the nearest whole cycle is the smallest change
  * that guarantees it.
  *
  * The floor of one cycle is deliberate: a rate slow enough to round to zero would otherwise freeze
  * the shape, which loops perfectly and is not what anyone means by it. That does mean a slow motion
- * against a short loop speeds up noticeably — the honest fix there is a longer loop, and the studio
+ * against a short loop speeds up noticeably, the honest fix there is a longer loop, and the studio
  * shows the effective rate so the jump is visible rather than mysterious.
  *
  * A constant phase offset (per-item `phase`, or a scatter's stagger) never affects periodicity, so
@@ -37,13 +38,38 @@ export function loopFrequency(frequency: number, loopSeconds: number): number {
 }
 
 /**
+ * The volume-preserving squash factor of a wobble at `phase`.
+ *
+ * A single sine reads as breathing, not jelly: the 2x and 3x harmonics are what make it jiggle.
+ * They are INTEGER multiples of the base phase, so a loop that closes for the fundamental closes
+ * for them too.
+ */
+function wobbleSquash(phase: number, amount: number): number {
+  const jiggle =
+    Math.sin(phase) * 0.62 + Math.sin(phase * 2 + 1.1) * 0.26 + Math.sin(phase * 3 + 2.4) * 0.12;
+  return Math.max(1 + jiggle * amount, 0.05);
+}
+
+/** Squash `axis` by `squash` and swell the other two by 1/sqrt(squash), so the volume stays
+ *  constant: squash that thins the shape overall reads as inflating and deflating, not jelly. */
+function squashScale(item: EngineItem, axis: "x" | "y" | "z", squash: number): void {
+  const swell = 1 / Math.sqrt(squash);
+  const { homeScale } = item;
+  item.mesh.scale.set(
+    homeScale.x * (axis === "x" ? squash : swell),
+    homeScale.y * (axis === "y" ? squash : swell),
+    homeScale.z * (axis === "z" ? squash : swell),
+  );
+}
+
+/**
  * Advance one shape to `time`.
  *
- * A lathed shape spun about its own axis of symmetry is *literally* invisible — the same normal
- * distribution every frame — which is why `skewer` defaults to rolling about X while the profile
+ * A lathed shape spun about its own axis of symmetry is *literally* invisible, the same normal
+ * distribution every frame, which is why `skewer` defaults to rolling about X while the profile
  * is swept about Y.
  */
-export function applyMotion(item: MaterialItem, time: number, loopSeconds = 0): void {
+export function applyMotion(item: EngineItem, time: number, loopSeconds = 0): void {
   const motion = item.motion;
   const rate = loopFrequency(motion.rate, loopSeconds);
   const phase = time * rate + item.phase;
@@ -56,31 +82,14 @@ export function applyMotion(item: MaterialItem, time: number, loopSeconds = 0): 
       item.mesh.position.y = item.home.y + Math.sin(phase) * motion.amount;
       // The roll rides a second, slower frequency. It has to be snapped INDEPENDENTLY: quantising
       // only the base rate leaves this one at 0.7× of it, which closes over the loop just when
-      // that ratio happens to land on a whole cycle — i.e. almost never.
+      // that ratio happens to land on a whole cycle, i.e. almost never.
       const roll = loopFrequency(motion.rate * 0.7, loopSeconds);
       item.mesh.rotation.z = item.homeRotation.z + Math.sin(time * roll + item.phase * 0.7) * 0.05;
       break;
     }
-    case "wobble": {
-      // Volume-preserving squash-stretch along `axis`. A single sine reads as breathing, not
-      // jelly — the 2× and 3× harmonics are what make it jiggle. They are INTEGER multiples of
-      // the snapped base rate, so a loop that closes for the fundamental closes for them too.
-      const jiggle =
-        Math.sin(phase) * 0.62 +
-        Math.sin(phase * 2 + 1.1) * 0.26 +
-        Math.sin(phase * 3 + 2.4) * 0.12;
-      const squash = Math.max(1 + jiggle * motion.amount, 0.05);
-      // The other two axes swell by 1/√s, so the volume stays constant — squash that thins the
-      // shape overall reads as inflating and deflating instead of jelly.
-      const swell = 1 / Math.sqrt(squash);
-      const { homeScale } = item;
-      item.mesh.scale.set(
-        homeScale.x * (motion.axis === "x" ? squash : swell),
-        homeScale.y * (motion.axis === "y" ? squash : swell),
-        homeScale.z * (motion.axis === "z" ? squash : swell),
-      );
+    case "wobble":
+      squashScale(item, motion.axis, wobbleSquash(phase, motion.amount));
       break;
-    }
     case "none":
     default:
       break;
@@ -88,7 +97,7 @@ export function applyMotion(item: MaterialItem, time: number, loopSeconds = 0): 
 }
 
 /** Advance every shape. Called once per frame by the renderer. */
-export function applyMotions(items: readonly MaterialItem[], time: number, loopSeconds = 0): void {
+export function applyMotions(items: readonly EngineItem[], time: number, loopSeconds = 0): void {
   for (const item of items) applyMotion(item, time, loopSeconds);
 }
 
@@ -101,12 +110,12 @@ export function applyMotions(items: readonly MaterialItem[], time: number, loopS
 export interface SweepOptions {
   axis?: "x" | "y" | "z";
   rate?: number;
-  /** Phase step between successive items — spread it across a full turn. */
+  /** Phase step between successive items, spread it across a full turn. */
   stagger?: number;
 }
 
 /**
- * `skewer` and `spin` are ONE behaviour — rotate every item about a shared axis, a beat apart —
+ * `skewer` and `spin` are ONE behaviour, rotate every item about a shared axis, a beat apart,
  * with different defaults: skewer rolls about X with the reference stagger, spin turns about Y in
  * unison. They keep separate names because they read as different motions in a config.
  */
@@ -119,7 +128,7 @@ function sweep(axis: "x" | "y" | "z", rate: number, stagger: number): FrameCallb
   };
 }
 
-/** Roll every item about ONE shared axis, a beat apart — the reference motion, as a callback. */
+/** Roll every item about ONE shared axis, a beat apart, the reference motion, as a callback. */
 export function skewer({
   axis = "x",
   rate = 0.34,
@@ -137,7 +146,7 @@ export interface DriftOptions {
   rate?: number;
 }
 
-/** A slow vertical bob with a little roll — for compositions that shouldn't read as spinning. */
+/** A slow vertical bob with a little roll, for compositions that shouldn't read as spinning. */
 export function drift({ amount = 0.12, rate = 0.5 }: DriftOptions = {}): FrameCallback {
   return (time, _delta, items) => {
     for (const [index, item] of items.entries()) {
@@ -151,11 +160,11 @@ export function drift({ amount = 0.12, rate = 0.5 }: DriftOptions = {}): FrameCa
 export interface WobbleOptions {
   axis?: "x" | "y" | "z";
   rate?: number;
-  /** Squash amplitude — 0.1–0.2 is jelly, beyond that is cartoon. */
+  /** Squash amplitude, 0.1–0.2 is jelly, beyond that is cartoon. */
   amount?: number;
 }
 
-/** Volume-preserving squash-stretch, a beat apart — gelatinous, as a callback. */
+/** Volume-preserving squash-stretch, a beat apart, gelatinous, as a callback. */
 export function wobble({
   axis = "y",
   rate = 1.1,
@@ -163,23 +172,12 @@ export function wobble({
 }: WobbleOptions = {}): FrameCallback {
   return (time, _delta, items) => {
     for (const [index, item] of items.entries()) {
-      const phase = time * rate + index * 1.9 + item.phase;
-      const jiggle =
-        Math.sin(phase) * 0.62 +
-        Math.sin(phase * 2 + 1.1) * 0.26 +
-        Math.sin(phase * 3 + 2.4) * 0.12;
-      const squash = Math.max(1 + jiggle * amount, 0.05);
-      const swell = 1 / Math.sqrt(squash);
-      item.mesh.scale.set(
-        item.homeScale.x * (axis === "x" ? squash : swell),
-        item.homeScale.y * (axis === "y" ? squash : swell),
-        item.homeScale.z * (axis === "z" ? squash : swell),
-      );
+      squashScale(item, axis, wobbleSquash(time * rate + index * 1.9 + item.phase, amount));
     }
   };
 }
 
-/** Whether a motion actually moves anything — used to skip per-frame work on a static scene. */
+/** Whether a motion actually moves anything, used to skip per-frame work on a static scene. */
 export function isAnimated(motion: MotionConfig): boolean {
   return motion.kind !== "none" && motion.rate !== 0;
 }

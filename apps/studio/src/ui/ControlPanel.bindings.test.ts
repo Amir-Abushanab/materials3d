@@ -3,13 +3,13 @@
  * Drift audit for the control panel's config bindings.
  *
  * Tweakpane picks a controller from the VALUE it is handed and throws
- * `No matching controller for '<key>'` for anything it has no widget for — notably `undefined`.
+ * `No matching controller for '<key>'` for anything it has no widget for, notably `undefined`.
  * So every config field the panel binds has to be backfilled by @materials3d/core's normalizers, and a
  * field added to the panel without a matching backfill takes the whole panel down. An optional
  * field in the type that only `createDefaultConfig` sets looks fine until someone loads a config
  * that predates it.
  *
- * Rather than restate the field list here — which would drift immediately — this reads the real
+ * Rather than restate the field list here, which would drift immediately, this reads the real
  * `addBinding` call sites out of ControlPanel.ts, normalizes the most minimal config a hand-edit
  * can produce, and asks Tweakpane to bind each one for real.
  */
@@ -17,11 +17,11 @@ import { describe, expect, it } from "vitest";
 import { Pane } from "tweakpane";
 import { ensureSceneConfig, type SceneConfig } from "@materials3d/core";
 import { backfillMaterial } from "./ControlPanel";
-// Vite's `?raw` rather than node:fs — it keeps the audit pinned to the real source file, so a
+// Vite's `?raw` rather than node:fs: it keeps the audit pinned to the real source file, so a
 // rename breaks the import instead of silently matching nothing.
 import SOURCE from "./ControlPanel.ts?raw";
 
-/** Receivers backed by the document config — the ones the normalizers are responsible for. */
+/** Receivers backed by the document config: the ones the normalizers are responsible for. */
 const CONFIG_RECEIVERS: Record<string, (c: SceneConfig) => unknown> = {
   "this.config": (c) => c,
   "this.config.camera": (c) => c.camera,
@@ -35,17 +35,17 @@ const CONFIG_RECEIVERS: Record<string, (c: SceneConfig) => unknown> = {
   lamp: (c) => c.lamps[0],
   item: (c) => c.items[0],
   "item.shape": (c) => c.items[0].shape,
-  // A carve-out is element-level like a lamp, so `minimalConfig` seeds one — from `{}`, which
+  // A carve-out is element-level like a lamp, so `minimalConfig` seeds one from `{}`, which
   // also pins down that a cut with no fields at all normalizes into a bindable one.
   cut: (c) => c.items[0].shape.cuts?.[0],
   // The one receiver the normalizers deliberately DON'T make concrete: an item's material is a
   // sparse override set, so the panel backfills it before binding. Auditing it therefore means
-  // auditing that backfill — which is the real invariant here, and why it is a shared helper
+  // auditing that backfill, which is the real invariant here, and why it is a shared helper
   // rather than a literal inside the panel.
   material: (c) => backfillMaterial(c.items[0].material),
   motion: (c) => c.items[0].motion,
   scatter: (c) => c.scatter,
-  // Optional on the config, so `minimalConfig` seeds one from `{}` — which also pins down that a
+  // Optional on the config, so `minimalConfig` seeds one from `{}`, which also pins down that a
   // beam with no fields at all normalizes into a bindable one. `entryAngle` and `entrySweep` stay
   // absent by design (0 is a real bearing), so the panel guards those two inline.
   beam: (c) => c.beam,
@@ -100,7 +100,7 @@ function parseBindings(): Map<string, Set<string>> {
 
 /**
  * The most minimal config a hand-edit can produce, with one shape and one lamp so the
- * element-level bindings are covered too. Everything else has to come from the normalizers —
+ * element-level bindings are covered too. Everything else has to come from the normalizers,
  * which is the point.
  */
 function minimalConfig(): SceneConfig {
@@ -139,7 +139,7 @@ describe("every config field the panel binds survives normalization", () => {
     const failures: string[] = [];
     try {
       for (const [receiver, keys] of parseBindings()) {
-        if (!(receiver in CONFIG_RECEIVERS)) continue; // UI state — covered by the test above
+        if (!(receiver in CONFIG_RECEIVERS)) continue; // UI state: covered by the test above
         const target = CONFIG_RECEIVERS[receiver](config);
         if (target === null || typeof target !== "object") {
           failures.push(`${receiver} is ${String(target)}, not an object`);
@@ -150,7 +150,7 @@ describe("every config field the panel binds survives normalization", () => {
             pane.addBinding(target as Record<string, unknown>, key);
           } catch (error) {
             failures.push(
-              `${receiver}.${key} — ${error instanceof Error ? error.message : String(error)}`,
+              `${receiver}.${key}: ${error instanceof Error ? error.message : String(error)}`,
             );
           }
         }

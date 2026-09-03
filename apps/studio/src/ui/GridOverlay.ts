@@ -1,14 +1,16 @@
 /**
  * An optional alignment grid over the preview.
  *
- * DOM, not scene geometry — for the same reason the selection box is. A grid drawn into the scene
+ * DOM, not scene geometry, for the same reason the selection box is. A grid drawn into the scene
  * would go through all four passes: depth of field would soften it, haze would fade it out at the
  * bottom of the frame, and it would land in every export. This sits above the canvas, so it stays
  * hairline-crisp at any zoom and `captureImage` (which reads the canvas) never sees it.
  *
  * It divides the FRAME, not the world. What you are usually judging in a hero is where a shape
- * sits in the picture — thirds, centred, off to one side — and that is a question about the frame.
+ * sits in the picture (thirds, centred, off to one side), and that is a question about the frame.
  */
+
+import { injectStyle } from "../util/dom";
 
 export interface GridOptions {
   /** Cells across and down. 3 gives the familiar rule-of-thirds guides. */
@@ -16,7 +18,7 @@ export interface GridOptions {
   /** Emphasise the centre lines, for judging what is actually centred. */
   centre: boolean;
   /**
-   * Rotate the guides, in degrees — a camera's level, for judging a deliberately tilted frame.
+   * Rotate the guides, in degrees: a camera's level, for judging a deliberately tilted frame.
    *
    * Set it to match `camera.roll` and the guides line up with the tilted composition instead of
    * fighting it; leave it at 0 and they stay true to the frame, which is what tells you how far
@@ -40,7 +42,7 @@ function gaugePoint(degrees: number, radius: number): [number, number] {
 }
 
 /**
- * The protractor face: arc, ticks and labels. Built once — only the needle and the readout change
+ * The protractor face: arc, ticks and labels. Built once: only the needle and the readout change
  * as the angle does, so dragging the slider doesn't rebuild any of this.
  */
 function gaugeFace(): string {
@@ -93,7 +95,7 @@ export class GridOverlay {
     this.needle = svg.querySelector("line.g3-gauge-needle") as SVGLineElement;
     this.readout = svg.querySelector("text.g3-gauge-readout") as SVGTextElement;
     this.el.appendChild(svg);
-    // Inserted before anything else in the stage so the selection box draws on top of it — the
+    // Inserted before anything else in the stage so the selection box draws on top of it: the
     // thing you are moving should never sit behind the guide you are moving it against.
     host.prepend(this.el);
   }
@@ -116,15 +118,10 @@ export class GridOverlay {
     this.gauge.style.display = options.tilt === 0 ? "none" : "";
   }
 
-  dispose(): void {
-    this.el.remove();
-  }
-
   private static injectStyle(): void {
-    if (document.getElementById("g3-grid-style")) return;
-    const style = document.createElement("style");
-    style.id = "g3-grid-style";
-    style.textContent = `
+    injectStyle(
+      "g3-grid-style",
+      `
 .g3-grid{position:absolute;inset:0;pointer-events:none;z-index:4;overflow:hidden;
   /* Two repeating gradients rather than an SVG: the lines land on device pixels at any size, and
      resizing the window costs nothing to redraw. */
@@ -132,7 +129,7 @@ export class GridOverlay {
     repeating-linear-gradient(to right, rgb(27 26 31 / 13%) 0 1px, transparent 1px var(--g3-grid-step)),
     repeating-linear-gradient(to bottom, rgb(27 26 31 / 13%) 0 1px, transparent 1px var(--g3-grid-step));}
 .g3-grid[hidden]{display:none;}
-/* The tilt guide: a crossed pair of lines through the centre at a settable angle — a camera's
+/* The tilt guide: a crossed pair of lines through the centre at a settable angle: a camera's
    level, not a rotated grid. Rotating the GRID would break it in two ways: "3 divisions" would
    stop meaning three across the frame, and the lines would no longer meet the frame's edges where
    the rule of thirds says they should. This sits over the top instead and leaves it alone.
@@ -162,7 +159,7 @@ export class GridOverlay {
   background-image:
     linear-gradient(to right, transparent calc(50% - 1px), rgb(27 26 31 / 26%) calc(50% - 1px) calc(50% + 1px), transparent calc(50% + 1px)),
     linear-gradient(to bottom, transparent calc(50% - 1px), rgb(27 26 31 / 26%) calc(50% - 1px) calc(50% + 1px), transparent calc(50% + 1px));}
-`;
-    document.head.appendChild(style);
+`,
+    );
   }
 }

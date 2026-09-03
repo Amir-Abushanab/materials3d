@@ -1,5 +1,5 @@
 /**
- * The post pass, as a node graph — the twin of POST_FRAG.
+ * The post pass, as a node graph, the twin of POST_FRAG.
  *
  * The largest single shader in the renderer, and the one whose ordering carries the most meaning:
  * the depth-of-field gather runs over PREMULTIPLIED colour, everything after it over straight
@@ -9,16 +9,17 @@
  */
 import { TSL } from "three/webgpu";
 import type { Texture } from "three/webgpu";
-import { tonemapAces, tonemapNeutral } from "./common";
-
-type Vec = any;
+import {
+  decodeDepth,
+  GOLDEN_ANGLE,
+  mix,
+  select,
+  tonemapAces,
+  tonemapNeutral,
+  type Vec,
+} from "./common";
 
 const { Fn, float, vec2, vec3, vec4, texture, uv } = TSL;
-// CONDITION FIRST — see the note in `nodes/common`.
-const select = (cond: Vec, ifTrue: Vec, ifFalse: Vec): Vec => TSL.select(cond, ifTrue, ifFalse);
-const mix = (a: Vec, b: Vec, t: Vec): Vec => TSL.mix(a, b, t);
-
-const GOLDEN_ANGLE = 2.39996323;
 
 export interface PostUniforms {
   color: Texture;
@@ -40,7 +41,7 @@ export interface PostUniforms {
    *  folds in the storage inversion and is therefore only good for READS. */
   sceneMirror: Vec;
   /** 1 when the source targets are blit-written and therefore stored row-inverted, 0 when they
-   *  are plain textures — as in the parity harness. See `blitUv` in ./passes. */
+   *  are plain textures, as in the parity harness. See `blitUv` in ./passes. */
   sourceInverted: Vec;
   bloomThresh: Vec;
   caustics: Vec;
@@ -53,9 +54,6 @@ export interface PostUniforms {
   transparent: Vec;
   toneMap: Vec;
 }
-
-/** The two-channel linear depth the depth passes write. */
-const decodeDepth = (rg: Vec): Vec => rg.x.add(rg.y.div(255));
 
 /**
  * Weight bloom by SATURATION rather than brightness.
@@ -71,15 +69,15 @@ export const postPass = (u: PostUniforms) =>
     //
     // `vUv` is where to READ the source, corrected for how the frame is stored in its target.
     // `screen` is where the output pixel IS. POST_FRAG uses one variable for both, because for it
-    // they coincide — nothing needs correcting there.
+    // they coincide, nothing needs correcting there.
     //
-    // Everything that keys off position on the SCREEN — the caustic pool, the haze ramp, the
-    // vignette, the grain — takes `screen`. Reading them from `vUv` puts the haze band at the top
+    // Everything that keys off position on the SCREEN, the caustic pool, the haze ramp, the
+    // vignette, the grain, takes `screen`. Reading them from `vUv` puts the haze band at the top
     // of the frame where the reference puts it at the bottom, which on `skewer` was worth 9 of the
     // 22 levels of difference between the two engines.
     const vUv = mix(uv(), vec2(1).sub(uv()), u.mirror.step(0.5));
-    // The SCENE's mirror, which is not `u.mirror`. That one is the read correction — the scene
-    // mirror XORed with the storage inversion — and cannot answer "where is this pixel on a
+    // The SCENE's mirror, which is not `u.mirror`. That one is the read correction, the scene
+    // mirror XORed with the storage inversion, and cannot answer "where is this pixel on a
     // mirrored screen". POST_FRAG has one coordinate for both because nothing it reads is stored
     // inverted, so its ramps mirror for free; here they have to be told. Without this, turning
     // `mirrorV` on left the haze band and the caustic pool at the unmirrored end of the frame.
@@ -88,7 +86,7 @@ export const postPass = (u: PostUniforms) =>
     /**
      * A neighbour of `vUv`, given an offset expressed the way POST_FRAG expresses it.
      *
-     * `vUv` is vertically mirrored against the screen — that is what it is FOR — so a raw `+y`
+     * `vUv` is vertically mirrored against the screen, that is what it is FOR, so a raw `+y`
      * added to it walks DOWN the frame where the reference's identical `+y` walks up. Every gather
      * in this pass is directional, and the caustic pool is deliberately one-sided, so the mirrored
      * ones pooled light above the glass instead of below it. Worth 3.9 of `skewer`'s difference
@@ -138,7 +136,7 @@ export const postPass = (u: PostUniforms) =>
     const alphaIn = acc.a;
     const straight = acc.rgb.div(alphaIn.max(1e-4));
 
-    // Either the gather or the pyramid, never both — two answers to one question, and summing them
+    // Either the gather or the pyramid, never both, two answers to one question, and summing them
     // doubles the halo.
     const bloom = select(
       u.bloomMode.greaterThan(0.5),

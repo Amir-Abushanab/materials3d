@@ -1,10 +1,10 @@
 /**
- * Simplex noise on the skewed simplicial lattice, adapted from Vercel's `@vgpu/wgsl-std` (MIT —
+ * Simplex noise on the skewed simplicial lattice, adapted from Vercel's `@vgpu/wgsl-std` (MIT,
  * see THIRD-PARTY-NOTICES.md). Algorithms are Perlin 2001 / Gustavson's "Simplex noise
  * demystified"; this is a TypeScript transcription of their WGSL, not of any GLSL original.
  *
  * It exists because the alternative is worse in a specific way. A field built from a product of
- * sines — which is what this replaced — has its zeros on a regular lattice and its extrema on
+ * sines, which is what this replaced, has its zeros on a regular lattice and its extrema on
  * another, so anything displaced by it acquires structure aligned to the axes. On a shape meant to
  * read as organic that is exactly the wrong artefact, and no amount of octave stacking removes it
  * because every octave has the same alignment.
@@ -18,11 +18,11 @@
  *   every simplex face.
  *
  *   Gradients come from an integer hash rather than a permutation table, which gives a 2^32-cell
- *   period instead of the folklore period-289 float hash — worth having here because a blob is
+ *   period instead of the folklore period-289 float hash, worth having here because a blob is
  *   seeded and a short period would make different seeds visibly rhyme.
  */
 
-/** (sqrt(3) - 1) / 2 and friends, as literals — the reference spells them out for determinism. */
+/** (sqrt(3) - 1) / 2 and friends, as literals, the reference spells them out for determinism. */
 const F3 = 1 / 3;
 const G3 = 1 / 6;
 const G3_2 = 1 / 3;
@@ -47,7 +47,7 @@ function pcg3d(x: number, y: number, z: number): number {
  * Perlin's twelve cube-edge gradients, dotted with `d`.
  *
  * The pair index picks which two components take part and the low bits are their signs, so the
- * whole dot product is an add and two negations — no table, no multiplies.
+ * whole dot product is an add and two negations, no table, no multiplies.
  */
 function gradDot3(index: number, dx: number, dy: number, dz: number): number {
   const pair = Math.floor(index / 4);

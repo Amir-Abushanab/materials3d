@@ -33,7 +33,7 @@ describe("simplex3d", () => {
       hi = Math.max(hi, v);
     }
     expect(Math.max(Math.abs(lo), Math.abs(hi))).toBeLessThanOrEqual(0.98854);
-    // And it must actually use the range — a bound satisfied by returning zero is not a test.
+    // And it must actually use the range, a bound satisfied by returning zero is not a test.
     expect(hi).toBeGreaterThan(0.5);
     expect(lo).toBeLessThan(-0.5);
   });
@@ -51,7 +51,7 @@ describe("simplex3d", () => {
   });
 
   it("has no axis-aligned structure, which is the whole reason it replaced the sines", () => {
-    // A product of sines — what the blob used before — has its zeros on a regular lattice, so a
+    // A product of sines, what the blob used before, has its zeros on a regular lattice, so a
     // field sampled along an axis correlates strongly with itself one period later. Simplex does
     // not. Comparing the two directly is the only check that speaks to the actual defect.
     // One full period of the sine field along x.
@@ -61,7 +61,10 @@ describe("simplex3d", () => {
   });
 
   it("is deterministic and seed-separable", () => {
-    expect(simplex3d(1.5, -2.25, 0.75)).toBe(simplex3d(1.5, -2.25, 0.75));
+    // Pinned rather than compared with itself: the same coordinates must give the same lump on
+    // every machine and in every export, and a port that drifts in its hash or its kernel moves
+    // this value.
+    expect(simplex3d(1.5, -2.25, 0.75)).toBeCloseTo(-0.25048828125, 12);
     // Different seeds must not rhyme. The integer hash gives a 2^32-cell period where the folklore
     // float hash repeats every 289 cells, which at blob scale is close enough to be visible.
     const a = Array.from({ length: 64 }, (_, i) => simplex3d(i * 0.3, 11.0, 0.5));

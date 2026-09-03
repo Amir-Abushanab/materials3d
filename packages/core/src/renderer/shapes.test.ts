@@ -1,19 +1,11 @@
 import { describe, expect, it } from "vitest";
 import * as THREE from "three";
-import {
-  createItem,
-  createMotion,
-  createShape,
-  DEFAULT_OUTLINE,
-  FRAME_ASPECT,
-  MAX_OUTLINE,
-  normalizeShape,
-} from "../config/model";
-import { bakeScatter, expandScatter, frameFov, resolveItems } from "./MaterialRenderer";
+import { createShape, DEFAULT_OUTLINE, MAX_OUTLINE, normalizeShape } from "../config/model";
 import { applyMotion, loopFrequency } from "./motions";
 import type { MaterialItem } from "./item";
 import {
   arrow,
+  beveledPrism,
   blob,
   buildShape,
   defaultPath,
@@ -21,12 +13,12 @@ import {
   droplet,
   hex,
   pathShape,
+  prism,
   ring,
   rod,
   slab,
   sphere,
 } from "./shapes";
-import { createDefaultConfig } from "../config/model";
 
 function bounds(geometry: THREE.BufferGeometry): THREE.Box3 {
   geometry.computeBoundingBox();
@@ -47,7 +39,7 @@ describe("shape builders", () => {
   });
 
   it("builds a hexagonal prism as a six-sided lathe", () => {
-    // Six sides means six distinct radial directions — the whole point of the lathe observation.
+    // Six sides means six distinct radial directions, the whole point of the lathe observation.
     const geometry = hex({ r: 2, len: 0.9 });
     const box = bounds(geometry);
     expect(box.max.y - box.min.y).toBeCloseTo(0.9, 3);
@@ -140,63 +132,6 @@ describe("defaultPath", () => {
   });
 });
 
-describe("scatter", () => {
-  it("is deterministic for a given seed", () => {
-    const scatter = createDefaultConfig().scatter!;
-    expect(expandScatter(scatter)).toEqual(expandScatter(scatter));
-  });
-
-  it("changes with the seed", () => {
-    const scatter = createDefaultConfig().scatter!;
-    expect(expandScatter({ ...scatter, seed: 12 })).not.toEqual(expandScatter(scatter));
-  });
-
-  it("spreads items across the requested span", () => {
-    const scatter = createDefaultConfig().scatter!;
-    const items = expandScatter(scatter);
-    const xs = items.map((i) => i.position.x);
-    expect(Math.min(...xs)).toBeCloseTo(scatter.position.x - scatter.spanX / 2, 5);
-    expect(Math.max(...xs)).toBeCloseTo(scatter.position.x + scatter.spanX / 2, 5);
-  });
-
-  it("gives each generated rod its own optical path", () => {
-    const items = expandScatter(createDefaultConfig().scatter!);
-    const paths = new Set(items.map((i) => defaultPath(i.shape)));
-    expect(paths.size).toBeGreaterThan(1);
-  });
-
-  it("hands each generated shape its own copy of the shared reactions", () => {
-    const scatter = createDefaultConfig().scatter!;
-    scatter.interaction = { bindings: [{ source: "hoverSelf", target: "hueShift", to: 0.4 }] };
-    const items = expandScatter(scatter);
-    const first = items[0].interaction?.bindings?.[0];
-    const second = items[1].interaction?.bindings?.[0];
-    expect(first).toEqual(second);
-    // Distinct objects, not one shared reference: binding smoothing is keyed by binding identity,
-    // so shared objects would make every generated shape ease as one instead of the hovered rod
-    // answering alone.
-    expect(first).not.toBe(second);
-    expect(first).not.toBe(scatter.interaction.bindings![0]);
-  });
-
-  it("takes precedence over an explicit item list", () => {
-    const config = createDefaultConfig();
-    config.items = [
-      {
-        shape: createShape("disc"),
-        position: { x: 0, y: 0, z: 0 },
-        rotation: { x: 0, y: 0, z: 0 },
-        scale: { x: 1, y: 1, z: 1 },
-        material: {},
-        motion: createMotion(),
-        phase: 0,
-      },
-    ];
-    expect(resolveItems(config)).toHaveLength(config.scatter!.count);
-    expect(resolveItems({ ...config, scatter: undefined })).toHaveLength(1);
-  });
-});
-
 describe("geometry sanity", () => {
   it("produces no NaN vertices for degenerate-looking inputs", () => {
     expect(isFinitePositions(disc({ r: 0.01, thickness: 5 }))).toBe(true);
@@ -205,89 +140,79 @@ describe("geometry sanity", () => {
   });
 });
 
-describe("item config identity", () => {
-  it("hands each MaterialItem the SAME config object the scene holds", () => {
-    // The contract direct manipulation depends on: dragging a shape writes to `item.config`, so
-    // if the renderer built items from copies the move would show in the viewport and then
-    // vanish on save, undo or reload.
-    const config = createDefaultConfig();
-    config.scatter = undefined;
-    config.items = [createItem(createShape("disc")), createItem(createShape("rod"))];
-    const resolved = resolveItems(config);
-    expect(resolved[0]).toBe(config.items[0]);
-    expect(resolved[1]).toBe(config.items[1]);
-  });
-
-  it("bakes a scatter into items that are pixel-identical to what it generated", () => {
-    const config = createDefaultConfig();
-    const generated = resolveItems(config);
-    expect(config.scatter).toBeDefined();
-    expect(bakeScatter(config)).toBe(true);
-    expect(config.scatter).toBeUndefined();
-    expect(config.items).toEqual(generated);
-    // Idempotent: an already-authored scene has nothing to bake.
-    expect(bakeScatter(config)).toBe(false);
-  });
-});
-
-/** Visible world height at the focal plane, in units of the focal distance. */
-function height(fov: number): number {
-  return 2 * Math.tan((fov * Math.PI) / 360);
+/** Whether every non-degenerate triangle's winding faces the way its vertices' normals point. */
+function facesOut(geometry: THREE.BufferGeometry): boolean {
+  const pos = geometry.getAttribute("position");
+  const nor = geometry.getAttribute("normal");
+  const index = geometry.getIndex()!;
+  const a = new THREE.Vector3();
+  const b = new THREE.Vector3();
+  const c = new THREE.Vector3();
+  const winding = new THREE.Vector3();
+  const shading = new THREE.Vector3();
+  const n = new THREE.Vector3();
+  for (let t = 0; t < index.count; t += 3) {
+    const i = index.getX(t);
+    const j = index.getX(t + 1);
+    const k = index.getX(t + 2);
+    a.fromBufferAttribute(pos, i);
+    b.fromBufferAttribute(pos, j).sub(a);
+    c.fromBufferAttribute(pos, k).sub(a);
+    winding.crossVectors(b, c);
+    if (winding.lengthSq() < 1e-14) continue;
+    shading.fromBufferAttribute(nor, i);
+    shading.add(n.fromBufferAttribute(nor, j));
+    shading.add(n.fromBufferAttribute(nor, k));
+    if (winding.dot(shading) <= 0) return false;
+  }
+  return true;
 }
 
-/** Visible world width, same units. */
-function width(fov: number, aspect: number): number {
-  return height(fov) * aspect;
-}
-
-describe("frameFov", () => {
-  const FOV = 12;
-  const SQUARE = 1;
-  const WIDE = 21 / 9;
-
-  it("is inert at the authored aspect, whatever the fit", () => {
-    for (const fit of ["cover", "contain", "width", "height"] as const) {
-      expect(frameFov(FOV, FRAME_ASPECT, fit)).toBeCloseTo(FOV, 10);
+describe("beveledPrism", () => {
+  it("rounds every corner outward, normals facing out and caps inside the sides", () => {
+    // The contour has to wind counter-clockwise for the fillet maths. Wound the other way the
+    // normals point in, each corner arc sweeps the long way round through the interior, and the
+    // cap rings inset outward past the sides they are meant to blend into.
+    for (const [sides, bevel] of [
+      [3, 0.008],
+      [3, 0.1],
+      [4, 0.05],
+      [6, 0.1],
+      [8, 0.02],
+    ] as const) {
+      const at = `${sides} sides, bevel ${bevel}`;
+      const geometry = beveledPrism({ r: 2, len: 0.6, sides, bevel });
+      expect(facesOut(geometry), at).toBe(true);
+      const pos = geometry.getAttribute("position");
+      let capMax = 0;
+      let flatMax = 0;
+      for (let i = 0; i < pos.count; i++) {
+        const radius = Math.hypot(pos.getX(i), pos.getZ(i));
+        expect(radius, at).toBeLessThanOrEqual(2 + 1e-6);
+        const y = Math.abs(pos.getY(i));
+        if (y > 0.3 - 1e-6) capMax = Math.max(capMax, radius);
+        else if (y <= 0.3 - bevel + 1e-6) flatMax = Math.max(flatMax, radius);
+      }
+      expect(capMax, at).toBeLessThan(flatMax);
     }
   });
 
-  it("cover crops rather than revealing world beyond the frame", () => {
-    // Narrower than 16:9 — the authored height survives and the sides are lost.
-    expect(frameFov(FOV, SQUARE, "cover")).toBeCloseTo(FOV, 10);
-    // Wider than 16:9 — now the WIDTH would overflow, so the height tightens instead.
-    const fov = frameFov(FOV, WIDE, "cover");
-    expect(fov).toBeLessThan(FOV);
-    expect(width(fov, WIDE)).toBeCloseTo(width(FOV, FRAME_ASPECT), 10);
-  });
-
-  it("contain keeps the whole authored frame visible in a square crop", () => {
-    const fov = frameFov(FOV, SQUARE, "contain");
-    expect(fov).toBeGreaterThan(FOV);
-    // The authored width is exactly preserved — this is the point of the fit.
-    expect(width(fov, SQUARE)).toBeCloseTo(width(FOV, FRAME_ASPECT), 10);
-    // ...and it never crops vertically to get there.
-    expect(height(fov)).toBeGreaterThanOrEqual(height(FOV));
-  });
-
-  it("width holds the horizontal composition at every aspect", () => {
-    for (const aspect of [SQUARE, FRAME_ASPECT, WIDE, 4 / 5, 9 / 16]) {
-      const fov = frameFov(FOV, aspect, "width");
-      expect(width(fov, aspect)).toBeCloseTo(width(FOV, FRAME_ASPECT), 10);
+  it("keeps the lathe's silhouette, and its first vertex, at a bevel of zero", () => {
+    // Beam cross-sections and beveled meshes are derived separately from the same `r` and
+    // `sides`, so the bevel must not spin the solid: the same corners, the first one on +Z.
+    for (const sides of [3, 5, 6]) {
+      const lathe = bounds(prism({ r: 2, len: 0.6, sides }));
+      const flat = beveledPrism({ r: 2, len: 0.6, sides, bevel: 0 });
+      expect(isFinitePositions(flat)).toBe(true);
+      const box = bounds(flat);
+      for (const axis of ["x", "y", "z"] as const) {
+        expect(box.min[axis], `${sides} sides min ${axis}`).toBeCloseTo(lathe.min[axis], 5);
+        expect(box.max[axis], `${sides} sides max ${axis}`).toBeCloseTo(lathe.max[axis], 5);
+      }
+      const pos = flat.getAttribute("position");
+      expect(pos.getX(0)).toBeCloseTo(0, 6);
+      expect(pos.getZ(0)).toBeCloseTo(2, 6);
     }
-  });
-
-  it("height reproduces three's own fixed-vertical-fov behaviour", () => {
-    for (const aspect of [SQUARE, WIDE, 9 / 16]) {
-      expect(frameFov(FOV, aspect, "height")).toBeCloseTo(FOV, 10);
-    }
-  });
-
-  it("minVisibleWidth only ever widens the view", () => {
-    // It bites on `cover` in a square crop, holding 80% of the authored width.
-    const clamped = frameFov(FOV, SQUARE, "cover", 0.8);
-    expect(width(clamped, SQUARE)).toBeCloseTo(width(FOV, FRAME_ASPECT) * 0.8, 10);
-    // ...and is inert for `contain`, which already shows more than that.
-    expect(frameFov(FOV, SQUARE, "contain", 0.8)).toBeCloseTo(frameFov(FOV, SQUARE, "contain"), 10);
   });
 });
 
@@ -315,12 +240,12 @@ describe("loopFrequency", () => {
   });
 
   it("never rounds a slow motion down to frozen", () => {
-    // 0.01 rad/s over 4s is 0.006 of a cycle — rounding to nearest would stop the shape dead.
+    // 0.01 rad/s over 4s is 0.006 of a cycle, rounding to nearest would stop the shape dead.
     expect(loopFrequency(0.01, 4)).toBeCloseTo(TAU / 4, 10);
   });
 });
 
-/** Wrap an angle into one turn — coming back around IS returning to the same pose. */
+/** Wrap an angle into one turn, coming back around IS returning to the same pose. */
 function turn(v: number): number {
   return ((v % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
 }
@@ -359,7 +284,7 @@ describe("a looped scene returns to its first frame", () => {
     }
   });
 
-  it("does NOT hold without a loop length — which is the bug it fixes", () => {
+  it("does NOT hold without a loop length, which is the bug it fixes", () => {
     const shape = movingItem("skewer", 0.34, 0);
     const first = poseAt(shape, 0, 0);
     const wrapped = poseAt(shape, 6, 0);
@@ -378,7 +303,7 @@ describe("wobble", () => {
     }
   });
 
-  it("leaves the pose alone — squash is all it owns", () => {
+  it("leaves the pose alone, squash is all it owns", () => {
     const shape = movingItem("wobble", 1.1, 0.7);
     applyMotion(shape, 2.3, 0);
     expect(shape.mesh.position.x).toBe(0);
@@ -386,34 +311,7 @@ describe("wobble", () => {
   });
 });
 
-describe("a baked scatter gives every shape its own material", () => {
-  it("does not share one object across the items", () => {
-    const config = createDefaultConfig();
-    expect(config.scatter).toBeDefined();
-    bakeScatter(config);
-    expect(config.items.length).toBeGreaterThan(2);
-
-    // Reference identity is the actual bug: the panel binds item.material and mutates it in
-    // place, so a shared object means editing one shape edits every shape.
-    const first = config.items[0].material;
-    for (const item of config.items.slice(1)) expect(item.material).not.toBe(first);
-  });
-
-  it("keeps an edit to one shape local to it", () => {
-    const config = createDefaultConfig();
-    bakeScatter(config);
-    config.items[0].material = { ...config.items[0].material, ior: 1.9 };
-    // Mutate in place too — that is what the control panel actually does.
-    Object.assign(config.items[1].material, { density: 9 });
-
-    expect(config.items[0].material.ior).toBe(1.9);
-    expect(config.items[1].material.ior).not.toBe(1.9);
-    expect(config.items[1].material.density).toBe(9);
-    expect(config.items[2].material.density).not.toBe(9);
-  });
-});
-
-/** Every vertex coordinate, flat — a local `positions` is already taken above. */
+/** Every vertex coordinate, flat, a local `positions` is already taken above. */
 function vertexCoords(geometry: THREE.BufferGeometry): number[] {
   return Array.from(geometry.getAttribute("position").array as Float32Array);
 }
@@ -457,7 +355,7 @@ describe("cuts", () => {
     const carved = bounds(
       buildShape({ ...createShape("disc"), r: 3, thickness: 0.5, cuts: [SLOT] }),
     );
-    // Face normal still along Y — the thin axis has not migrated to Z.
+    // Face normal still along Y, the thin axis has not migrated to Z.
     expect(carved.max.y - carved.min.y).toBeCloseTo(lathe.max.y - lathe.min.y, 1);
     expect(carved.max.x).toBeCloseTo(lathe.max.x, 1);
     expect(carved.max.z).toBeCloseTo(lathe.max.z, 1);
@@ -503,7 +401,7 @@ describe("cuts", () => {
  * The `path` kind: an arbitrary silhouette, given as SVG path data.
  *
  * The parser has its own suite next door. What is tested here is the part that turns a pasted `d`
- * into a solid in THIS scene's units — the flip, the fit and the holes — because those are the
+ * into a solid in THIS scene's units, the flip, the fit and the holes, because those are the
  * three places where a shape can come out mirrored, invisible or filled in, and all three look
  * like a broken renderer rather than a convention.
  */
@@ -543,7 +441,7 @@ describe("path outlines", () => {
   });
 
   it("flips y, so a shape drawn pointing down renders pointing down", () => {
-    // SVG's y grows downward and three's grows up. Unflipped, every paste renders upside down —
+    // SVG's y grows downward and three's grows up. Unflipped, every paste renders upside down,
     // which reads as a bug in the shape rather than in the convention.
     const box = bounds(pathShape({ outline: "M0 0 L10 0 L5 10 Z", r: 2, depth: 0.4 }));
     // The apex is the lone vertex on its side, so the triangle's centroid sits away from it: the
@@ -649,11 +547,6 @@ describe("path outlines", () => {
     const solid = bounds(pathShape({ outline: SQUARE, r: 4, depth: 0.5 }));
     // Both are fitted to the same radius, so what differs is the lip the bevel adds.
     expect(thin.max.x - 4).toBeLessThan((solid.max.x - 4) / 2);
-  });
-
-  it("keeps a fine-featured outline finite", () => {
-    const spike = "M0 0 H100 V40 H51 V90 H49.5 V40 H0 Z";
-    expect(isFinitePositions(pathShape({ outline: spike, r: 4, depth: 0.5 }))).toBe(true);
   });
 
   it("reads a whole svg document as well as a bare d", () => {

@@ -5,8 +5,10 @@
  * backing buffer (either through `captureStream` or by stepping frames), so nothing drawn here can
  * ever reach the saved file.
  *
- * Ported from Wave Studio; restyled for Materials Studio's light chrome, where a dark pill would shout.
+ * Styled for the studio's light chrome, where a dark pill would shout.
  */
+import { injectStyle } from "../util/dom";
+
 export class RecordingOverlay {
   private readonly el: HTMLDivElement;
   private readonly timeEl: HTMLSpanElement;
@@ -43,10 +45,6 @@ export class RecordingOverlay {
     this.el.remove();
   }
 
-  dispose(): void {
-    this.stop();
-  }
-
   private render(): void {
     const total = Math.max(0, Math.floor((performance.now() - this.startMs) / 1000));
     const minutes = Math.floor(total / 60);
@@ -54,10 +52,9 @@ export class RecordingOverlay {
   }
 
   private static injectStyle(): void {
-    if (document.getElementById("g3-rec-style")) return;
-    const style = document.createElement("style");
-    style.id = "g3-rec-style";
-    style.textContent = `
+    injectStyle(
+      "g3-rec-style",
+      `
 .g3-rec{position:absolute;top:10px;right:10px;z-index:7;display:inline-flex;align-items:center;gap:7px;
   padding:5px 10px 5px 8px;border-radius:999px;background:rgb(27 26 31 / 72%);color:#fff;
   font:600 11px/1 var(--sans);letter-spacing:0.06em;
@@ -66,7 +63,7 @@ export class RecordingOverlay {
   box-shadow:0 0 8px rgb(224 72 60 / 90%);animation:g3-rec-pulse 1.1s ease-in-out infinite;}
 .g3-rec-time{font-variant-numeric:tabular-nums;opacity:0.9;min-width:28px;}
 @keyframes g3-rec-pulse{0%,100%{opacity:1;transform:scale(1);}50%{opacity:0.25;transform:scale(0.8);}}
-@media (prefers-reduced-motion:reduce){.g3-rec-dot{animation:none;}}`;
-    document.head.appendChild(style);
+@media (prefers-reduced-motion:reduce){.g3-rec-dot{animation:none;}}`,
+    );
   }
 }

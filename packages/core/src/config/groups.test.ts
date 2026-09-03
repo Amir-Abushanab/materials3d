@@ -42,7 +42,7 @@ describe("groupItems", () => {
     ]);
   });
 
-  it("refuses a group of one — a group of one is not a group", () => {
+  it("refuses a group of one, a group of one is not a group", () => {
     const config = scene();
     expect(groupItems(config, [config.items[0]])).toBeNull();
     expect(config.groups).toEqual([]);
@@ -76,7 +76,7 @@ describe("groupItems", () => {
     expect(a?.id).toBe("g1");
     expect(b?.id).toBe("g2");
     ungroupItems(config, [config.items[0]]);
-    // g1 is free again, and reusing it is fine — nothing outside the config holds an id.
+    // g1 is free again, and reusing it is fine, nothing outside the config holds an id.
     expect(groupItems(config, [config.items[4], config.items[5]])?.id).toBe("g1");
   });
 });

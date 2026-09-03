@@ -1,19 +1,17 @@
 /**
  * Named lamp palettes.
  *
- * Materials3D has no surface-mapped palette to speak of — Wave Studio bakes gradient stops into a 2D
- * texture the ribbon samples, and its "hero palette" is a 32×32 LUT of one specific image. Neither
- * has an analogue here, because a shape's colour is not painted on: it is the LAMP FIELD behind the
- * glass, seen through it. So a palette in Materials3D is a set of lamp colours.
+ * Materials3D has no surface-mapped palette: a shape's colour is not painted on, it is the LAMP
+ * FIELD behind the glass, seen through it. So a palette here is a set of lamp colours.
  *
- * `reference` is the measured one — the colours the whole renderer was calibrated against. The
+ * `reference` is the measured one, the colours the whole renderer was calibrated against. The
  * others deliberately leave that family; see the hue-distribution note in the studio's randomizer
  * for why the reference has no green and no cyan at all, and why an evenly-swept palette never
  * reproduces it.
  *
  * Colours are display-space hex, like every other colour in the config.
  */
-export const LAMP_PALETTES: Record<string, readonly string[]> = {
+export const LAMP_PALETTES = {
   // The shipped default: warm through magenta into blue-violet.
   reference: [
     "#f8c852",
@@ -27,7 +25,7 @@ export const LAMP_PALETTES: Record<string, readonly string[]> = {
     "#c4d368",
     "#719cdd",
   ],
-  // Warm only — sunset through amber, no cool end at all.
+  // Warm only, sunset through amber, no cool end at all.
   ember: ["#ffd166", "#f9a03f", "#f4713b", "#e8543f", "#d63f4e", "#b8325f", "#f2b544", "#ff8c42"],
   // Cool only. The counterpart to `ember`, and the one that most changes the glass's character.
   glacier: ["#7ee8fa", "#61c3f2", "#5a9ee8", "#6f7fdc", "#8a72d6", "#4fd1c5", "#5eead4", "#93c5fd"],
@@ -42,13 +40,21 @@ export const LAMP_PALETTES: Record<string, readonly string[]> = {
     "#6d28d9",
     "#9333ea",
   ],
-  // Pale and low-chroma — the glass reads as glass rather than as coloured light.
+  // Pale and low-chroma, the glass reads as glass rather than as coloured light.
   bone: ["#f5efe6", "#e8dfd0", "#dcd3c4", "#cfc7bd", "#e3d9c9", "#efe7db", "#d8cfc0", "#f0e9de"],
   // Primary-ish and deliberately unsubtle.
   signal: ["#ff3b30", "#ff9500", "#ffcc00", "#34c759", "#007aff", "#5856d6", "#af52de", "#ff2d55"],
-};
+} as const satisfies Record<string, readonly string[]>;
 
-export const LAMP_PALETTE_NAMES = Object.keys(LAMP_PALETTES);
+/** The name of a shipped lamp palette. */
+export type LampPaletteName = keyof typeof LAMP_PALETTES;
+
+export const LAMP_PALETTE_NAMES = Object.keys(LAMP_PALETTES) as LampPaletteName[];
+
+/** True for a string that names a shipped palette. */
+export function isLampPaletteName(name: string): name is LampPaletteName {
+  return Object.hasOwn(LAMP_PALETTES, name);
+}
 
 /**
  * Recolour a lamp field from a palette, in place, leaving every position and radius alone.
@@ -57,7 +63,7 @@ export const LAMP_PALETTE_NAMES = Object.keys(LAMP_PALETTES);
  * the palette is only its colour, so changing one must never move the other.
  */
 export function applyLampPalette(lamps: { color: string }[], name: string): void {
-  const palette = LAMP_PALETTES[name];
-  if (!palette || palette.length === 0) return;
+  if (!isLampPaletteName(name)) return;
+  const palette: readonly string[] = LAMP_PALETTES[name];
   for (const [index, lamp] of lamps.entries()) lamp.color = palette[index % palette.length];
 }

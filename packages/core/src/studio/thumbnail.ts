@@ -25,7 +25,7 @@ export function createThumbHost(width: number, height: number): HTMLDivElement {
  * image. `dprMax: 1` because the host is already sized in the exact pixels we want.
  *
  * `quality` is deliberately NOT lowered. It scales the render targets *below* the canvas, so the
- * scene would be drawn smaller and upscaled — on a thumbnail that is then displayed on a HiDPI
+ * scene would be drawn smaller and upscaled, on a thumbnail that is then displayed on a HiDPI
  * screen, that is a second softening on top of the first, and the result reads as blurry rather
  * than small. Ask for the pixels you intend to show.
  */
@@ -37,21 +37,23 @@ export function prepThumbConfig(cfg: SceneConfig): void {
   cfg.quality = 1;
 }
 
-/** Render the current config to a fresh 2D canvas (null if the WebGL canvas is missing). */
+/**
+ * Render the current config to a fresh 2D canvas (null if the WebGL canvas is missing).
+ *
+ * Exactly one render. The constructor or the caller's `setConfig` has already sized the targets to
+ * the host and the config's `quality`, and a shader that needs recompiling is compiled inside the
+ * render that first uses it, so a second pass adds nothing. `seek()` rather than `renderOnce()`
+ * because it positions the camera and applies the motion pose first; a bare render would use
+ * whatever pose the previous thumbnail left.
+ */
 export function renderThumbFrame(
   renderer: MaterialRenderer,
   host: HTMLElement,
 ): HTMLCanvasElement | null {
-  renderer.resize();
-  // seek() rather than renderOnce(): it positions the camera and applies the motion pose, which a
-  // bare render does not — a thumbnail taken without it uses whatever pose the last one left.
   renderer.seek(renderer.getConfig().timeOffset);
-  // A second pass so any shader recompile (the post pass's tap count changes with `quality`) has
-  // been applied to the frame we capture.
-  renderer.renderOnce();
   const gl = host.querySelector("canvas");
   if (!gl) return null;
-  // Copy to a 2D canvas before encoding — a reliable read of the WebGL drawing buffer.
+  // Copy to a 2D canvas before encoding, a reliable read of the WebGL drawing buffer.
   const out = document.createElement("canvas");
   out.width = gl.width;
   out.height = gl.height;

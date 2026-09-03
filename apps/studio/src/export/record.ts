@@ -3,14 +3,14 @@
  *
  * No encoder dependency and no frame-by-frame capture: the browser records what the renderer is
  * already drawing. The trade is that it records in real time at whatever framerate the four passes
- * actually sustain — a heavy scene records a slower-looking clip rather than dropping to a
+ * actually sustain: a heavy scene records a slower-looking clip rather than dropping to a
  * deterministic frame walk. For a hero loop that is the right trade; for frame-exact output you
  * would drive `seek()` and mux the stills yourself.
  */
 
 import type { MaterialRenderer } from "@materials3d/core/renderer";
 import { GIFEncoder, applyPalette, quantize } from "gifenc";
-import { MAX_GIF_EDGE, pickVideoMime, type VideoFormat } from "../output/formats";
+import { gifFrameDelayMs, MAX_GIF_EDGE, pickVideoMime, type VideoFormat } from "../output/formats";
 import { parseHex } from "@materials3d/core";
 import { download } from "../util/download";
 import { encodeAnimatedWebp, type WebpAnimFrame } from "./webpMux";
@@ -18,7 +18,7 @@ import { encodeAnimatedWebp, type WebpAnimFrame } from "./webpMux";
 export interface Recording {
   /** Stop early; the file is written either way. */
   stop(): void;
-  /** Resolves with the extension actually used — WebM if the requested container was refused. */
+  /** Resolves with the extension actually used, WebM if the requested container was refused. */
   readonly done: Promise<VideoFormat>;
 }
 
@@ -77,8 +77,11 @@ export interface FrameWalkOptions {
   seconds: number;
   fps: number;
   quality: number;
-  /** Reports progress 0–1 so the button can count frames instead of appearing hung. */
+  /** Reports progress 0 to 1 so the button can count frames instead of appearing hung. */
   onProgress?(fraction: number): void;
+  /** Stop early. Checked between frames; what has been rendered so far is written, exactly as a
+   *  live recording that is stopped is. */
+  signal?: AbortSignal;
 }
 
 /**
@@ -94,7 +97,7 @@ export interface FrameWalkOptions {
  */
 export async function recordAnimatedWebp(
   renderer: MaterialRenderer,
-  { seconds, fps, quality, onProgress }: FrameWalkOptions,
+  { seconds, fps, quality, onProgress, signal }: FrameWalkOptions,
   name: string,
 ): Promise<number> {
   const canvas = renderer.canvas;
@@ -113,11 +116,12 @@ export async function recordAnimatedWebp(
       if (!blob) throw new Error("This browser could not encode a WebP frame");
       frames.push({ file: new Uint8Array(await blob.arrayBuffer()), durationMs });
       onProgress?.((i + 1) / total);
+      if (signal?.aborted) break;
       // Yield between frames so the tab stays responsive and the progress label repaints.
       await new Promise((resolve) => setTimeout(resolve, 0));
     }
     download(encodeAnimatedWebp(frames, canvas.width, canvas.height), `${name}.webp`);
-    return total;
+    return frames.length;
   } finally {
     if (wasRunning) renderer.start();
     else renderer.seek(renderer.getConfig().timeOffset);
@@ -130,14 +134,14 @@ export async function recordAnimatedWebp(
  * GIF is the worst possible container for this renderer's output and it is offered anyway, because
  * some places still only take a GIF. Be clear about the trade: a scene built from smooth gradients
  * and soft depth of field is exactly what a 256-colour palette destroys, so expect banding, and
- * the long edge is capped at {@link MAX_GIF_EDGE} because file size grows with area × frames.
+ * the long edge is capped at {@link MAX_GIF_EDGE} because file size grows with area times frames.
  *
- * Frames are composited onto an opaque background first. GIF's transparency is one bit — a pixel
- * is fully opaque or fully gone — so a soft alpha edge would come out as a hard, speckled fringe.
+ * Frames are composited onto an opaque background first. GIF's transparency is one bit (a pixel
+ * is fully opaque or fully gone), so a soft alpha edge would come out as a hard, speckled fringe.
  */
 export async function recordGif(
   renderer: MaterialRenderer,
-  { seconds, fps, onProgress }: Omit<FrameWalkOptions, "quality">,
+  { seconds, fps, onProgress, signal }: Omit<FrameWalkOptions, "quality">,
   name: string,
 ): Promise<number> {
   const source = renderer.canvas;
@@ -156,8 +160,10 @@ export async function recordGif(
 
   const encoder = GIFEncoder();
   const total = Math.max(1, Math.round(seconds * fps));
-  const delay = Math.round(1000 / fps);
+  // Whole centiseconds, which is all the container can store; the panel shows the resulting rate.
+  const delay = gifFrameDelayMs(fps);
   const wasRunning = renderer.isRunning;
+  let written = 0;
 
   renderer.stop();
   try {
@@ -169,12 +175,14 @@ export async function recordGif(
       const { data } = ctx.getImageData(0, 0, w, h);
       const palette = quantize(data, 256);
       encoder.writeFrame(applyPalette(data, palette), w, h, { palette, delay });
+      written++;
       onProgress?.((i + 1) / total);
+      if (signal?.aborted) break;
       await new Promise((resolve) => setTimeout(resolve, 0));
     }
     encoder.finish();
     download(new Blob([encoder.bytes()], { type: "image/gif" }), `${name}.gif`);
-    return total;
+    return written;
   } finally {
     if (wasRunning) renderer.start();
     else renderer.seek(renderer.getConfig().timeOffset);

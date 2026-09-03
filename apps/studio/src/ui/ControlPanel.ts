@@ -3,7 +3,7 @@
  *
  * One config object is the single source of truth: these bindings mutate **the renderer's own
  * config** in place and then report how expensive the change was. `structural` means geometry has
- * to be rebuilt (item count, shape kinds, quality — which also recompiles the post shader's tap
+ * to be rebuilt (item count, shape kinds, quality, which also recompiles the post shader's tap
  * count); anything else is a uniform push, cheap enough to run on every slider frame.
  *
  * Every section opens expanded: there are only ten, and a collapsed panel hides the one knob that
@@ -68,6 +68,7 @@ import {
   CUSTOM_EXPORT_PRESET,
   EXPORT_PRESETS,
   exportGpuWarning,
+  gifEffectiveFps,
   IMAGE_FORMATS,
   MAX_OUTPUT_DIMENSION,
   MIN_OUTPUT_DIMENSION,
@@ -79,9 +80,9 @@ import { PRESETS } from "@materials3d/core/presets";
 import { applyIcons } from "./icons";
 import { applyControlHints, hideControlHint } from "./controlHints";
 import { PresetPicker } from "./PresetPicker";
-import { PRESET_LABELS } from "../presetLabels";
+import { presetLabel } from "../presetLabels";
 
-export type ChangeHandler = (structural: boolean) => void;
+type ChangeHandler = (structural: boolean) => void;
 
 /** Studio-only view state. Deliberately NOT part of SceneConfig: a guide that ended up in the
  *  config would serialize into share links and exports, where it means nothing. */
@@ -89,7 +90,7 @@ export interface ViewState {
   /**
    * Show the export frame at one export pixel per CSS pixel, letting the stage scroll, instead of
    * scaling it to fit. The frame is otherwise always fitted, so the export dimensions change its
-   * SHAPE but never its on-screen size — which is right for composing and useless for judging how
+   * SHAPE but never its on-screen size, which is right for composing and useless for judging how
    * large anything actually is.
    */
   actualSize: boolean;
@@ -139,7 +140,7 @@ export interface PanelHooks {
    * one. Generated shapes have nowhere to store an edit until that happens.
    */
   onBakeForEdit(index: number): void;
-  /** A shape or a group was renamed — record it, since the name lives in the config. */
+  /** A shape or a group was renamed; record it, since the name lives in the config. */
   onRenamed(label: string): void;
   /** Bind the viewport selection into one group. */
   onGroup(): void;
@@ -162,11 +163,11 @@ export interface PanelHooks {
   /** Show the transparency checkerboard behind the preview when the backdrop is off. */
   onTransparencyChange(transparent: boolean): void;
   onSelectPreset(name: string): void;
-  /** A shape was added or removed — rebuild geometry and record it. */
+  /** A shape was added or removed; rebuild geometry and record it. */
   onShapesChanged(label: string): void;
-  /** The alignment grid changed — redraw the overlay. */
+  /** The alignment grid changed; redraw the overlay. */
   onViewChanged(): void;
-  /** The export size changed — refit the preview frame to the new aspect. */
+  /** The export size changed; refit the preview frame to the new aspect. */
   onOutputSizeChange(): void;
   /** Open a file picker for a backdrop image or video. */
   onPickBackgroundMedia(kind: "image" | "video"): void;
@@ -175,14 +176,14 @@ export interface PanelHooks {
   /** Scroll-preview scrub: fix the scroll signal at 0..1. The studio page never actually
    *  scrolls, so this is how a scroll reaction is authored to an exact position. */
   onScrollPreview(value: number): void;
-  /** Open (toggle) the scroll-test overlay — a scrollable surface over the scene for testing
+  /** Open (toggle) the scroll-test overlay: a scrollable surface over the scene for testing
    *  `scroll` / `scrollVelocity` reactions by actually scrolling (companion to the slider). */
   onOpenScrollTest(): void;
 }
 
-// ---- Interaction authoring (the trigger system ported from wave3d) ----
+// ---- Interaction authoring ----
 
-/** Binding-source options for the studio dropdowns (custom:* is a developer API — not authorable). */
+/** Binding-source options for the studio dropdowns (custom:* is a developer API, not authorable). */
 const IX_SOURCE_OPTIONS: Record<string, string> = {
   Off: "off",
   Scroll: "scroll",
@@ -194,7 +195,7 @@ const IX_SOURCE_OPTIONS: Record<string, string> = {
   "Scroll velocity": "scrollVelocity",
   Appear: "appear",
 };
-/** Item-scope sources: shapes additionally get `hoverSelf` — the cursor over THIS shape (the
+/** Item-scope sources: shapes additionally get `hoverSelf`: the cursor over THIS shape (the
  *  renderer raycasts), where plain Hover is presence over the whole scene. */
 const IX_SOURCE_OPTIONS_ITEM: Record<string, string> = {
   Off: "off",
@@ -226,7 +227,7 @@ const IX_ITEM_TARGETS: Record<string, ItemInteractionTarget> = {
   "Position X": "positionX",
   "Position Y": "positionY",
 };
-/** Per-lamp binding targets — pointerX→X + pointerY→Y is "the lamp follows the cursor". */
+/** Per-lamp binding targets; pointerX→X + pointerY→Y is "the lamp follows the cursor". */
 const IX_LAMP_TARGETS: Record<string, LampInteractionTarget> = {
   X: "x",
   Y: "y",
@@ -246,12 +247,12 @@ const IX_SCENE_TARGETS: Record<string, SceneInteractionTarget> = {
   Caustics: "caustics",
 };
 
-/** Default "to (at full)" per binding target — the value the param reaches at full input. A
+/** Default "to (at full)" per binding target: the value the param reaches at full input. A
  *  blanket 1 is invisible for narrow-range params (dispersion tops out at 0.15), so each target
  *  seeds a clearly-visible swing scaled to its own slider range. Used for a fresh slot and
  *  re-seeded when you switch the target. Anything unlisted falls back to 1. */
 const IX_TARGET_DEFAULT_TO: Record<string, number> = {
-  // Shape targets (ranges mirror MATERIAL_RANGES / the position sliders).
+  // Shape targets (see RANGES for the sliders these swing over).
   density: 7, // 0..12
   ior: 1.9, // 1.01..2.5
   dispersion: 0.1, // 0..0.15
@@ -259,11 +260,11 @@ const IX_TARGET_DEFAULT_TO: Record<string, number> = {
   rim: 1, // 0..1
   specular: 2.2, // 0..3
   saturation: 1.7, // 0..2
-  hueShift: 0.4, // -1..1 turns — far enough round the wheel to be unmistakable
+  hueShift: 0.4, // -1..1 turns, far enough round the wheel to be unmistakable
   emission: 0.6, // 0..1
   ripple: 1, // 0..1
   iridescence: 1, // 0..1
-  filmNm: 900, // 100..1200 — sweeps the colour bands
+  filmNm: 900, // 100..1200, sweeps the colour bands
   positionX: 4,
   positionY: 3,
   // Lamp targets (plate space).
@@ -284,10 +285,21 @@ const IX_TARGET_DEFAULT_TO: Record<string, number> = {
 };
 const defaultToFor = (target: string): number => IX_TARGET_DEFAULT_TO[target] ?? 1;
 
-/** Slider range per binding target, mirroring the section sliders — so "to (at full)" is a real
- *  slider over the param's own sensible range instead of a bare drag-a-number field. */
-const IX_TARGET_RANGES: Record<string, { min: number; max: number; step: number }> = {
-  // Shape targets (MATERIAL_RANGES / the position gizmo).
+/** A type alias rather than an interface: Tweakpane's `BindingParams` wants an implicit index
+ *  signature, which only an object type alias gets. */
+type SliderRange = { min: number; max: number; step: number };
+
+/**
+ * Slider range per parameter, keyed by the name the config and the binding targets share.
+ *
+ * One table, because the same knob is offered in up to three places: a material row, a reaction's
+ * "to (at full)" slider, and (for lamps and the post stack) the section's own row. Declared once
+ * they cannot drift apart, and a parameter added here is a real slider everywhere rather than an
+ * unclamped number field in one of them, which is how `bend` and `magnify` shipped.
+ */
+const RANGES: Record<string, SliderRange> = {
+  // Material.
+  path: { min: 0.02, max: 4, step: 0.01 },
   density: { min: 0, max: 12, step: 0.05 },
   ior: { min: 1.01, max: 2.5, step: 0.01 },
   dispersion: { min: 0, max: 0.15, step: 0.001 },
@@ -299,17 +311,23 @@ const IX_TARGET_RANGES: Record<string, { min: number; max: number; step: number 
   saturation: { min: 0, max: 2, step: 0.01 },
   hueShift: { min: -1, max: 1, step: 0.01 },
   emission: { min: 0, max: 1, step: 0.01 },
+  roughness: { min: 0, max: 1, step: 0.01 },
+  sparkle: { min: 0, max: 1, step: 0.01 },
+  sparkleScale: { min: 2, max: 120, step: 1 },
   ripple: { min: 0, max: 1, step: 0.01 },
+  rippleScale: { min: 0.1, max: 8, step: 0.05 },
+  flow: { min: 0, max: 4, step: 0.01 },
   iridescence: { min: 0, max: 1, step: 0.01 },
   filmNm: { min: 100, max: 1200, step: 5 },
+  // A shape's position, as a reaction target.
   positionX: { min: -10, max: 10, step: 0.05 },
   positionY: { min: -7, max: 7, step: 0.05 },
-  // Lamp targets (the lamp sliders' own ranges).
+  // Lamps, in plate space.
   x: { min: -0.5, max: 1.5, step: 0.005 },
   y: { min: -0.5, max: 1.5, step: 0.005 },
   radius: { min: 0.01, max: 0.6, step: 0.002 },
   intensity: { min: 0, max: 3, step: 0.01 },
-  // Scene targets (the Post / Lamps / Camera sliders' own ranges).
+  // Scene: the Post, Lamps and Camera rows, and the reactions that drive them.
   timeOffset: { min: 0, max: 60, step: 0.1 },
   cameraZoom: { min: 0.4, max: 3, step: 0.01 },
   lampGain: { min: 0, max: 5, step: 0.01 },
@@ -320,8 +338,7 @@ const IX_TARGET_RANGES: Record<string, { min: number; max: number; step: number 
   grain: { min: 0, max: 0.08, step: 0.001 },
   caustics: { min: 0, max: 2, step: 0.01 },
 };
-const rangeFor = (target: string): { min: number; max: number; step: number } =>
-  IX_TARGET_RANGES[target] ?? { min: 0, max: 1, step: 0.01 };
+const rangeFor = (key: string): SliderRange => RANGES[key] ?? { min: 0, max: 1, step: 0.01 };
 
 /** Panel-local model for one binding slot. */
 interface UiSlot {
@@ -375,31 +392,10 @@ function turnsToStagger(turns: number, count: number): number {
   return count > 0 ? (turns * Math.PI * 2) / count : 0;
 }
 
-const MATERIAL_RANGES: Record<string, { min: number; max: number; step: number }> = {
-  path: { min: 0.02, max: 4, step: 0.01 },
-  density: { min: 0, max: 12, step: 0.05 },
-  ior: { min: 1.01, max: 2.5, step: 0.01 },
-  dispersion: { min: 0, max: 0.15, step: 0.001 },
-  lens: { min: 0, max: 0.3, step: 0.001 },
-  rim: { min: 0, max: 1, step: 0.01 },
-  specular: { min: 0, max: 3, step: 0.01 },
-  saturation: { min: 0, max: 2, step: 0.01 },
-  hueShift: { min: -1, max: 1, step: 0.01 },
-  emission: { min: 0, max: 1, step: 0.01 },
-  roughness: { min: 0, max: 1, step: 0.01 },
-  sparkle: { min: 0, max: 1, step: 0.01 },
-  sparkleScale: { min: 2, max: 120, step: 1 },
-  ripple: { min: 0, max: 1, step: 0.01 },
-  rippleScale: { min: 0.1, max: 8, step: 0.05 },
-  flow: { min: 0, max: 4, step: 0.01 },
-  iridescence: { min: 0, max: 1, step: 0.01 },
-  filmNm: { min: 100, max: 1200, step: 5 },
-};
-
 /**
  * Which knobs each material kind actually uses.
  *
- * The config is a flat superset rather than a union, so switching kinds never destroys settings —
+ * The config is a flat superset rather than a union, so switching kinds never destroys settings,
  * but that only works if the panel hides what the shader is ignoring. A `density` slider on a
  * ceramic does nothing, and a control that does nothing is worse than no control.
  */
@@ -422,11 +418,11 @@ const OPAQUE_KEYS = ["roughness", "rim", "specular", "saturation", "emission"] a
 /**
  * Fill in every material field the panel binds, in place.
  *
- * An item's `material` is a SPARSE override set by design — presets carry only what differs from
+ * An item's `material` is a SPARSE override set by design: presets carry only what differs from
  * the defaults, and the renderer resolves the rest at use time. Tweakpane cannot bind `undefined`,
  * so the panel has to make it concrete first. Derived from `createMaterial()` rather than written
  * out by hand, because a hand-maintained copy silently falls behind every field added to the
- * model — which is exactly what happened when the material kinds landed.
+ * model, which is exactly what happened when the material kinds landed.
  *
  * `path` is deliberately left out: it is shape-derived, and the panel only offers it when a shape
  * has actually overridden it.
@@ -448,7 +444,7 @@ function matchMetal(albedo: string | undefined): string {
 /** Tweakpane's own marker for an open folder. */
 const EXPANDED = "tp-fldv-expanded";
 
-/** The shapes whose `sides` field means something — the ones built as extruded polygons. */
+/** The shapes whose `sides` field means something: the ones built as extruded polygons. */
 const faceted = (k: ShapeKind) => k === "prism" || k === "hex";
 
 export class ControlPanel {
@@ -473,9 +469,9 @@ export class ControlPanel {
    *  a group ancestor's fold would steal the selection it is echoing. */
   private foldSync = false;
   /** How many shapes the viewport has selected. Drives whether the bulk editor targets the
-   *  selection or the whole scene — see {@link addAllShapes}. */
+   *  selection or the whole scene; see {@link addAllShapes}. */
   private selectionCount = 0;
-  /** Staged motion + material for the bulk editor. Survives pane rebuilds — see {@link addAllShapes}. */
+  /** Staged motion + material for the bulk editor. Survives pane rebuilds; see {@link addAllShapes}. */
   private bulkDraft?: { motion: MotionConfig; material: Partial<MaterialConfig> };
   /** The bulk editor's title and apply buttons, so a growing marquee can relabel them in place. */
   private bulkTitle?: HTMLElement;
@@ -517,9 +513,6 @@ export class ControlPanel {
   setSelectionCount(count: number): void {
     const had = this.selectionCount > 1;
     this.selectionCount = count;
-    // Rebuild only when crossing the boundary between "a selection to target" and "no selection",
-    // since that is the only thing that changes what the bulk editor DOES. Rebuilding on every
-    // marquee tick would rebuild the pane dozens of times while dragging a rubber band.
     if (had !== count > 1) {
       this.rebuild();
       return;
@@ -555,14 +548,26 @@ export class ControlPanel {
     if (index === null) return;
     const folder = this.itemFolders.get(index);
     if (!folder) return;
-    this.foldSync = true;
-    try {
-      this.revealFolder(folder);
-    } finally {
-      this.foldSync = false;
-    }
+    this.withFoldSync(() => this.revealFolder(folder));
     folder.classList.add("is-focused");
     folder.scrollIntoView({ block: "center", behavior: "smooth" });
+  }
+
+  /**
+   * Run `fn` with the fold handlers told that the expansion is the panel's own, not a person's.
+   *
+   * focusItem, a search and restoreView all click real fold toggles, and a folder opening for one
+   * of those reasons must not read as "locate this shape" and move the viewport selection: a
+   * rebuild re-opening a group's folder would otherwise steal the selection it was echoing.
+   */
+  private withFoldSync(fn: () => void): void {
+    const was = this.foldSync;
+    this.foldSync = true;
+    try {
+      fn();
+    } finally {
+      this.foldSync = was;
+    }
   }
 
   /**
@@ -583,17 +588,17 @@ export class ControlPanel {
     for (const folder of chain.toReversed()) {
       // Tweakpane exposes expansion through its API object, but the title button is the same
       // toggle and is what a person would click; clicking it is simpler than threading the API
-      // through. `querySelector` finds this folder's OWN container first, since it is the nearest
-      // descendant — nested folders' containers come later in document order.
-      if (folder.querySelector(".tp-fldv_c")?.clientHeight === 0) {
-        folder.querySelector<HTMLElement>(".tp-fldv_b")?.click();
+      // through. The expanded CLASS rather than the container's height: reading a height forces
+      // layout after every click, and a search reveals dozens of folders at once.
+      if (!folder.classList.contains(EXPANDED)) {
+        folder.querySelector<HTMLElement>(":scope > .tp-fldv_b")?.click();
       }
     }
   }
 
   /**
    * Filter the panel to what `query` matches. The matching itself lives in `controlSearch`, which
-   * is testable on its own; what stays here is the Tweakpane part — opening the folders a match
+   * is testable on its own; what stays here is the Tweakpane part: opening the folders a match
    * was found in, and putting the panel back the way it was when the search is cleared.
    */
   private applySearch(query: string): void {
@@ -609,10 +614,13 @@ export class ControlPanel {
     }
     this.viewBeforeSearch ??= this.captureView();
     // Outside in: a member's own toggle does nothing while its group is collapsed.
-    for (const folder of applySearch(this.host, query)) this.revealFolder(folder);
+    const matches = applySearch(this.host, query);
+    this.withFoldSync(() => {
+      for (const folder of matches) this.revealFolder(folder);
+    });
   }
 
-  /** Re-apply the active filter — the panel's DOM is replaced wholesale on a rebuild. */
+  /** Re-apply the active filter: the panel's DOM is replaced wholesale on a rebuild. */
   private reapplySearch(): void {
     if (this.searchQuery) this.applySearch(this.searchQuery);
   }
@@ -637,15 +645,9 @@ export class ControlPanel {
     this.presets?.refreshThumbs();
   }
 
-  /** Redraw the inputs after the config was mutated from outside (shuffle, JSON apply). */
+  /** Redraw the inputs after the config was mutated from outside (a gesture, the dev bridge). */
   refresh(): void {
     this.syncInputs();
-  }
-
-  dispose(): void {
-    hideControlHint(); // an open tooltip is anchored to DOM about to vanish
-    this.flushTyping();
-    this.pane.dispose();
   }
 
   private searchQuery = "";
@@ -667,7 +669,7 @@ export class ControlPanel {
    * Which folders are open, and where the pane is scrolled to.
    *
    * A rebuild throws the whole pane away and builds a fresh one, so without this every structural
-   * edit — changing a material kind is the common one, since the kind decides which rows exist —
+   * edit (changing a material kind is the common one, since the kind decides which rows exist)
    * snaps you back to the top with every folder at its default. The knob you were turning ends up
    * somewhere off screen.
    *
@@ -689,14 +691,23 @@ export class ControlPanel {
     // chasing a moving target. Suppressed for the duration, so the restored pane simply *is* the
     // shape it was.
     this.host.classList.add("is-restoring");
+    // Reads first (the keys walk titles, the state is a class), then the clicks, so the writes
+    // never interleave with a layout read.
+    const toggles: HTMLElement[] = [];
     for (const el of this.host.querySelectorAll<HTMLElement>(".tp-fldv")) {
       const key = ControlPanel.folderKey(el);
       const isOpen = el.classList.contains(EXPANDED);
       const wanted = view.open.has(key) ? true : view.closed.has(key) ? false : isOpen;
       // Click the title rather than set `expanded` on the API: the element is what we have here,
       // and a click is also what makes a lazily-built shape folder fill itself in.
-      if (wanted !== isOpen) el.querySelector<HTMLElement>(":scope > .tp-fldv_b")?.click();
+      if (wanted !== isOpen) {
+        const toggle = el.querySelector<HTMLElement>(":scope > .tp-fldv_b");
+        if (toggle) toggles.push(toggle);
+      }
     }
+    this.withFoldSync(() => {
+      for (const toggle of toggles) toggle.click();
+    });
     this.host.scrollTop = view.scroll;
     void this.host.offsetHeight; // commit the un-animated heights before transitions come back
     this.host.classList.remove("is-restoring");
@@ -729,9 +740,14 @@ export class ControlPanel {
   private build(): Pane {
     const pane = new Pane({ container: this.host });
     // One handler for every binding that only moves uniforms; structural bindings opt in below.
-    pane.on("change", () => this.hooks.onChange(false));
+    // Guarded like every other handler: `pane.refresh()` emits a change for each binding whose
+    // value moved, and a gesture refreshing the pane ten times a second must not push uniforms
+    // and mark history once per binding on every one of them.
+    pane.on("change", () => {
+      if (!this.syncing) this.hooks.onChange(false);
+    });
 
-    // Output, Performance and Actions come first — they are what you reach for repeatedly while
+    // Output, Performance and Actions come first: they are what you reach for repeatedly while
     // working, and they are the same in every scene. The scene-authoring folders follow in the
     // order the frame is built up: light, backplate, camera, post, then the shapes and how they move.
     this.addOutput(pane);
@@ -754,7 +770,6 @@ export class ControlPanel {
     return pane;
   }
 
-  /** Mark a binding as needing a geometry rebuild. */
   /**
    * Re-derive `sides` when a shape's KIND changes, because the field means two different things.
    *
@@ -787,12 +802,12 @@ export class ControlPanel {
    * Rebuild the panel when a kind change crosses into or out of `path`.
    *
    * `outline` is the one shape field that exists on a single kind, because it is the one that
-   * cannot be a number — every other control here is meaningful enough on every kind to just show
+   * cannot be a number: every other control here is meaningful enough on every kind to just show
    * it and let the builder ignore it, but a `d` string on a rod is noise. That makes the CONTROL
    * SET depend on the kind, which a renderer rebuild alone does not notice: the scene would
    * repaint as a star while the panel still offered no way to change it.
    *
-   * Seeding the outline on the way in is the same move {@link retargetsSides} makes for `sides` —
+   * Seeding the outline on the way in is the same move {@link retargetsSides} makes for `sides`:
    * a field the new kind reads has to hold something before the panel binds to it.
    */
   private retargetsOutline<T extends { on: (event: "change", cb: () => void) => unknown }>(
@@ -815,7 +830,7 @@ export class ControlPanel {
    * Seeded before binding rather than assumed present: Tweakpane picks its widget from the VALUE
    * and throws on `undefined`, and `outline` is absent on every kind but `path`. The guard sits on
    * the binding's own line because the bindings audit reads these call sites out of the source and
-   * skips the ones an inline `if` shows to be conditional — this is the same
+   * skips the ones an inline `if` shows to be conditional; this is the same
    * conditionally-shown optional as `material.path` and `material.tint`.
    */
   private addOutline(f: FolderApi, shape: ShapeConfig): void {
@@ -826,15 +841,18 @@ export class ControlPanel {
     }
     // The BUTTON is on every kind and the field only on `path`, which is not an inconsistency.
     // Picking a file says what the shape is meant to BE, so it should not require finding the kind
-    // dropdown and switching to `path` first — it does that for you. A `d` field on a rod, by
+    // dropdown and switching to `path` first; it does that for you. A `d` field on a rod, by
     // contrast, is dead weight in the panel and in every export.
     f.addButton({ title: "⬈ Shape from SVG…" }).on("click", () => this.hooks.onPickOutline(shape));
   }
 
+  /** Mark a binding as needing a geometry rebuild. */
   private structural<T extends { on: (event: "change", cb: () => void) => unknown }>(
     binding: T,
   ): T {
-    binding.on("change", () => this.hooks.onChange(true));
+    binding.on("change", () => {
+      if (!this.syncing) this.hooks.onChange(true);
+    });
     return binding;
   }
 
@@ -845,7 +863,7 @@ export class ControlPanel {
    * A structural binding whose changes are coalesced while the user is still typing.
    *
    * A structural change rebuilds every shape's geometry, and for a text field that fires once per
-   * KEYSTROKE. Most fields here are sliders and steppers where that is exactly right — the scene
+   * KEYSTROKE. Most fields here are sliders and steppers where that is exactly right: the scene
    * tracking a drag is the point. Path outlines are the exception: they are typed or pasted, and
    * re-extruding a few thousand contour points per character is tens of milliseconds of jank each
    * time, for frames nobody looks at because the `d` is half-written.
@@ -859,6 +877,7 @@ export class ControlPanel {
     delay = 200,
   ): T {
     binding.on("change", () => {
+      if (this.syncing) return;
       clearTimeout(this.typingTimer);
       this.typingTimer = setTimeout(() => {
         this.typingTimer = undefined;
@@ -890,10 +909,11 @@ export class ControlPanel {
       label: "backdrop mode",
       options: { "solid colour": "color", gradient: "gradient", "image / video": "image" },
     })
-      // The mode decides which sub-folder exists below, so the PANEL has to be rebuilt too —
+      // The mode decides which sub-folder exists below, so the PANEL has to be rebuilt too:
       // a renderer rebuild alone repaints the scene and leaves the controls showing the old mode's
       // knobs.
       .on("change", () => {
+        if (this.syncing) return;
         this.rebuild();
         structural();
       });
@@ -902,7 +922,7 @@ export class ControlPanel {
       "change",
       () => {
         this.hooks.onTransparencyChange(this.config.transparentBackground);
-        this.updateSizeNote(); // the JPEG-flattens-alpha warning depends on this
+        this.renderSizeNote(); // the JPEG-flattens-alpha warning depends on this
       },
     );
     // Over transparency this is what clear glass reads as, so it is the colour to match to
@@ -911,7 +931,7 @@ export class ControlPanel {
     f.addBinding(this.config, "orbit");
     f.addBinding(this.config, "paused");
     // A clip only loops if it is recorded at exactly this length, so setting one also sets the
-    // record duration to match — the two being out of step is the whole failure mode.
+    // record duration to match; the two being out of step is the whole failure mode.
     f.addBinding(this.config, "loopSeconds", {
       label: "loop (s)",
       min: 0,
@@ -927,7 +947,7 @@ export class ControlPanel {
     f.addBinding(this.config, "introRamp", { label: "ease in on load" });
 
     // Only the folder the mode actually uses. The config keeps every field either way, so
-    // switching back and forth never loses a palette or a pan offset — but a gradient angle is
+    // switching back and forth never loses a palette or a pan offset, but a gradient angle is
     // meaningless while the backdrop is a flat colour, so it isn't shown.
     if (this.config.backgroundMode === "gradient") this.addGradientControls(f);
     if (this.config.backgroundMode === "image") this.addMediaControls(f, structural);
@@ -942,6 +962,7 @@ export class ControlPanel {
       })
       // Mesh has blobs where the others have stops, so the row list changes with the type.
       .on("change", () => {
+        if (this.syncing) return;
         this.rebuild();
         this.hooks.onChange(true);
       });
@@ -957,7 +978,7 @@ export class ControlPanel {
       });
     }
     if (type === "mesh") {
-      // The pad paints the real field, so softness has to repaint it — otherwise the preview and
+      // The pad paints the real field, so softness has to repaint it; otherwise the preview and
       // the backdrop disagree, which is the one thing the preview exists not to do.
       grad
         .addBinding(this.config, "backgroundMeshSoftness", {
@@ -1010,7 +1031,7 @@ export class ControlPanel {
 
   private addLamps(pane: Pane): void {
     const f = pane.addFolder({ title: `Lamps · ${this.config.lamps.length}`, expanded: true });
-    f.addBinding(this.config, "lampGain", { label: "gain", min: 0, max: 5, step: 0.01 });
+    f.addBinding(this.config, "lampGain", { label: "gain", ...RANGES.lampGain });
     // The gate is what makes clear glass clear: without it every lamp's Gaussian tail reaches
     // everywhere and nothing reads as transparent.
     f.addBinding(this.config.lampGate, "lo", { label: "gate lo", min: 0, max: 1, step: 0.005 });
@@ -1027,10 +1048,10 @@ export class ControlPanel {
       // being expanded is what matters, not every leaf.
       const item = f.addFolder({ title: `lamp ${index + 1}`, expanded: index === 0 });
       item.addBinding(lamp, "color");
-      item.addBinding(lamp, "x", { min: -0.5, max: 1.5, step: 0.005 });
-      item.addBinding(lamp, "y", { min: -0.5, max: 1.5, step: 0.005 });
-      item.addBinding(lamp, "r", { label: "radius", min: 0.01, max: 0.6, step: 0.002 });
-      item.addBinding(lamp, "intensity", { min: 0, max: 3, step: 0.01 });
+      item.addBinding(lamp, "x", RANGES.x);
+      item.addBinding(lamp, "y", RANGES.y);
+      item.addBinding(lamp, "r", { label: "radius", ...RANGES.radius });
+      item.addBinding(lamp, "intensity", RANGES.intensity);
       this.addLampInteraction(item, lamp);
       item.addButton({ title: "✕ remove" }).on("click", () => {
         this.config.lamps.splice(index, 1);
@@ -1048,7 +1069,7 @@ export class ControlPanel {
       this.rebuild();
       this.hooks.onChange(false);
     });
-    // Recolours the field without touching a single position — the arrangement is the composition,
+    // Recolours the field without touching a single position: the arrangement is the composition,
     // the palette is only its colour.
     const palette = { name: "reference" };
     f.addBinding(palette, "name", {
@@ -1078,7 +1099,7 @@ export class ControlPanel {
     const f = pane.addFolder({ title: "Camera", expanded: true });
     // Long lens or the roll reads as tumbling instead of foreshortening.
     f.addBinding(this.config.camera, "fov", { min: 4, max: 60, step: 0.5 });
-    // Only bites off 16:9 — at the authored aspect every fit frames identically.
+    // Only bites off 16:9; at the authored aspect every fit frames identically.
     f.addBinding(this.config.camera, "fit", {
       label: "aspect fit",
       options: {
@@ -1112,7 +1133,7 @@ export class ControlPanel {
    * The stop / blob editors, mounted into the Gradient folder.
    *
    * These replaced a column of plain Tweakpane rows. The rows worked, but a gradient is a spatial
-   * thing — the SPACING between stops is as much of the design as their colours, and no pair of
+   * thing: the SPACING between stops is as much of the design as their colours, and no pair of
    * number fields shows you that. Both widgets mutate the config arrays in place, so nothing else
    * in the panel has to know they exist.
    */
@@ -1143,8 +1164,8 @@ export class ControlPanel {
     const f = pane.addFolder({ title: "Post", expanded: true });
     f.addBinding(this.config.post, "focus", { min: 1, max: 95, step: 0.1 });
     f.addBinding(this.config.post, "range", { min: 0.2, max: 40, step: 0.1 });
-    f.addBinding(this.config.post, "aperture", { min: 0, max: 40, step: 0.5 });
-    f.addBinding(this.config.post, "bloom", { min: 0, max: 0.4, step: 0.005 });
+    f.addBinding(this.config.post, "aperture", RANGES.aperture);
+    f.addBinding(this.config.post, "bloom", RANGES.bloom);
     f.addBinding(this.config.post, "bloomRadius", {
       label: "bloom radius",
       min: 0,
@@ -1157,15 +1178,15 @@ export class ControlPanel {
       max: 1,
       step: 0.01,
     });
-    f.addBinding(this.config.post, "caustics", { min: 0, max: 2, step: 0.01 });
-    f.addBinding(this.config.post, "haze", { min: 0, max: 1, step: 0.01 });
+    f.addBinding(this.config.post, "caustics", RANGES.caustics);
+    f.addBinding(this.config.post, "haze", RANGES.haze);
     f.addBinding(this.config.post, "hazeTop", { label: "haze top", min: -0.2, max: 1, step: 0.01 });
     f.addBinding(this.config.post, "hazeColor", { label: "haze colour" });
-    f.addBinding(this.config.post, "vignette", { min: 0, max: 1, step: 0.01 });
-    f.addBinding(this.config.post, "grain", { min: 0, max: 0.08, step: 0.001 });
+    f.addBinding(this.config.post, "vignette", RANGES.vignette);
+    f.addBinding(this.config.post, "grain", RANGES.grain);
 
     // Light shafts and stylisation are a second pass that only runs when one of them is on, so
-    // they are folded away by default — the scene costs nothing extra until you open this.
+    // they are folded away by default; the scene costs nothing extra until you open this.
     const shafts = f.addFolder({ title: "Light shafts", expanded: true });
     shafts.addBinding(this.config.post, "innerLight", {
       label: "strength",
@@ -1257,17 +1278,12 @@ export class ControlPanel {
   }
 
   /**
-   * Scene-level interaction: the shared inputs (touch opt-in, a scroll-preview scrub — the studio
-   * page never really scrolls) plus reactions that drive shared scene params. Per-shape reactions
-   * live in each shape's own Interaction folder, per-lamp ones in each lamp's.
-   */
-  /**
    * The traced beam.
    *
    * Absent from this panel for a long time, which made the one thing in the language that is
    * SOLVED rather than shaded the one thing you could not touch without hand-editing JSON. Aiming
-   * a beam is a search — the route through a chain of solids survives only a few degrees, and past
-   * that the light misses and the effect collapses — and a search wants a slider and a live frame,
+   * a beam is a search (the route through a chain of solids survives only a few degrees, and past
+   * that the light misses and the effect collapses), and a search wants a slider and a live frame,
    * not a rebuild per guess.
    *
    * Nothing here is structural. `refresh()` calls `applyBeam`, which re-traces whenever its key
@@ -1288,7 +1304,7 @@ export class ControlPanel {
     if (beam.entrySweep !== undefined) f.addBinding(beam, "entrySweep", sweepOpts);
     f.addBinding(beam, "incidence", { min: -89, max: 89, step: 0.5 });
     f.addBinding(beam, "entry", { min: 0, max: 1, step: 0.001 });
-    // Only meaningful when no `entryAngle` is set — on a round cross-section a face index picks
+    // Only meaningful when no `entryAngle` is set: on a round cross-section a face index picks
     // one of ninety-six facets and slides within it, which is a handle with nothing to drive.
     f.addBinding(beam, "face", { min: 0, max: 15, step: 1 });
 
@@ -1301,7 +1317,7 @@ export class ControlPanel {
 
     // --- optics ---
     const optics = f.addFolder({ title: "Optics", expanded: true });
-    // The Cauchy base — the index at INFINITE wavelength, not at 550nm. Across the visible band
+    // The Cauchy base: the index at INFINITE wavelength, not at 550nm. Across the visible band
     // the real index sits well above this, which is why 1.2 is a normal-looking number here.
     optics.addBinding(beam, "ior", { min: 1.001, max: 2.5, step: 0.001 });
     optics.addBinding(beam, "dispersion", { min: 0, max: 0.4, step: 0.001 });
@@ -1317,7 +1333,7 @@ export class ControlPanel {
     look.addBinding(beam, "falloffPower", { label: "falloff power", min: 0, max: 12, step: 0.05 });
     look.addBinding(beam, "revealSeconds", { label: "reveal s", min: 0, max: 12, step: 0.1 });
     // Wavelength vertices and width slices: the smoothness of the sheet, and its cost. Structural
-    // in spirit — they resize the geometry — but `applyBeam` rebuilds it from its key either way.
+    // in spirit (they resize the geometry), but `applyBeam` rebuilds it from its key either way.
     look.addBinding(beam, "samples", { min: 8, max: 256, step: 1 });
     look.addBinding(beam, "slices", { min: 1, max: 64, step: 1 });
 
@@ -1352,11 +1368,16 @@ export class ControlPanel {
     });
   }
 
+  /**
+   * Scene-level interaction: the shared inputs (touch opt-in, a scroll-preview scrub, since the
+   * studio page never really scrolls) plus reactions that drive shared scene params. Per-shape
+   * reactions live in each shape's own Interaction folder, per-lamp ones in each lamp's.
+   */
   private addInteraction(pane: Pane): void {
     const f = pane.addFolder({ title: "Interaction", expanded: false });
     const it = this.config.interaction;
     const uiInputs = { touch: it?.touch ?? false, scrollPreview: 0 };
-    // `enabled` is a developer API (the layer's master switch — not authorable here); like
+    // `enabled` is a developer API (the layer's master switch, not authorable here); like
     // custom:* bindings below, carry an explicit value through every rebuild rather than drop it.
     const enabled = it?.enabled;
     const loaded = it?.bindings ?? [];
@@ -1394,7 +1415,7 @@ export class ControlPanel {
       })
       .on("change", () => this.hooks.onScrollPreview(uiInputs.scrollPreview));
     // …or scroll for real: a scrollable test surface over the scene (drives the same scroll
-    // input, and — unlike the slider — produces real scroll velocity). The panel stays usable.
+    // input, and, unlike the slider, produces real scroll velocity). The panel stays usable.
     previewF.addButton({ title: "🖱 Scroll to test…" }).on("click", () => {
       this.hooks.onOpenScrollTest();
     });
@@ -1413,7 +1434,7 @@ export class ControlPanel {
    * reaction" button, calling `onChange` on any edit. The everyday knobs (input → parameter → to)
    * sit up top; `from` / smoothing hide in a collapsed "fine-tune". Reads as: "as <input> goes
    * 0→1, drive <parameter> to <to>." Add/remove re-renders THIS folder in place (no panel
-   * rebuild), so the live `slots` array — and any half-configured slot — survives.
+   * rebuild), so the live `slots` array, and any half-configured slot, survives.
    */
   private renderBindingSlots(
     folder: FolderApi,
@@ -1425,7 +1446,7 @@ export class ControlPanel {
   ): void {
     const render = (): void => {
       // Clear the folder (dispose removes each blade from it, so keep taking the first until
-      // empty — iterating a live children list while disposing would skip elements).
+      // empty; iterating a live children list while disposing would skip elements).
       while (folder.children.length > 0) folder.children[0].dispose();
       slots.forEach((slot, i) => {
         // Expand only the last (newest) reaction so a long list stays scannable.
@@ -1435,8 +1456,8 @@ export class ControlPanel {
         });
         bf.addBinding(slot, "source", { label: "input", options: sources }).on("change", onChange);
         bf.addBinding(slot, "target", { label: "parameter", options: targets }).on("change", () => {
-          // Re-seed "to (at full)" so the new parameter actually moves — a blanket 1 is invisible
-          // for narrow-range params like dispersion — and clamp `from` into the new range. The
+          // Re-seed "to (at full)" so the new parameter actually moves (a blanket 1 is invisible
+          // for narrow-range params like dispersion), and clamp `from` into the new range. The
           // to/from sliders carry per-target ranges, so the rows rebuild (deferred: a binding
           // can't dispose the pane its own change handler is running inside).
           slot.to = defaultToFor(slot.target);
@@ -1464,7 +1485,7 @@ export class ControlPanel {
       folder.addButton({ title: "＋ Add reaction" }).on("click", () => {
         // Seed a working reaction (hover is demonstrable without the scroll preview) so it
         // persists and reacts immediately; retarget/retrigger from there. Shapes seed the
-        // per-shape hover — reacting to your cursor over THAT shape is the expected default.
+        // per-shape hover: reacting to your cursor over THAT shape is the expected default.
         const slot = uiSlotFrom(undefined, defaultTarget);
         slot.source = Object.values(sources).includes("hoverSelf") ? "hoverSelf" : "hover";
         slots.push(slot);
@@ -1498,7 +1519,7 @@ export class ControlPanel {
     );
   }
 
-  /** The scatter's shared reaction list, bound to `scatter.interaction.bindings` — every
+  /** The scatter's shared reaction list, bound to `scatter.interaction.bindings`: every
    *  generated shape gets its own copy, so `hoverSelf` means "the rod under the cursor".
    *  Structural: the copies are stamped on at expansion, so an edit has to regenerate. */
   private addScatterInteraction(f: FolderApi, scatter: ScatterConfig): void {
@@ -1539,9 +1560,16 @@ export class ControlPanel {
     this.renderBindingSlots(f, slots, IX_ITEM_TARGETS, "emission", sync, IX_SOURCE_OPTIONS_ITEM);
   }
 
+  /** The shape list: the scatter's generator controls, or every hand-authored shape by group. */
   private addShapes(pane: Pane): void {
     const scatter = this.config.scatter;
-    if (scatter) {
+    if (scatter) this.addScatterShapes(pane, scatter);
+    else this.addAuthoredShapes(pane);
+  }
+
+  /** A generated scene: the scatter template, plus a header per generated shape that bakes. */
+  private addScatterShapes(pane: Pane, scatter: ScatterConfig): void {
+    {
       // The title stays static: showing a live count would mean disposing and rebuilding the
       // pane from inside its own change event, and the count slider is right there anyway.
       const f = pane.addFolder({ title: "Shapes", expanded: true });
@@ -1591,7 +1619,7 @@ export class ControlPanel {
           step: 0.01,
         }),
       );
-      // Stagger is radians per shape in the config, but nobody thinks in radians-per-shape — they
+      // Stagger is radians per shape in the config, but nobody thinks in radians-per-shape; they
       // think "the row covers one full turn". Expose it as TURNS ACROSS THE ROW, so the value that
       // matters is simply 1: below it the phases cluster and the trough of the wave sits still,
       // above it the row wraps past itself. That also retires a "2π ÷ count" button that was doing
@@ -1621,7 +1649,7 @@ export class ControlPanel {
       this.addShapeButton(f);
 
       // The generated shapes, listed so any one of them can be found and edited. They are NOT
-      // stored in the config — the scatter derives them on every rebuild — so opening one bakes
+      // stored in the config (the scatter derives them on every rebuild), so opening one bakes
       // the arrangement into real items first. Without that, an edit to one shape would be
       // silently discarded the next time the scatter regenerated.
       //
@@ -1636,14 +1664,16 @@ export class ControlPanel {
           if (event.expanded) this.hooks.onBakeForEdit(index);
         });
       }
-      return;
     }
+  }
 
+  /** A hand-authored scene: the bulk editor, then every shape's folder, grouped as the scene is. */
+  private addAuthoredShapes(pane: Pane): void {
     const count = this.config.items.length;
     const f = pane.addFolder({ title: `Shapes · ${count}`, expanded: true });
 
-    // The bulk editor sits ABOVE the per-shape list and stays open, so the common case — "make
-    // them all do this" — doesn't require opening a shape to find the apply button hidden inside
+    // The bulk editor sits ABOVE the per-shape list and stays open, so the common case, "make
+    // them all do this", doesn't require opening a shape to find the apply button hidden inside
     // it. It edits a draft rather than shape 1 directly: binding it to a real shape would mean
     // every nudge silently edited that one shape until you pressed apply.
     if (count > 1 || this.selectionCount > 1) this.addAllShapes(f);
@@ -1665,7 +1695,7 @@ export class ControlPanel {
       return folder;
     };
 
-    // EVERY shape gets a folder, however many there are — but its contents are built the first
+    // EVERY shape gets a folder, however many there are, but its contents are built the first
     // time it opens, not up front. That is what makes "all of them, collapsed" affordable: a
     // populated folder is ~30 control rows whether or not it is expanded, and the pane rebuilds on
     // every structural change, so eagerly building sixty of them put a visible hitch on routine
@@ -1705,15 +1735,17 @@ export class ControlPanel {
         folder.addButton({ title: "✕ remove shape" }).on("click", () => {
           this.hooks.onRemoveShapes([item]);
         });
-        // These rows did not exist when the pane was built, so they missed the icon pass.
+        // These rows did not exist when the pane was built, so they missed the icon and hint
+        // passes; both are idempotent over the rows that did.
         applyIcons(this.host);
+        applyControlHints(this.host);
       };
 
       if (folder.expanded) build();
       folder.on("fold", (event) => {
         if (!event.expanded) return;
         build();
-        // Opening a shape's config locates it in the scene, exactly like its locate button —
+        // Opening a shape's config locates it in the scene, exactly like its locate button,
         // and the selection echoes back through focusItem to highlight this folder.
         if (!this.foldSync) this.hooks.onLocateItem(index);
       });
@@ -1755,7 +1787,7 @@ export class ControlPanel {
     folder.addButton({ title: "⤫ ungroup" }).on("click", () => {
       this.hooks.onUngroup(group.id);
     });
-    // Deletes the SHAPES, not just the grouping — "ungroup" directly above is the one that keeps
+    // Deletes the SHAPES, not just the grouping: "ungroup" directly above is the one that keeps
     // them, and having both side by side is what makes the difference legible.
     folder.addButton({ title: `✕ remove group (${members} shapes)` }).on("click", () => {
       this.hooks.onRemoveShapes(this.config.items.filter((item) => item.group === group.id));
@@ -1766,7 +1798,7 @@ export class ControlPanel {
   /**
    * Run an action and report on its own button: ✓ on success, ✕ on failure.
    *
-   * A hook that resolves `false` counts as a failure — the clipboard write is the case that
+   * A hook that resolves `false` counts as a failure: the clipboard write is the case that
    * matters, since it can be refused without throwing.
    */
   private async flashAction(
@@ -1788,7 +1820,7 @@ export class ControlPanel {
    * Motion + material for many shapes at once, seeded from the first one.
    *
    * TARGETS THE SELECTION when the viewport has more than one shape selected, and the whole scene
-   * otherwise — same widget, same code, and the button says which. That is the whole reason
+   * otherwise, same widget, same code, and the button says which. That is the whole reason
    * multi-select was worth having in the panel: "change these five" is the common request, and
    * before this the only bulk edit available was "change everything".
    */
@@ -1796,7 +1828,7 @@ export class ControlPanel {
     const toSelection = this.selectionCount > 1;
     // The draft LIVES ON THE PANEL, not in this call. Changing the material kind rebuilds the pane
     // (the kind decides which rows exist), and a draft rebuilt with it would silently reset to the
-    // first shape's values — so staging "metal" and then pressing apply wrote glass. Seeded once,
+    // first shape's values, so staging "metal" and then pressing apply wrote glass. Seeded once,
     // and only from scratch when the scene itself is replaced.
     this.bulkDraft ??= {
       motion: { ...this.config.items[0].motion },
@@ -1812,7 +1844,7 @@ export class ControlPanel {
     this.bulkApply = [];
 
     // Group / ungroup sit at the top of the SELECTION editor, because that is where you already
-    // are once you have picked the shapes — ⌘G is the fast path, and this is the discoverable one.
+    // are once you have picked the shapes; ⌘G is the fast path, and this is the discoverable one.
     if (toSelection) {
       f.addButton({ title: "⛓ group selection  (⌘G)" }).on("click", () => this.hooks.onGroup());
       const grouped = this.hooks.selectedConfigs().some((item) => item.group);
@@ -1901,10 +1933,10 @@ export class ControlPanel {
     this.structural(
       f.addBinding(item.shape, "len", { label: "length", min: 0.05, max: 30, step: 0.05 }),
     );
-    // Meaningful on the extrusions (`slab`, `arrow`) only, but so is `length` on half the kinds —
+    // Meaningful on the extrusions (`slab`, `arrow`) only, but so is `length` on half the kinds;
     // the panel has always shown one editable object and let the kind decide what it reads.
     this.structural(f.addBinding(item.shape, "depth", { min: 0.02, max: 8, step: 0.01 }));
-    // Faces on a prism, radial segments on everything else — see `defaultSides`. It was missing
+    // Faces on a prism, radial segments on everything else; see `defaultSides`. It was missing
     // here, which made the carry-over below impossible to undo by hand.
     this.structural(f.addBinding(item.shape, "sides", { min: 3, max: 128, step: 1 }));
     this.addCuts(
@@ -1932,7 +1964,7 @@ export class ControlPanel {
    *
    * Laid out like the lamp list, for the same reason: a handful of small posed objects, each of
    * which needs to be findable, editable and removable on its own. `cuts` is absent rather than
-   * empty on a solid shape, so adding the first one has to materialize the array — and removing
+   * empty on a solid shape, so adding the first one has to materialize the array, and removing
    * the last one has to take it away again, or every scene this studio ever exports grows a
    * `"cuts": []` on every shape.
    */
@@ -1971,7 +2003,7 @@ export class ControlPanel {
    * Motion controls for one shape (or the scatter template that stamps them out).
    *
    * `applyToAll` is offered because per-shape motion makes uniformity the thing you have to ask
-   * for — which is the right way round for a composition, but tedious if you genuinely want every
+   * for, which is the right way round for a composition, but tedious if you genuinely want every
    * shape doing the same, so one button does it.
    */
   private addMotion(f: FolderApi, motion: MotionConfig, applyToAll: boolean): void {
@@ -1993,7 +2025,7 @@ export class ControlPanel {
   /**
    * Material bindings over a Partial: Tweakpane needs a real property to bind to, so anything the
    * config leaves unset is materialized first. `path` is deliberately only shown when the config
-   * already carries one — it is half the optical path, which is derived correctly from the shape
+   * already carries one: it is half the optical path, which is derived correctly from the shape
    * unless you override it, and a slider invites overriding it wrongly.
    */
   private addMaterial(f: FolderApi, material: Partial<MaterialConfig>): void {
@@ -2004,6 +2036,7 @@ export class ControlPanel {
       label: "material",
       options: Object.fromEntries(MATERIAL_KINDS.map((k) => [k, k])),
     }).on("change", () => {
+      if (this.syncing) return;
       // Give the new kind its characteristic surface. Only the fields that belong to the surface
       // are touched, so the transmissive optics survive a round trip through an opaque kind.
       Object.assign(material, MATERIAL_PRESETS[material.kind ?? "glass"]);
@@ -2014,28 +2047,25 @@ export class ControlPanel {
     if (isTransmissive(kind)) {
       for (const key of TRANSMISSIVE_KEYS) {
         const label = key === "hueShift" ? { label: "hue shift" } : {};
-        f.addBinding(material, key, { ...label, ...MATERIAL_RANGES[key] });
+        f.addBinding(material, key, { ...label, ...rangeFor(key) });
       }
-      if (material.path !== undefined) f.addBinding(material, "path", MATERIAL_RANGES.path);
+      if (material.path !== undefined) f.addBinding(material, "path", RANGES.path);
       if (typeof material.tint === "string" && material.tint) f.addBinding(material, "tint");
       if (kind === "frosted") {
-        f.addBinding(material, "roughness", MATERIAL_RANGES.roughness);
+        f.addBinding(material, "roughness", RANGES.roughness);
       }
       if (kind === "glitter") {
-        f.addBinding(material, "sparkle", MATERIAL_RANGES.sparkle);
-        f.addBinding(material, "sparkleScale", { label: "grain", ...MATERIAL_RANGES.sparkleScale });
+        f.addBinding(material, "sparkle", RANGES.sparkle);
+        f.addBinding(material, "sparkleScale", { label: "grain", ...RANGES.sparkleScale });
       }
       if (kind === "liquid") {
-        f.addBinding(material, "ripple", MATERIAL_RANGES.ripple);
-        f.addBinding(material, "rippleScale", {
-          label: "wave scale",
-          ...MATERIAL_RANGES.rippleScale,
-        });
-        f.addBinding(material, "flow", MATERIAL_RANGES.flow);
+        f.addBinding(material, "ripple", RANGES.ripple);
+        f.addBinding(material, "rippleScale", { label: "wave scale", ...RANGES.rippleScale });
+        f.addBinding(material, "flow", RANGES.flow);
       }
       // A pair: `iridescence` is the on-switch, `filmNm` picks which bands sweep the shape.
-      f.addBinding(material, "iridescence", MATERIAL_RANGES.iridescence);
-      f.addBinding(material, "filmNm", { label: "film (nm)", ...MATERIAL_RANGES.filmNm });
+      f.addBinding(material, "iridescence", RANGES.iridescence);
+      f.addBinding(material, "filmNm", { label: "film (nm)", ...RANGES.filmNm });
       return;
     }
 
@@ -2050,7 +2080,7 @@ export class ControlPanel {
         const hex = METAL_F0[pick.metal];
         if (!hex) return;
         material.albedo = hex;
-        // The measured edge reflectance travels with the metal — they are two halves of one
+        // The measured edge reflectance travels with the metal: they are two halves of one
         // measurement, and F0 without its F82 is the uniformly-coloured metal this was fixing.
         material.edgeTint = METAL_F82[pick.metal] ?? "";
         this.hooks.onChange(false);
@@ -2061,7 +2091,7 @@ export class ControlPanel {
     if (kind === "metal" && material.edgeTint) {
       f.addBinding(material, "edgeTint", { label: "edge (F82)" });
     }
-    for (const key of OPAQUE_KEYS) f.addBinding(material, key, MATERIAL_RANGES[key]);
+    for (const key of OPAQUE_KEYS) f.addBinding(material, key, rangeFor(key));
   }
 
   // ---------------------------------------------------------------- output ---
@@ -2118,7 +2148,7 @@ export class ControlPanel {
     const actualBinding = f.addBinding(this.view, "actualSize", { label: "actual size" });
     actualBinding.on("change", () => {
       if (this.syncing) return;
-      this.hooks.onOutputSizeChange();
+      this.updateSizeNote(); // the preview now renders at the export size, which the note says
     });
 
     lockBinding.on("change", () => {
@@ -2139,9 +2169,10 @@ export class ControlPanel {
       if (event.last) this.syncInputs();
       this.updateSizeNote();
     });
-    this.updateSizeNote();
+    // The note only: a rebuild does not change the size, so nothing here refits the preview.
+    this.renderSizeNote();
 
-    // Only advertise formats this browser can actually encode — canvas encoders silently fall
+    // Only advertise formats this browser can actually encode: canvas encoders silently fall
     // back to PNG rather than failing, so an unsupported choice would produce a mislabelled file.
     this.unsupported.length = 0;
     const imageOptions: Record<string, ImageFormat> = {};
@@ -2170,8 +2201,10 @@ export class ControlPanel {
       const definition = IMAGE_FORMATS[this.state.imageFormat];
       qualityBinding.hidden = !definition.lossy;
       exportImage.title = `📷 Save still (.${definition.extension})`;
+      // Retitling rewrites the button's text, taking its icon and its hint glyph with it.
       applyIcons(this.host);
-      this.updateSizeNote();
+      applyControlHints(this.host);
+      this.renderSizeNote();
     };
     imageFormatBinding.on("change", refreshImage);
     exportImage.on("click", () => this.hooks.onExportImage());
@@ -2184,7 +2217,7 @@ export class ControlPanel {
     else this.unsupported.push("MP4");
     if (canRecordWebpAnimation()) videoOptions["Animated WebP"] = "webp";
     else this.unsupported.push("Animated WebP");
-    videoOptions["GIF"] = "gif"; // no browser support to probe — we encode it ourselves
+    videoOptions["GIF"] = "gif"; // no browser support to probe; we encode it ourselves
     if (!Object.values(videoOptions).includes(this.state.videoFormat)) {
       this.state.videoFormat = "webm";
     }
@@ -2208,13 +2241,13 @@ export class ControlPanel {
       // scene sustains, so showing the slider there would be a lie.
       fpsBinding.hidden = !isFrameWalked(this.state.videoFormat);
       this.syncRecordButton();
-      this.updateSizeNote();
+      this.renderSizeNote();
     };
     videoBinding.on("change", refreshRecord);
     refreshRecord();
 
     // A format the browser cannot encode is dropped from the list, which looks like it was never
-    // offered. Name it instead — "where did WebP go" is otherwise unanswerable from the UI — and
+    // offered. Name it instead ("where did WebP go" is otherwise unanswerable from the UI), and
     // name somewhere it does work, or the note is a dead end.
     //
     // Chromium is always the right answer here whatever is missing, and that is not a coincidence:
@@ -2263,23 +2296,22 @@ export class ControlPanel {
   syncOutputSize(): void {
     this.syncInputs();
     // Deliberately NOT updateSizeNote(): that fires onOutputSizeChange, which refits the frame to
-    // the stage — and a corner drag has just set the size the user actually wants it at.
+    // the stage, and a corner drag has just set the size the user actually wants it at.
     this.renderSizeNote();
   }
 
-  /** Write the model back into the inputs without the write looking like a user edit. */
   /**
-   * Push the config's current values back into the controls.
+   * Write the model back into the inputs without the write looking like a user edit.
    *
    * The rebuild guard is not defensive tidiness. Tweakpane throws "View has been already disposed"
    * from a blade whose rack went away, and a pane whose FOLDER SET changed between rebuilds can be
-   * left holding one — switching to a scene that has a beam, where the previous one had none, is
+   * left holding one: switching to a scene that has a beam, where the previous one had none, is
    * exactly that shape. A second refresh then works, which is the tell that the state is stale
    * rather than wrong.
    *
    * Rebuilding is the correct recovery and not a mask: it is what a pane out of step with its
    * config needs anyway, `restoreView` puts the folders back as they were, and a refresh failing
-   * must never take its caller down — the callers are a file picker and the dev bridge, both of
+   * must never take its caller down: the callers are a file picker and the dev bridge, both of
    * which have already applied the change by the time they ask the panel to catch up.
    */
   private syncInputs(): void {
@@ -2305,34 +2337,44 @@ export class ControlPanel {
     const { width, height } = this.size;
     const frames = Math.round(this.state.recordSeconds * this.state.recordFps);
     const walked = isFrameWalked(this.state.videoFormat);
+    const gif = this.state.videoFormat === "gif";
+    // GIF cannot store most frame rates exactly; say what the file will play at.
+    const playbackFps = gif ? gifEffectiveFps(this.state.recordFps) : this.state.recordFps;
+    const fpsNote =
+      gif && playbackFps !== this.state.recordFps ? ` at ${playbackFps.toFixed(1)} fps` : "";
 
     // The note is facts: what you will get.
     this.sizeNote.textContent =
       `${width} × ${height} · ${aspectRatioLabel(width, height)}` +
-      (walked && !this.state.recording ? ` · ${frames} frames` : "");
+      (walked && !this.state.recording ? ` · ${frames} frames${fpsNote}` : "");
 
     // The warnings are problems: what will be wrong, or slow, about getting it.
     const warnings: string[] = [];
     const gpu = exportGpuWarning(width, height);
     if (gpu) warnings.push(gpu.detail);
+    if (gpu && this.view.actualSize) {
+      warnings.push(
+        "Actual size renders the live preview at this size too. Turn it off to work at the fitted size.",
+      );
+    }
     if (
       this.config.transparentBackground &&
       !IMAGE_FORMATS[this.state.imageFormat].supportsTransparency
     ) {
       warnings.push(
-        `${IMAGE_FORMATS[this.state.imageFormat].label} has no alpha — the still will come out on black.`,
+        `${IMAGE_FORMATS[this.state.imageFormat].label} has no alpha; the still will come out on black.`,
       );
     }
     if (walked && !this.state.recording) {
-      if (this.state.videoFormat === "gif") {
+      if (gif) {
         warnings.push(
-          `GIF is 256 colours per frame — expect banding on these gradients` +
+          `GIF is 256 colours per frame; expect banding on these gradients` +
             (Math.max(width, height) > MAX_GIF_EDGE
               ? `, and the clip is downscaled to ${MAX_GIF_EDGE}px.`
               : "."),
         );
       } else if ((width * height * frames) / 1e6 >= 120) {
-        warnings.push(`${frames} frames to encode — expect a wait and a large file.`);
+        warnings.push(`${frames} frames to encode; expect a wait and a large file.`);
       }
     }
     this.sizeWarn.hidden = warnings.length === 0;
@@ -2350,8 +2392,8 @@ export class ControlPanel {
     );
 
     // The ENGINE, not the backend: "webgpu" selects three's node renderer, which still falls back
-    // to a WebGL backend where the browser has no WebGPU. Fetched on demand — it is a second three
-    // build — so the first switch has a moment of load.
+    // to a WebGL backend where the browser has no WebGPU. Fetched on demand (it is a second three
+    // build), so the first switch has a moment of load.
     //
     // Labelled EXPERIMENTAL in the option itself rather than only in the hint: the hint is a hover,
     // and someone comparing two renders needs to know which one is the reference without going
@@ -2361,13 +2403,13 @@ export class ControlPanel {
       options: { WebGL: "webgl", "WebGPU (TSL) · experimental": "webgpu" },
     }).on("change", (event) => {
       // Not `structural()`: this replaces the renderer rather than rebuilding it, and the scene
-      // config is untouched — so it must not run the usual change/history path.
+      // config is untouched, so it must not run the usual change/history path.
       if (this.syncing) return;
       void this.hooks.onRendererChange(event.value as RendererKind);
     });
   }
 
-  /** Preview aids. Separate from Scene because none of it is part of the scene — it never
+  /** Preview aids. Separate from Scene because none of it is part of the scene: it never
    *  serializes and never reaches an export. */
   private addView(pane: Pane): void {
     const f = pane.addFolder({ title: "Guides", expanded: true });
@@ -2391,17 +2433,17 @@ export class ControlPanel {
   private addActions(pane: Pane): void {
     const f = pane.addFolder({ title: "Actions", expanded: true });
 
-    // Presets are the actual product for most people, so the picker leads — and it shows rendered
+    // Presets are the actual product for most people, so the picker leads, and it shows rendered
     // thumbnails rather than a dropdown, because "Skewer" and "Assembly" mean nothing until you
     // have seen them.
     const content = (f.element.querySelector(".tp-fldv_c") as HTMLElement | null) ?? f.element;
-    this.presets = new PresetPicker(content, Object.keys(PRESETS), PRESET_LABELS, this.presetName, {
+    this.presets = new PresetPicker(content, Object.keys(PRESETS), presetLabel, this.presetName, {
       onSelect: (name) => this.hooks.onSelectPreset(name),
     });
 
     f.addButton({ title: "🔄 Reset to preset" }).on("click", () => this.hooks.onReset());
     f.addButton({ title: "✏ Edit config…" }).on("click", () => this.hooks.onEditConfig());
-    // These four confirm ON the button rather than through a toast — the eye is already there,
+    // These four confirm ON the button rather than through a toast: the eye is already there,
     // and a toast in the far corner asks it to travel for no reason.
     const save = f.addButton({ title: "💾 Save config (.json)" });
     save.on("click", () => void this.flashAction(save.element, "Saved", this.hooks.onSaveConfig));

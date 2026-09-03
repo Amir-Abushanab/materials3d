@@ -1,16 +1,19 @@
 /**
  * A CSS-gradient-style stop editor: a bar with one draggable dot per colour stop.
  *
- * Drag a dot to move it (the spacing IS the design — it decides how fast one colour becomes the
+ * Drag a dot to move it (the spacing IS the design: it decides how fast one colour becomes the
  * next); drag one past another to reorder. Click a dot to select and recolour it, double-click the
- * bar to add a stop, double-click a dot to remove it.
+ * bar to add a stop, double-click a dot to remove it. The dots are buttons, so a focused one can
+ * be nudged with the arrow keys (shift for a coarse step).
  *
- * Ported from Wave Studio. It mutates the supplied `ColorStop[]` in place and calls `onChange`, so
- * the renderer re-reads the palette. Array ORDER is irrelevant — the shader walks the stops sorted
+ * It mutates the supplied `ColorStop[]` in place and calls `onChange`, so
+ * the renderer re-reads the palette. Array ORDER is irrelevant: the shader walks the stops sorted
  * by position, and so does the preview here.
  */
 import { parseHex, toHex, type ColorStop } from "@materials3d/core";
+import { injectStyle } from "../util/dom";
 import { clamp } from "../util/math";
+import { div, makeButton, makeColorInput, makeHandle, round3 } from "./gradientShared";
 
 const STYLE_ID = "g3-gradient-editor-style";
 
@@ -18,11 +21,12 @@ const CSS = `
 .g3-ge{display:flex;flex-direction:column;gap:6px;padding:2px 8px 6px;}
 .g3-ge-bar{position:relative;height:24px;border-radius:4px;cursor:copy;
   border:1px solid var(--hair);box-shadow:inset 0 0 0 1px rgb(255 255 255 / 45%);touch-action:none;}
-.g3-ge-handle{position:absolute;top:50%;width:13px;height:13px;border-radius:50%;
+.g3-ge-handle{position:absolute;top:50%;width:13px;height:13px;padding:0;border-radius:50%;
   transform:translate(-50%,-50%);border:2px solid #fff;cursor:ew-resize;box-sizing:border-box;
   box-shadow:0 1px 3px rgb(27 26 31 / 45%);touch-action:none;}
 .g3-ge-handle.is-selected{border-color:var(--accent);width:16px;height:16px;
   box-shadow:0 0 0 2px rgb(162 75 200 / 45%);}
+.g3-ge-handle:focus-visible{outline:2px solid var(--accent);outline-offset:3px;}
 .g3-ge-row{display:flex;align-items:center;gap:6px;}
 .g3-ge-row input[type=color]{width:36px;height:22px;padding:0;border-radius:4px;cursor:pointer;
   border:1px solid var(--hair);background:none;}
@@ -38,20 +42,6 @@ export interface GradientEditorHooks {
   onChange: () => void;
   /** Maximum number of stops. */
   max: number;
-}
-
-function injectStyle(): void {
-  if (document.getElementById(STYLE_ID)) return;
-  const style = document.createElement("style");
-  style.id = STYLE_ID;
-  style.textContent = CSS;
-  document.head.appendChild(style);
-}
-
-function div(className: string): HTMLDivElement {
-  const el = document.createElement("div");
-  el.className = className;
-  return el;
 }
 
 function clamp01(value: number): number {
@@ -76,44 +66,37 @@ export class GradientEditor {
   private readonly posLabel: HTMLDivElement;
   private readonly addButton: HTMLButtonElement;
   private readonly removeButton: HTMLButtonElement;
-  private handles: HTMLDivElement[] = [];
+  private handles: HTMLButtonElement[] = [];
   private selected = 0;
-  private dragging = false;
 
   constructor(
     parent: HTMLElement,
     private readonly getStops: () => ColorStop[],
     private readonly hooks: GradientEditorHooks,
   ) {
-    injectStyle();
+    injectStyle(STYLE_ID, CSS);
     this.root = div("g3-ge");
     this.bar = div("g3-ge-bar");
     this.bar.addEventListener("dblclick", (event) => this.insertStop(this.positionAt(event)));
     this.root.appendChild(this.bar);
 
     const row = div("g3-ge-row");
-    this.colorInput = document.createElement("input");
-    this.colorInput.type = "color";
-    this.colorInput.addEventListener("input", () => {
+    this.colorInput = makeColorInput("Stop colour", (value) => {
       const stop = this.stops[this.selected];
       if (!stop) return;
-      stop.color = this.colorInput.value;
+      stop.color = value;
       this.paint();
       this.hooks.onChange();
     });
     this.posLabel = div("g3-ge-pos");
-    this.addButton = this.makeButton("+ stop", () => this.addStop());
-    this.removeButton = this.makeButton("− stop", () => this.removeStop());
+    this.addButton = makeButton("+ stop", () => this.addStop());
+    this.removeButton = makeButton("− stop", () => this.removeStop());
     row.append(this.colorInput, this.posLabel, this.addButton, this.removeButton);
     this.root.appendChild(row);
 
     parent.appendChild(this.root);
     this.rebuildHandles();
     this.paint();
-  }
-
-  get element(): HTMLElement {
-    return this.root;
   }
 
   /** Re-read the supplied stops and repaint after an external change. */
@@ -131,30 +114,26 @@ export class GradientEditor {
     return this.getStops();
   }
 
-  private makeButton(label: string, onClick: () => void): HTMLButtonElement {
-    const el = document.createElement("button");
-    el.type = "button";
-    el.textContent = label;
-    el.addEventListener("click", onClick);
-    return el;
-  }
-
-  /** (Re)create the handle elements — only on init / add / remove. */
+  /** (Re)create the handle elements: only on init / add / remove. */
   private rebuildHandles(): void {
     for (const handle of this.handles) handle.remove();
     this.handles = this.stops.map((_, index) => {
-      const handle = div("g3-ge-handle");
-      handle.addEventListener("pointerdown", (event) => this.onHandleDown(event, index));
-      handle.addEventListener("pointermove", (event) => this.onHandleMove(event, index));
-      handle.addEventListener("pointerup", (event) => this.onHandleUp(event));
-      // Backstop (same as OutputResizeHandle): the OS stealing the pointer mid-drag would
-      // otherwise leave `dragging` set, and the next hover would drag with no button held.
-      handle.addEventListener("pointercancel", (event) => this.onHandleUp(event));
-      handle.addEventListener("lostpointercapture", (event) => this.onHandleUp(event));
-      handle.addEventListener("dblclick", (event) => {
-        event.stopPropagation(); // or the bar's own dblclick adds one straight back
-        this.selected = index;
-        this.removeStop();
+      const handle = makeHandle("g3-ge-handle", `Stop ${index + 1}`, {
+        onDown: () => {
+          this.selected = index;
+          this.paint();
+        },
+        onMove: (event) => this.moveStop(index, this.positionAt(event)),
+        onNudge: (dx, _dy, coarse) => {
+          const stop = this.stops[index];
+          if (!stop) return;
+          this.selected = index;
+          this.moveStop(index, stop.position + dx * (coarse ? 0.1 : 0.01));
+        },
+        onRemove: () => {
+          this.selected = index;
+          this.removeStop();
+        },
       });
       this.bar.appendChild(handle);
       return handle;
@@ -189,30 +168,12 @@ export class GradientEditor {
     return clamp01((event.clientX - rect.left) / Math.max(rect.width, 1));
   }
 
-  private onHandleDown(event: PointerEvent, index: number): void {
-    event.stopPropagation();
-    this.selected = index;
-    this.dragging = true;
-    (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
-    this.paint();
-  }
-
-  private onHandleMove(event: PointerEvent, index: number): void {
-    if (!this.dragging) return;
+  private moveStop(index: number, position: number): void {
     const stop = this.stops[index];
     if (!stop) return;
-    stop.position = Math.round(this.positionAt(event) * 1000) / 1000;
+    stop.position = round3(clamp01(position));
     this.paint();
     this.hooks.onChange();
-  }
-
-  private onHandleUp(event: PointerEvent): void {
-    this.dragging = false;
-    try {
-      (event.currentTarget as HTMLElement).releasePointerCapture(event.pointerId);
-    } catch {
-      // Capture may already have been released; nothing to undo.
-    }
   }
 
   private addStop(): void {
@@ -233,12 +194,9 @@ export class GradientEditor {
 
   private insertStop(position: number): void {
     if (this.stops.length >= this.hooks.max) return;
-    // Take the colour the gradient already has there, so adding a stop never changes the picture —
+    // Take the colour the gradient already has there, so adding a stop never changes the picture;
     // it only gives you a handle on it.
-    this.stops.push({
-      color: this.sampleAt(position),
-      position: Math.round(position * 1000) / 1000,
-    });
+    this.stops.push({ color: this.sampleAt(position), position: round3(position) });
     this.selected = this.stops.length - 1;
     this.rebuildHandles();
     this.paint();

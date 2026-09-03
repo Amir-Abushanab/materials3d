@@ -1,5 +1,5 @@
 /**
- * The backdrop, as a node graph — the twin of BACKDROP_FRAG.
+ * The backdrop, as a node graph, the twin of BACKDROP_FRAG.
  *
  * Four ways of painting the same quad, and they have almost nothing in common: a derived vertical
  * ramp, a palette gradient in four geometries, an image, and a lit WALL with its own microfacet
@@ -7,20 +7,22 @@
  * lamp overlay at the end applies to all of them.
  *
  * The mode is a uniform rather than four materials. Every fragment of the draw takes the same side,
- * so the branch is coherent and the cost is the program being larger — which for a full-screen quad
+ * so the branch is coherent and the cost is the program being larger, which for a full-screen quad
  * drawn once per pass is not a cost worth splitting a material over.
  */
 import { TSL } from "three/webgpu";
-import { normalFromXy, softMax, valueNoise } from "./common";
-
-type Vec = any;
+import {
+  length,
+  mix,
+  normalFromXy,
+  normalize,
+  select,
+  softMax,
+  valueNoise,
+  type Vec,
+} from "./common";
 
 const { Fn, float, vec2, vec3, vec4, Loop, If } = TSL;
-// CONDITION FIRST — see the note in `nodes/common`.
-const select = (cond: Vec, ifTrue: Vec, ifFalse: Vec): Vec => TSL.select(cond, ifTrue, ifFalse);
-const mix = (a: Vec, b: Vec, t: Vec): Vec => TSL.mix(a, b, t);
-const length = (v: Vec): Vec => TSL.length(v);
-const normalize = (v: Vec): Vec => TSL.normalize(v);
 
 /** How many footprints the wall can carry, and the most sides any one of them may have. */
 // Re-exported from the config so the two engines and the parity harness cannot drift.
@@ -31,7 +33,7 @@ export { GROUND_MAX_SIDES, GROUND_SLOTS };
 /**
  * Sample the palette at `t`, walking the stops in order.
  *
- * A zero-width span would divide by zero, so it steps past it and lets the later stop win — which
+ * A zero-width span would divide by zero, so it steps past it and lets the later stop win, which
  * is also what makes a hard band between two stops expressible at all.
  */
 export const rampAt = (stops: Vec, count: Vec, maxStops: number) =>
@@ -46,7 +48,7 @@ export const rampAt = (stops: Vec, count: Vec, maxStops: number) =>
         const f = select(
           b.greaterThan(a),
           clamped.sub(a).div(b.sub(a).max(1e-6)).clamp(0, 1),
-          // `a.step(b)` reads as `a >= b`, so this is GLSL's `step(b, t)` — t past the stop.
+          // `a.step(b)` reads as `a >= b`, so this is GLSL's `step(b, t)`, t past the stop.
           clamped.step(b),
         );
         c.assign(mix(c, stops.element(i.add(1)).xyz, f));
@@ -82,7 +84,7 @@ export const softInside = Fn(([distance, amplitude]: [Vec, Vec]) => {
 });
 
 /**
- * Signed distance from `p` to one grounded footprint — a circle, or a convex polygon.
+ * Signed distance from `p` to one grounded footprint, a circle, or a convex polygon.
  *
  * The polygon is built by soft-maxing its half-planes rather than hard-maxing them, so the corners
  * ERODE as the softness grows. A hard max keeps them sharp at every radius, which reads as a
@@ -136,7 +138,7 @@ export interface WallUniforms {
  *
  * Two noise octaves, and they do different jobs. The large one shapes the diffuse response; the
  * micro one alone drives the specular, because a mirror of a small solid angle responds to the
- * finest structure present — giving it the combined normal lets the large scale drag the highlight
+ * finest structure present, giving it the combined normal lets the large scale drag the highlight
  * around and the wall reads as warped rather than rough.
  */
 export const wallShade = (u: WallUniforms, bottom: Vec) =>
@@ -258,7 +260,7 @@ export interface BackdropUniforms {
   meshCount: Vec;
   meshSoft: Vec;
   maxMeshPoints: number;
-  /** Visible fraction of the plane, per axis — the plane is deliberately oversized. */
+  /** Visible fraction of the plane, per axis, the plane is deliberately oversized. */
   frame: Vec;
   size: Vec;
   hasImage: Vec;
@@ -290,7 +292,7 @@ export const backdropPass = (u: BackdropUniforms) =>
     //
     // This derivation runs in the direction BACKDROP_FRAG's does, plane -> frame, because it is
     // fed by the same world-space plane. It used to run the other way, reconstructing the plane uv
-    // from a full-screen quad as `(uvIn - 0.5) * frame + 0.5` — which silently assumed the camera
+    // from a full-screen quad as `(uvIn - 0.5) * frame + 0.5`, which silently assumed the camera
     // looks at the plane's CENTRE. It does not: `camera.lookAt.y` is nonzero in most presets, so
     // the slice the camera really sees is off-centre and everything authored against the plane
     // landed shifted. On `skewer` that put the lamp overlay 138px low.
@@ -368,7 +370,7 @@ export const backdropPass = (u: BackdropUniforms) =>
       ),
     );
 
-    // The lamps, faintly, over whatever the backdrop turned out to be — so a scene sits in a room
+    // The lamps, faintly, over whatever the backdrop turned out to be, so a scene sits in a room
     // rather than in front of a flat card.
     const p = planeUv.sub(0.5).mul(u.size).div(u.plateScale).add(u.plateOffset);
     const lamp = u.lamps(p).toVar();

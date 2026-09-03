@@ -3,13 +3,15 @@
  * remove them. The pad paints the actual field behind the handles, so what you drag against is
  * what the backdrop will be.
  *
- * Ported from Wave Studio. Mutates the supplied `MeshGradientPoint[]` in place and calls
- * `onChange`. Handles are real `<button>`s so the pad is keyboard-operable — arrows nudge, shift
- * for a coarse step — which a div with pointer handlers would not be.
+ * Mutates the supplied `MeshGradientPoint[]` in place and calls
+ * `onChange`. Handles are real `<button>`s so the pad is keyboard-operable (arrows nudge, shift
+ * for a coarse step), which a div with pointer handlers would not be.
  */
 import { renderMeshGradient } from "@materials3d/core/studio";
 import { parseHex, toHex, type MeshGradientPoint } from "@materials3d/core";
+import { injectStyle } from "../util/dom";
 import { clamp } from "../util/math";
+import { div, makeButton, makeColorInput, makeHandle, round3 } from "./gradientShared";
 
 const STYLE_ID = "g3-mesh-editor-style";
 
@@ -44,20 +46,6 @@ export interface MeshGradientEditorHooks {
   max: number;
 }
 
-function injectStyle(): void {
-  if (document.getElementById(STYLE_ID)) return;
-  const style = document.createElement("style");
-  style.id = STYLE_ID;
-  style.textContent = CSS;
-  document.head.appendChild(style);
-}
-
-function div(className: string): HTMLDivElement {
-  const el = document.createElement("div");
-  el.className = className;
-  return el;
-}
-
 export class MeshGradientEditor {
   private readonly root: HTMLDivElement;
   private readonly stage: HTMLDivElement;
@@ -68,7 +56,6 @@ export class MeshGradientEditor {
   private readonly removeButton: HTMLButtonElement;
   private handles: HTMLButtonElement[] = [];
   private selected = 0;
-  private dragging = false;
   private repaintRaf = 0;
 
   constructor(
@@ -77,7 +64,7 @@ export class MeshGradientEditor {
     private readonly getSoftness: () => number,
     private readonly hooks: MeshGradientEditorHooks,
   ) {
-    injectStyle();
+    injectStyle(STYLE_ID, CSS);
     this.root = div("g3-me");
     this.stage = div("g3-me-stage");
     this.canvas = document.createElement("canvas");
@@ -90,18 +77,16 @@ export class MeshGradientEditor {
     this.root.appendChild(this.stage);
 
     const row = div("g3-me-row");
-    this.colorInput = document.createElement("input");
-    this.colorInput.type = "color";
-    this.colorInput.addEventListener("input", () => {
+    this.colorInput = makeColorInput("Blob colour", (value) => {
       const point = this.points[this.selected];
       if (!point) return;
-      point.color = this.colorInput.value;
+      point.color = value;
       this.paint();
       this.hooks.onChange();
     });
     this.posLabel = div("g3-me-pos");
-    this.addButton = this.makeButton("+ blob", () => this.addPoint(0.5, 0.5));
-    this.removeButton = this.makeButton("− blob", () => this.removePoint());
+    this.addButton = makeButton("+ blob", () => this.addPoint(0.5, 0.5));
+    this.removeButton = makeButton("− blob", () => this.removePoint());
     row.append(this.colorInput, this.posLabel, this.addButton, this.removeButton);
     this.root.appendChild(row);
 
@@ -112,10 +97,6 @@ export class MeshGradientEditor {
     parent.appendChild(this.root);
     this.rebuildHandles();
     this.paint();
-  }
-
-  get element(): HTMLElement {
-    return this.root;
   }
 
   refresh(): void {
@@ -133,33 +114,29 @@ export class MeshGradientEditor {
     return this.getPoints();
   }
 
-  private makeButton(label: string, onClick: () => void): HTMLButtonElement {
-    const el = document.createElement("button");
-    el.type = "button";
-    el.textContent = label;
-    el.addEventListener("click", onClick);
-    return el;
-  }
-
   private rebuildHandles(): void {
     for (const handle of this.handles) handle.remove();
     this.handles = this.points.map((_, index) => {
-      const handle = document.createElement("button");
-      handle.type = "button";
-      handle.className = "g3-me-handle";
-      handle.setAttribute("aria-label", `Blob ${index + 1}`);
-      handle.addEventListener("pointerdown", (event) => this.onHandleDown(event, index));
-      handle.addEventListener("pointermove", (event) => this.onHandleMove(event, index));
-      handle.addEventListener("pointerup", (event) => this.onHandleUp(event));
-      // Backstop (same as OutputResizeHandle): the OS stealing the pointer mid-drag would
-      // otherwise leave `dragging` set, and the next hover would drag with no button held.
-      handle.addEventListener("pointercancel", (event) => this.onHandleUp(event));
-      handle.addEventListener("lostpointercapture", (event) => this.onHandleUp(event));
-      handle.addEventListener("keydown", (event) => this.onHandleKey(event, index));
-      handle.addEventListener("dblclick", (event) => {
-        event.stopPropagation(); // the stage's dblclick would otherwise add one straight back
-        this.selected = index;
-        this.removePoint();
+      const handle = makeHandle("g3-me-handle", `Blob ${index + 1}`, {
+        onDown: () => {
+          this.selected = index;
+          this.paint();
+        },
+        onMove: (event) => {
+          const at = this.pointAt(event);
+          this.movePoint(index, at.x, at.y, true);
+        },
+        onNudge: (dx, dy, coarse) => {
+          const point = this.points[index];
+          if (!point) return;
+          const step = coarse ? 0.1 : 0.01;
+          this.selected = index;
+          this.movePoint(index, point.x + dx * step, point.y + dy * step, false);
+        },
+        onRemove: () => {
+          this.selected = index;
+          this.removePoint();
+        },
       });
       this.stage.appendChild(handle);
       return handle;
@@ -191,7 +168,7 @@ export class MeshGradientEditor {
     renderMeshGradient(this.canvas, this.points, this.getSoftness());
   }
 
-  /** Coalesce repaints during a drag — the field costs more than moving a dot. */
+  /** Coalesce repaints during a drag: the field costs more than moving a dot. */
   private schedulePaint(): void {
     if (this.repaintRaf) return;
     this.repaintRaf = requestAnimationFrame(() => {
@@ -208,58 +185,22 @@ export class MeshGradientEditor {
     };
   }
 
-  private onHandleDown(event: PointerEvent, index: number): void {
-    event.stopPropagation();
-    this.selected = index;
-    this.dragging = true;
-    (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
-    this.paint();
-  }
-
-  private onHandleMove(event: PointerEvent, index: number): void {
-    if (!this.dragging) return;
+  /** `coalesce` defers the repaint to the next frame, for the many moves of a drag. */
+  private movePoint(index: number, x: number, y: number, coalesce: boolean): void {
     const point = this.points[index];
     if (!point) return;
-    const at = this.pointAt(event);
-    point.x = Math.round(at.x * 1000) / 1000;
-    point.y = Math.round(at.y * 1000) / 1000;
-    this.schedulePaint();
-    this.hooks.onChange();
-  }
-
-  private onHandleUp(event: PointerEvent): void {
-    this.dragging = false;
-    try {
-      (event.currentTarget as HTMLElement).releasePointerCapture(event.pointerId);
-    } catch {
-      // Capture may already have been released.
-    }
-  }
-
-  private onHandleKey(event: KeyboardEvent, index: number): void {
-    const point = this.points[index];
-    if (!point) return;
-    const step = event.shiftKey ? 0.1 : 0.01;
-    let dx = 0;
-    let dy = 0;
-    if (event.key === "ArrowLeft") dx = -step;
-    else if (event.key === "ArrowRight") dx = step;
-    else if (event.key === "ArrowUp") dy = step;
-    else if (event.key === "ArrowDown") dy = -step;
-    else return;
-    event.preventDefault();
-    this.selected = index;
-    point.x = Math.round(clamp(point.x + dx, 0, 1) * 1000) / 1000;
-    point.y = Math.round(clamp(point.y + dy, 0, 1) * 1000) / 1000;
-    this.paint();
+    point.x = round3(clamp(x, 0, 1));
+    point.y = round3(clamp(y, 0, 1));
+    if (coalesce) this.schedulePaint();
+    else this.paint();
     this.hooks.onChange();
   }
 
   private addPoint(x: number, y: number): void {
     if (this.points.length >= this.hooks.max) return;
     this.points.push({
-      x: Math.round(x * 1000) / 1000,
-      y: Math.round(y * 1000) / 1000,
+      x: round3(x),
+      y: round3(y),
       color: ADD_COLORS[this.points.length % ADD_COLORS.length],
     });
     this.selected = this.points.length - 1;

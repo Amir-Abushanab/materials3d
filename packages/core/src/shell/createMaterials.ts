@@ -1,4 +1,4 @@
-import type { SceneConfig } from "../config/model";
+import { mergeSceneConfig, type SceneConfig } from "../config/model";
 import type { MaterialRenderer, MaterialRendererOptions } from "../renderer/MaterialRenderer";
 import type { NodeMaterialRenderer } from "../renderer/NodeMaterialRenderer";
 import { hasWebGL, minSide, prefersReducedData, prefersReducedMotion } from "./probe";
@@ -24,12 +24,12 @@ export type MaterialState = "poster" | "loading" | "running" | "fallback";
  * Stays typed against the WebGL engine even though there are now two, because `onReady` hands this
  * renderer to consumers: widening it to the smaller surface both engines share would be a public
  * API break for everyone, to describe a second engine that is still being built. The WebGPU
- * loader asserts itself into this shape instead, and says why — see `core-loader-webgpu`.
+ * loader asserts itself into this shape instead, and says why, see `core-loader-webgpu`.
  */
 type CoreModule = typeof import("../core-loader");
 
 /** Which engine build to fetch. */
-/** `"webgpu"` selects the EXPERIMENTAL node/TSL engine — see `MaterialOptions.renderer`. */
+/** `"webgpu"` selects the EXPERIMENTAL node/TSL engine, see `MaterialOptions.renderer`. */
 export type RendererKind = "webgl" | "webgpu";
 
 /**
@@ -39,7 +39,7 @@ export type RendererKind = "webgl" | "webgpu";
  * and after the split: `"webgpu"` really does construct a `NodeMaterialRenderer`, and typing it as
  * the WebGL class was the one place this API said something untrue.
  *
- * `import type` — erased at compile time, so naming the node renderer here costs a default build
+ * `import type`, erased at compile time, so naming the node renderer here costs a default build
  * nothing. The two engines are separate three builds and must stay that way; see
  * `core-loader-webgpu`.
  */
@@ -50,7 +50,7 @@ export type EngineFor<R extends RendererKind> = R extends "webgpu"
 export interface MaterialOptions<R extends RendererKind = "webgl"> {
   /** Poster URL / data-URI. Defaults to adopting the container's `<img data-materials3d-poster>` (SSR). */
   poster?: string;
-  /** Poster `object-fit`. Default `"fill"` — matches the canvas, so a poster captured at the
+  /** Poster `object-fit`. Default `"fill"`, matches the canvas, so a poster captured at the
    *  container's aspect hands off with no visible jump. */
   posterFit?: PosterFit;
   /** Wait until the container nears the viewport before fetching the engine. Default true. */
@@ -86,13 +86,13 @@ export interface MaterialOptions<R extends RendererKind = "webgl"> {
    * `"webgpu"` is EXPERIMENTAL and not pixel-equal to the WebGL engine, which is the reference.
    * See `WEBGPU.md` for where it stands and what differs.
    *
-   * `"webgpu"` fetches a SEPARATE build — three's node renderer and TSL — and is the only way to
+   * `"webgpu"` fetches a SEPARATE build, three's node renderer and TSL, and is the only way to
    * reach a WebGPU backend. It is opt-in rather than automatic because the two engines are
    * different bundles that share only three's core: the default path stays at roughly 733 KB while
    * this one is nearer 1,028 KB, and a consumer who will never touch WebGPU should not pay for it.
    *
-   * `"webgpu"` still runs on WebGL wherever WebGPU is unavailable — three's node renderer falls
-   * back to a WebGL backend on its own — so this selects the ENGINE, not the backend. What it
+   * `"webgpu"` still runs on WebGL wherever WebGPU is unavailable, three's node renderer falls
+   * back to a WebGL backend on its own, so this selects the ENGINE, not the backend. What it
    * actually buys is TSL and whatever a WebGPU backend adds where the browser has one.
    */
   renderer?: R;
@@ -106,7 +106,7 @@ export interface SnapshotOptions {
   /** Encoder quality 0–1 for lossy types. */
   quality?: number;
   /** Render a fixed animation-time for a reproducible frame (default: the live frame). Poster
-   *  captures should pass `0` — the frame the scene opens on — so the file doesn't churn. */
+   *  captures should pass `0`, the frame the scene opens on, so the file doesn't churn. */
   time?: number;
 }
 
@@ -114,9 +114,14 @@ export interface MaterialHandle<R extends RendererKind = "webgl"> {
   readonly state: MaterialState;
   readonly renderer: EngineFor<R> | null;
   /** Capture the current live frame as an image Blob. Resolves `null` until the scene is running
-   *  — wait for {@link MaterialOptions.onReady} (or the element's `materials3d-ready` event) first. */
+   *, wait for {@link MaterialOptions.onReady} (or the element's `materials3d-ready` event) first. */
   snapshot(options?: SnapshotOptions): Promise<Blob | null>;
-  /** Merge a partial config. Staged before upgrade; applied directly after. */
+  /**
+   * Merge a partial config, one level deep: a nested block such as `{ post: { bloom: 1 } }` keeps
+   * the rest of that block, while arrays (`lamps`, `items`) replace wholesale. See
+   * `mergeSceneConfig` for the exact rule. Merged onto the live config once the scene is running,
+   * and onto the staged one before then.
+   */
   set(config: Partial<SceneConfig>): void;
   play(): void;
   pause(): void;
@@ -126,7 +131,7 @@ export interface MaterialHandle<R extends RendererKind = "webgl"> {
 
 /**
  * The shell implementation. `loadCore` is an explicit parameter (not read from options) so the
- * standalone/CDN build can pass a synchronous core and NOT bundle the dynamic-import path — its
+ * standalone/CDN build can pass a synchronous core and NOT bundle the dynamic-import path, its
  * output stays a single file. The public {@link createMaterials} supplies the dynamic-import default.
  */
 export function createMaterialsImpl<R extends RendererKind = "webgl">(
@@ -220,7 +225,7 @@ export function createMaterialsImpl<R extends RendererKind = "webgl">(
     setState("running");
     // The one cast, and it is the same nominal gap `core-loader-webgpu` bridges: the value really
     // is a `NodeMaterialRenderer` when `"webgpu"` was asked for, because that loader constructed
-    // it — only the local binding is typed as the WebGL class.
+    // it, only the local binding is typed as the WebGL class.
     options.onReady?.(renderer as unknown as EngineFor<R>);
 
     if (poster) {
@@ -244,7 +249,7 @@ export function createMaterialsImpl<R extends RendererKind = "webgl">(
 
   function begin(): void {
     // Permanent-poster gates, checked before any lazy wait or engine fetch.
-    if (webgl === "off") return; // deliberate poster-only mode — no fallback callback
+    if (webgl === "off") return; // deliberate poster-only mode, no fallback callback
     if (respectSaveData && prefersReducedData()) return fallback("save-data");
     if (respectReducedMotion && reducedMotionBehavior === "poster" && prefersReducedMotion()) {
       return fallback("reduced-motion");
@@ -282,9 +287,9 @@ export function createMaterialsImpl<R extends RendererKind = "webgl">(
       return renderer.captureImage(type, quality, time);
     },
     set(next) {
-      staged = { ...staged, ...next };
+      staged = mergeSceneConfig(staged, next);
       if (renderer) {
-        renderer.setConfig({ ...renderer.getConfig(), ...next });
+        renderer.setConfig(mergeSceneConfig(renderer.getConfig(), next));
         renderer.refreshPlayback(); // setConfig doesn't re-evaluate `paused` on its own
       }
     },
@@ -317,8 +322,8 @@ export function createMaterialsImpl<R extends RendererKind = "webgl">(
 }
 
 /**
- * Mount a self-optimizing glass scene into a container: shows a poster immediately, then —
- * lazily, and only when the browser can actually run it — fetches the engine, builds the
+ * Mount a self-optimizing glass scene into a container: shows a poster immediately, then,
+ * lazily, and only when the browser can actually run it, fetches the engine, builds the
  * renderer and crossfades in. Falls back to the poster on no-WebGL / save-data / reduced-motion /
  * small viewports / context loss / load errors.
  *

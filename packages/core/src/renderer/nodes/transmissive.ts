@@ -1,5 +1,5 @@
 /**
- * The transmissive materials — glass, frosted and liquid — as node graphs.
+ * The transmissive materials, glass, frosted and liquid, as node graphs.
  *
  * The parts here that are pure functions of their inputs: the cone of refracted rays, the spectral
  * weighting that makes dispersion a continuum, and the Beer-Lambert chord. The assembly that wires
@@ -7,19 +7,9 @@
  * pass state rather than only on the surface.
  */
 import { TSL } from "three/webgpu";
-import { sq } from "./common";
-
-type Vec = any;
+import { cos, cross, GOLDEN_ANGLE, mix, normalize, select, sin, sq, type Vec } from "./common";
 
 const { Fn, float, vec3 } = TSL;
-const select = (cond: Vec, ifTrue: Vec, ifFalse: Vec): Vec => TSL.select(cond, ifTrue, ifFalse);
-const mix = (a: Vec, b: Vec, t: Vec): Vec => TSL.mix(a, b, t);
-const normalize = (v: Vec): Vec => TSL.normalize(v);
-const cross = (a: Vec, b: Vec): Vec => TSL.cross(a, b);
-const cos = (v: Vec): Vec => TSL.cos(v);
-const sin = (v: Vec): Vec => TSL.sin(v);
-
-const GOLDEN_ANGLE = 2.39996323;
 
 /**
  * Refract the view into the surface, given an index RATIO rather than an index.
@@ -74,10 +64,10 @@ export const coneDirection = (samples: number) =>
     return normalize(dir.add(cos(a).mul(tangent).add(sin(a).mul(bitangent)).mul(r).mul(radius)));
   });
 
-/** Three overlapping Gaussians across the sample sweep — the reference's spectral weights. */
+/** Three overlapping Gaussians across the sample sweep, the reference's spectral weights. */
 export const spectralWeight = Fn(([t]: [Vec]) =>
   // `sq`, not `.pow(2)`: `t` is below each centre for part of the sweep, and this Fn is inlined
-  // into an unrolled loop where `t` is a literal — so a negative base reaches Tint as a constant
+  // into an unrolled loop where `t` is a literal, so a negative base reaches Tint as a constant
   // expression and it rejects the module outright. See `sq` in ./common.
   vec3(
     sq(t.sub(0.05).div(0.45)).negate().exp(),
@@ -111,7 +101,7 @@ export const coneTransmission = (u: ConeUniforms) =>
   Fn(([view, normal, pixel]: [Vec, Vec, Vec]) => {
     // Pinned to this scope with `toVar`, not left as expressions. Each `u.plate(...)` below walks
     // a lamp `Loop`, and a value first reached through one of those calls has its assignment
-    // written inside that loop body — recomputed per lamp, and read by the other samples from
+    // written inside that loop body, recomputed per lamp, and read by the other samples from
     // whatever the last iteration left. See the note in `nodes/common`.
     const e0 = float(1).div(u.ior).toVar();
     const rotation = coneRotation(pixel).toVar();
@@ -143,12 +133,12 @@ export interface SimpleUniforms {
 }
 
 /**
- * Three rays at three indices — the DEFAULT transmission, and the twin of the `else` branch in
+ * Three rays at three indices, the DEFAULT transmission, and the twin of the `else` branch in
  * GLASS_FRAG.
  *
  * Each channel is taken from its own ray rather than from a weighted mean across a sweep, so the
  * dispersion is three bins wide. That is visibly cruder than the cone on a faceted solid, where
- * the refraction moves faster than the bins — but it is three plate lookups against eleven, and it
+ * the refraction moves faster than the bins, but it is three plate lookups against eleven, and it
  * is what every scene gets unless it asks for `transmission: "cone"`.
  */
 export const simpleTransmission = (u: SimpleUniforms) =>
@@ -164,7 +154,7 @@ export const simpleTransmission = (u: SimpleUniforms) =>
  * Colour as LIGHT rather than pigment: take the field's chroma and keep the brightness of what is
  * behind.
  *
- * `mix(white, tint, absorb)` darkens as it saturates and looks muddy. The 0.55 matters too — full
+ * `mix(white, tint, absorb)` darkens as it saturates and looks muddy. The 0.55 matters too, full
  * chroma normalization turns smooth gradients into hard posterized patches.
  */
 export const transmittedHue = Fn(([lit]: [Vec]) => {
@@ -175,8 +165,8 @@ export const transmittedHue = Fn(([lit]: [Vec]) => {
 /**
  * Rodrigues rotation of a colour about the grey axis.
  *
- * Applied to the transmitted light only, so everything derived from it — the absorption hue, the
- * emission glow — shifts together while reflections keep the true lamp colours.
+ * Applied to the transmitted light only, so everything derived from it, the absorption hue, the
+ * emission glow, shifts together while reflections keep the true lamp colours.
  */
 export const rotateHue = Fn(([lit, turns]: [Vec, Vec]) => {
   const ha = turns.mul(2 * Math.PI);

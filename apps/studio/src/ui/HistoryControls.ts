@@ -1,20 +1,19 @@
 /**
  * The undo/redo cluster and its version-history popover, docked in the control panel's header.
  *
- * Wave Studio floats this over the stage and lets you drag it out of the way; here it lives beside
- * the title instead. The stage is the thing being designed — anything parked on top of it is
- * covering the work, and a control you have to move is a control that was in the wrong place. That
- * also removes the drag machinery entirely.
+ * Docked beside the title rather than floating over the stage: the stage is the thing being
+ * designed, and a control parked on top of it covers the work.
  *
- * Purely a view: it renders a {@link HistoryState} and reports intents through hooks — the timeline
+ * Purely a view: it renders a {@link HistoryState} and reports intents through hooks; the timeline
  * logic lives in `History` (src/history.ts). Builds its own DOM and injects its own stylesheet, so
  * the studio's CSS doesn't have to know it exists.
  */
 
 import type { HistoryState } from "../history";
+import { escapeHtml, injectStyle } from "../util/dom";
 
 /** Minimal per-version thumbnail source (satisfied structurally by HistoryThumbnailer). */
-export interface HistoryThumbSource {
+interface HistoryThumbSource {
   cached(id: number): string | undefined;
   request(id: number, cb: (url: string | null) => void): void;
 }
@@ -49,13 +48,6 @@ function relTime(t: number): string {
   if (m < 60) return `${m}m`;
   const h = Math.floor(m / 60);
   return h < 24 ? `${h}h` : `${Math.floor(h / 24)}d`;
-}
-
-function escapeHtml(s: string): string {
-  return s.replace(
-    /[&<>"']/g,
-    (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c] as string,
-  );
 }
 
 export class HistoryControls {
@@ -123,7 +115,7 @@ export class HistoryControls {
    *
    * A real element rather than the bar's shared `data-tip` pseudo-tooltip: that one can only carry
    * text through `content: attr(...)`, and an icon per row needs actual DOM. None of the gestures
-   * are guessable — right-drag to rotate least of all — and this sits with undo/redo because that
+   * are guessable (right-drag to rotate least of all), and this sits with undo/redo because that
    * is the cluster you look at when you have just done something you want to take back.
    */
   addHelp(rows: Array<{ icon: string; text: string }>): void {
@@ -152,14 +144,6 @@ export class HistoryControls {
   update(state: HistoryState): void {
     this.lastState = state;
     this.render();
-  }
-
-  dispose(): void {
-    this.stopTicking();
-    if (this.scrollRaf) cancelAnimationFrame(this.scrollRaf);
-    this.list.removeEventListener("scroll", this.onScroll);
-    this.el.removeEventListener("click", this.onClick);
-    this.el.remove();
   }
 
   private onClick = (event: MouseEvent): void => {
@@ -215,7 +199,7 @@ export class HistoryControls {
   };
 
   /**
-   * Fill thumbnails for rows in (or near) the visible area — cached instantly, else rendered on
+   * Fill thumbnails for rows in (or near) the visible area: cached instantly, else rendered on
    * demand. Geometry-based rather than IntersectionObserver so it works when the tab isn't focused,
    * and stays lazy: an offscreen row is never rendered until it is scrolled near.
    */
@@ -289,10 +273,9 @@ export class HistoryControls {
   }
 
   private static injectStyle(): void {
-    if (document.getElementById("g3-hist-style")) return;
-    const style = document.createElement("style");
-    style.id = "g3-hist-style";
-    style.textContent = `
+    injectStyle(
+      "g3-hist-style",
+      `
 .g3-hist{position:relative;display:inline-flex;font:12px/1.3 var(--sans);}
 /* A pill, so the three read as one control group rather than three loose glyphs. The border is
    heavier than the panel's usual hairline because it sits on an almost-white panel. */
@@ -321,7 +304,7 @@ export class HistoryControls {
 .g3-hist-bar [data-tip]:hover::after,.g3-hist-btn[data-tip]:focus-visible::after{opacity:1;
   transform:translateX(-50%) translateY(0);}
 /* The controls popover. Hangs from the button's right edge because the bar sits at the top-right
-   of a 320px panel — centred, it would run off the window. */
+   of a 320px panel; centred, it would run off the window. */
 .g3-hist-help{position:absolute;top:calc(100% + 7px);right:0;z-index:30;display:flex;
   flex-direction:column;gap:5px;width:max-content;max-width:250px;padding:8px 10px;
   border-radius:8px;background:var(--ink);color:#fff;text-align:left;font-size:10.5px;
@@ -362,7 +345,7 @@ export class HistoryControls {
 .g3-hist-row.is-current{background:color-mix(in srgb,var(--accent) 12%,transparent);}
 .g3-hist-row.is-current .g3-hist-thumb{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent);}
 .g3-hist-empty{padding:10px 12px;color:var(--ink-3);}
-`;
-    document.head.appendChild(style);
+`,
+    );
   }
 }

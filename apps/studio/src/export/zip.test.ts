@@ -1,6 +1,6 @@
 /**
  * The ZIP writer is hand-rolled (store-only, no dependency), which means nothing else checks that
- * what it produces is actually a readable archive. A corrupt zip fails silently — the file
+ * what it produces is actually a readable archive. A corrupt zip fails silently: the file
  * downloads, and only fails when someone tries to open it.
  */
 import { describe, expect, it } from "vitest";

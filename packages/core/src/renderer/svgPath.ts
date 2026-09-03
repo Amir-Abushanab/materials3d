@@ -1,17 +1,18 @@
 /**
  * SVG path data, tessellated into closed polylines.
  *
- * The `path` shape kind exists so a silhouette that is not a lathe and not a rounded rectangle —
- * a pair of spectacles, a logo, a leaf — can be authored the way silhouettes are actually drawn:
+ * The `path` shape kind exists so a silhouette that is not a lathe and not a rounded rectangle,
+ * a pair of spectacles, a logo, a leaf, can be authored the way silhouettes are actually drawn:
  * in a vector tool, copied out as a `d` attribute. Everything downstream of here already handles
  * arbitrary outlines, because `slab` and `arrow` are extruded 2D contours too; the only thing
  * missing was a way to SAY one in JSON.
  *
- * A subset, deliberately. `d` is a drawing language with a stroke model, fill rules and open
- * subpaths, and none of that survives extrusion into a solid — an open subpath has no inside.
- * What is honoured is every command that describes a closed contour: M/L/H/V/C/S/Q/T/A/Z, in both
- * absolute and relative form. Anything else is a stroke instruction, and a shape built from one
- * would be a guess.
+ * A subset, deliberately. `d` is a drawing language with a stroke model and fill rules, and none
+ * of that survives extrusion into a solid. What is honoured is every drawing command,
+ * M/L/H/V/C/S/Q/T/A/Z in both absolute and relative form, and every subpath is taken as CLOSED
+ * whether or not it ends in `Z`: a fill closes an open subpath the same way, and a stroke's open
+ * ends are the one thing a solid cannot show. Anything else is a stroke instruction, and a shape
+ * built from one would be a guess.
  *
  * Curves are tessellated HERE rather than handed to three as `Curve` objects, because the contour
  * has to be measured and refitted (see `pathShape`) before it becomes geometry, and a curve that
@@ -19,6 +20,7 @@
  */
 
 import * as THREE from "three";
+import { PATH_COMMAND } from "../util/svg";
 
 /** Samples per curve. Matches `extrude`'s own `curveSegments`, so a hand-drawn corner tessellates
  *  no more coarsely than a `slab`'s rounded one. */
@@ -28,7 +30,7 @@ const CURVE_SEGMENTS = 24;
  * Total samples one outline may spend, across every curve in it.
  *
  * A path pasted from a vector tool can carry hundreds of curve commands, and 24 samples apiece
- * would hand the extruder a contour of many thousand vertices — which triangulates slowly, ships
+ * would hand the extruder a contour of many thousand vertices, which triangulates slowly, ships
  * badly in a share link, and buys nothing visible at the size these shapes render. The budget is
  * spread evenly instead of truncating the path: a coarser curve is a small inaccuracy, a truncated
  * path is a different shape.
@@ -38,6 +40,11 @@ const MAX_SAMPLES = 4000;
 /** Sticky number scan. SVG permits `10-5`, `1.5.5` and `1e3` with no separator anywhere, so the
  *  cursor has to be advanced by a matcher rather than by splitting on whitespace. */
 const NUMBER = /[+-]?(?:\d*\.\d+|\d+\.?)(?:[eE][+-]?\d+)?/y;
+
+/** What a number can begin with, and the commands that draw a curve. Module-level, like
+ *  {@link PATH_COMMAND}, so the cursor does not build a regex for every token it reads. */
+const NUMBER_START = /[0-9.+-]/;
+const CURVE_COMMAND = /[CcSsQqTtAa]/g;
 
 /**
  * A cursor over path data.
@@ -69,7 +76,7 @@ class Cursor {
   command(): string | null {
     this.skip();
     const c = this.src[this.i];
-    if (c !== undefined && /[MmZzLlHhVvCcSsQqTtAa]/.test(c)) {
+    if (c !== undefined && PATH_COMMAND.test(c)) {
       this.i++;
       return c;
     }
@@ -79,11 +86,11 @@ class Cursor {
   hasNumber(): boolean {
     this.skip();
     const c = this.src[this.i];
-    return c !== undefined && /[0-9.+-]/.test(c);
+    return c !== undefined && NUMBER_START.test(c);
   }
 
   /**
-   * The next number, or NaN — consuming a character either way.
+   * The next number, or NaN, consuming a character either way.
    *
    * The unconditional advance is a liveness guarantee, not tidiness. `hasNumber` accepts a leading
    * `-` or `.`, so data like `L-a` looks like an argument and does not match; returning NaN without
@@ -110,7 +117,7 @@ class Cursor {
       this.i++;
       return c === "1" ? 1 : 0;
     }
-    // Malformed, but a wrong flag is a wrong arc rather than a broken parse — take a number and
+    // Malformed, but a wrong flag is a wrong arc rather than a broken parse, take a number and
     // let the caller's NaN guard decide.
     return this.number() ? 1 : 0;
   }
@@ -123,7 +130,7 @@ function angleBetween(ux: number, uy: number, vx: number, vy: number): number {
 }
 
 /**
- * Parse `d` into closed contours, in the source's own coordinates — Y still pointing DOWN, at
+ * Parse `d` into closed contours, in the source's own coordinates, Y still pointing DOWN, at
  * whatever scale it was authored. Reorienting and refitting is the caller's job, because only the
  * caller knows what size the shape is meant to come out.
  *
@@ -134,7 +141,7 @@ function angleBetween(ux: number, uy: number, vx: number, vy: number): number {
  */
 export function parseSvgPath(d: string): THREE.Vector2[][] {
   // Budget the curve samples before drawing anything: the count is needed by the first curve.
-  const curveCount = (d.match(/[CcSsQqTtAa]/g) ?? []).length;
+  const curveCount = (d.match(CURVE_COMMAND) ?? []).length;
   const segments = Math.max(
     4,
     Math.min(CURVE_SEGMENTS, Math.floor(MAX_SAMPLES / Math.max(1, curveCount))),
@@ -153,7 +160,7 @@ export function parseSvgPath(d: string): THREE.Vector2[][] {
 
   const cursor = new Cursor(d);
 
-  /** Reopen a contour after a `Z`, at the point the closed subpath started from — per the spec, a
+  /** Reopen a contour after a `Z`, at the point the closed subpath started from, per the spec, a
    *  draw command following a closepath begins a new subpath there. */
   const ensure = (): THREE.Vector2[] => {
     if (!current) {
@@ -211,12 +218,12 @@ export function parseSvgPath(d: string): THREE.Vector2[][] {
   };
 
   /**
-   * Endpoint-parameterized elliptical arc, converted to centre form and sampled — the W3C
+   * Endpoint-parameterized elliptical arc, converted to centre form and sampled, the W3C
    * implementation notes' algorithm, verbatim in structure.
    *
    * Worth having rather than approximating with a line: `A` is how every rounded corner of a
    * hand-drawn outline arrives from some tools, and a straight chord across one is exactly the
-   * crease the `beveledPrism` note warns about — it catches the environment as a hard line.
+   * crease the `beveledPrism` note warns about, it catches the environment as a hard line.
    */
   const arcTo = (
     rx: number,
@@ -227,8 +234,10 @@ export function parseSvgPath(d: string): THREE.Vector2[][] {
     x: number,
     y: number,
   ): void => {
-    // A degenerate radius is a straight line, per the spec — not an error.
-    if (rx === 0 || ry === 0 || (cx === x && cy === y)) {
+    // Both the spec's own rules rather than errors: endpoints that coincide omit the arc entirely,
+    // and a zero radius is a straight line joining them.
+    if (cx === x && cy === y) return;
+    if (rx === 0 || ry === 0) {
       lineTo(x, y);
       return;
     }
@@ -241,7 +250,7 @@ export function parseSvgPath(d: string): THREE.Vector2[][] {
     const dy = (cy - y) / 2;
     const x1 = cos * dx + sin * dy;
     const y1 = -sin * dx + cos * dy;
-    // Radii too small to span the endpoints are scaled up until they exactly reach — again the
+    // Radii too small to span the endpoints are scaled up until they exactly reach, again the
     // spec's own correction, and the reason a hand-edited `d` still draws something sane.
     const lambda = (x1 * x1) / (rx * rx) + (y1 * y1) / (ry * ry);
     if (lambda > 1) {
@@ -343,7 +352,7 @@ export function parseSvgPath(d: string): THREE.Vector2[][] {
         const rel = executed === "s";
         const ox = rel ? cx : 0;
         const oy = rel ? cy : 0;
-        // The first control point is the reflection of the last one — but only if the previous
+        // The first control point is the reflection of the last one, but only if the previous
         // command was itself a cubic. Otherwise it coincides with the current point, which is
         // what makes an `S` opening a subpath draw a quadratic-looking curve rather than a loop.
         const smooth = previous === "C" || previous === "c" || previous === "S" || previous === "s";
@@ -399,12 +408,12 @@ export function parseSvgPath(d: string): THREE.Vector2[][] {
       }
       case "Z":
       case "z": {
-        // The contour is closed by construction — a repeated start point would leave a
+        // The contour is closed by construction, a repeated start point would leave a
         // zero-length edge whose normal is undefined, the same defect `cone` avoids at its tip.
         cx = sx;
         cy = sy;
         current = null;
-        // Closepath takes no arguments, so it has no implicit repeat — and leaving it as the
+        // Closepath takes no arguments, so it has no implicit repeat, and leaving it as the
         // current command would re-run it against a stray number without consuming one.
         cmd = "";
         break;
@@ -437,20 +446,20 @@ function finish(contours: THREE.Vector2[][]): THREE.Vector2[][] {
 /**
  * Parse `d` and place it in scene units: Y up, centred, sized to `r`.
  *
- * Split out from the shape builder because the BEAM tracer needs the same outline the mesh has —
+ * Split out from the shape builder because the BEAM tracer needs the same outline the mesh has,
  * a cross-section derived from anything else refracts light through a solid that is not on screen,
  * which is precisely the failure `BeamConfig.targets` exists to make impossible.
  *
  * Two normalizations, and both are what make a paste WORK rather than merely parse:
  *
  *   Y is flipped. SVG's grows downward and three's grows up, so an unflipped paste renders upside
- *   down — and reads as a bug in the shape rather than in the convention.
+ *   down, and reads as a bug in the shape rather than in the convention.
  *
  *   The drawing is scaled about its bounding-box centre until its longer half-extent is `r`. A
  *   path is authored against whatever viewBox its tool happened to use, so an unfitted paste is
  *   either a speck or a thousand units across, and neither can be found in the viewport to fix.
- *   Fitting also gives `r` the meaning it has everywhere else — the handle that resizes the
- *   shape — on a kind with no radius of its own.
+ *   Fitting also gives `r` the meaning it has everywhere else, the handle that resizes the
+ *   shape, on a kind with no radius of its own.
  *
  * Empty when nothing drawable came back, so the caller decides what to fall back to.
  */
@@ -486,11 +495,11 @@ export function fitOutline(d: string, r: number): THREE.Vector2[][] {
 const FEATURE_SAMPLES = 192;
 
 /**
- * Roughly how narrow this contour gets — the width of its thinnest limb, not of its bounding box.
+ * Roughly how narrow this contour gets, the width of its thinnest limb, not of its bounding box.
  *
  * The bevel has to be clamped to something, and the bounding box is the wrong something: an
  * outline's features can be far finer than its overall size. The temple arm of a pair of glasses
- * next to the width of its lenses is the case that motivates this — a bevel scaled off the box
+ * next to the width of its lenses is the case that motivates this, a bevel scaled off the box
  * comes out wider than the arm, and the arm renders as a fat glowing stripe with no flat left in
  * the middle of it.
  *
@@ -503,7 +512,7 @@ const FEATURE_SAMPLES = 192;
  * An estimate, and deliberately a cheap one. The contour is decimated to a fixed sample count
  * first, so the cost is a constant few thousand distance tests rather than quadratic in a pasted
  * outline's vertex count, and a limb narrow over a very short run can slip between samples. It
- * feeds a default that is then clamped again by the box and the depth — this only ever makes the
+ * feeds a default that is then clamped again by the box and the depth, this only ever makes the
  * bevel smaller, so an underestimate costs a little roundness and never breaks the mesh.
  */
 export function narrowestFeature(contour: readonly THREE.Vector2[]): number {
@@ -535,13 +544,13 @@ export function narrowestFeature(contour: readonly THREE.Vector2[]): number {
 /**
  * Whether a contour turns the same way at every vertex.
  *
- * Not a gate any more — the tracer handles a re-entrant outline — but still worth knowing, because
- * a convex polygon is the intersection of its edges' half-planes and can therefore be clipped by
- * Cyrus-Beck in one pass, which is markedly cheaper than the general scan. See `clipEntry`.
+ * Not a gate, the tracer follows a re-entrant outline too, but it decides which clipper the
+ * outline gets: see `clipConvex` in lightSheet.ts, which is only valid for a convex one and is
+ * markedly cheaper than the general scan.
  *
  * Normalized to the SINE of the turn, not left as a raw cross product. The raw value scales with
  * the square of the edge length, so a fixed epsilon means one thing on a 4-point square and
- * something else on a 600-point traced circle — where coordinates rounded to a few decimals in the
+ * something else on a 600-point traced circle, where coordinates rounded to a few decimals in the
  * source file wobble the turn direction from vertex to vertex and a raw test calls a circle
  * re-entrant. A sine tolerance is scale-free, and at 1e-4 it admits rounding noise (a thousandth
  * of a degree) while a genuinely concave vertex is nowhere near.
@@ -556,7 +565,7 @@ export function isConvex(contour: readonly THREE.Vector2[]): boolean {
     const c = contour[(i + 2) % n];
     const cross = (b.x - a.x) * (c.y - b.y) - (b.y - a.y) * (c.x - b.x);
     const turn = cross / (Math.hypot(b.x - a.x, b.y - a.y) * Math.hypot(c.x - b.x, c.y - b.y) || 1);
-    // Collinear runs are not a verdict either way — a tessellated straight edge is full of them.
+    // Collinear runs are not a verdict either way, a tessellated straight edge is full of them.
     if (Math.abs(turn) < 1e-4) continue;
     const s = turn > 0 ? 1 : -1;
     if (sign === 0) sign = s;
@@ -570,7 +579,7 @@ function side(p: THREE.Vector2, q: THREE.Vector2, r: THREE.Vector2): number {
   return (q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x);
 }
 
-/** Whether two segments properly cross. Shared endpoints do not count — consecutive edges of any
+/** Whether two segments properly cross. Shared endpoints do not count, consecutive edges of any
  *  closed contour meet, and that is not an intersection. */
 function segmentsCross(
   a: THREE.Vector2,
@@ -592,15 +601,15 @@ function segmentsCross(
 }
 
 /**
- * Whether a contour is SIMPLE — no edge crossing any other.
+ * Whether a contour is SIMPLE, with no edge crossing any other.
  *
- * This is the gate the convexity test used to be, and it is the honest one: a re-entrant outline
- * is a perfectly good solid and the tracer now follows one, but a self-crossing outline is not a
- * solid at all. "Inside" is undefined for a figure-of-eight, so the tracer's entering-and-leaving
- * bookkeeping has nothing to be right about — it would not look approximate, it would look random.
+ * The one gate a beam target needs: a re-entrant outline is a perfectly good solid, but a
+ * self-crossing outline is not a solid at all. "Inside" is undefined for a figure-of-eight, so the
+ * tracer's entering-and-leaving bookkeeping has nothing to be right about; it would not look
+ * approximate, it would look random.
  *
  * O(n^2), and deliberately run AFTER simplification: a few hundred points is tens of thousands of
- * compares once per beam retrace, which is nothing beside the thousands of rays that follow.
+ * compares once per outline, which is nothing beside the thousands of rays a retrace casts.
  */
 export function isSimple(contour: readonly THREE.Vector2[]): boolean {
   const n = contour.length;
@@ -617,11 +626,11 @@ export function isSimple(contour: readonly THREE.Vector2[]): boolean {
 }
 
 /**
- * Drop the points a shape's silhouette does not depend on — Douglas-Peucker.
+ * Drop the points a shape's silhouette does not depend on. Douglas-Peucker.
  *
  * The tracer walks every edge of a cross-section for every ray, and a pasted outline can carry
- * thousands, so something has to come off. Uniform index sampling — which is what a convex-only
- * gate could get away with, since it preserves convexity — is exactly wrong here: it thins a
+ * thousands, so something has to come off. Uniform index sampling, which is what a convex-only
+ * gate could get away with, since it preserves convexity, is exactly wrong here: it thins a
  * straight run and a narrow notch at the same rate, and the notch is the whole reason the outline
  * is interesting. Douglas-Peucker spends its points where the shape bends, so a long flat edge
  * costs two and a slot keeps its walls.
@@ -638,7 +647,6 @@ export function simplifyOutline(
   // A closed contour has no natural endpoints, so it is split at the two points furthest apart and
   // simplified as two open chains. Simplifying it as one chain from an arbitrary start would pin
   // that start point and let the vertex beside it go, which shows as a nick in the silhouette.
-  let a = 0;
   let b = 1;
   let best = -1;
   for (let i = 1; i < n; i++) {
@@ -648,7 +656,7 @@ export function simplifyOutline(
       b = i;
     }
   }
-  const first = contour.slice(a, b + 1);
+  const first = contour.slice(0, b + 1);
   const second = [...contour.slice(b), contour[0]];
   const kept = [...douglasPeucker(first, tolerance), ...douglasPeucker(second, tolerance).slice(1)];
   kept.pop(); // the duplicated wrap point
@@ -688,7 +696,7 @@ function douglasPeucker(chain: THREE.Vector2[], tolerance: number): THREE.Vector
  *
  * Simplify first, then test: simplification can only remove crossings that rounding put there, and
  * testing the dense contour would reject outlines that trace perfectly well. What survives is a
- * simple polygon, convex or not — `preparePolygon` decides which clipper it gets.
+ * simple polygon, convex or not, `preparePolygon` decides which clipper it gets.
  */
 export function traceableOutline(
   contour: readonly THREE.Vector2[],

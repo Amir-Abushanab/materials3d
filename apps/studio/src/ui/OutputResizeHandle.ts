@@ -35,9 +35,9 @@ interface DragState {
 /**
  * Drag any corner of the export frame to resize the output.
  *
- * Ported from Wave Studio. The frame follows the pointer immediately by taking an explicit
+ * The frame follows the pointer immediately by taking an explicit
  * inline/block size, which overrides the `aspect-ratio` rule that normally shapes it; the
- * expensive part — re-sizing the renderer's backing buffers — happens once, on release.
+ * expensive part, re-sizing the renderer's backing buffers, happens once, on release.
  *
  * The frame is centred in the stage, so a corner only travels half as far as the size changes:
  * every pointer delta is doubled and mirrored across the opposite edge.
@@ -57,33 +57,13 @@ export class OutputResizeHandle {
       handle.addEventListener("pointermove", this.onPointerMove);
       handle.addEventListener("pointerup", this.onPointerEnd);
       handle.addEventListener("pointercancel", this.onPointerEnd);
-      // The backstop. Losing the capture without a pointerup — the element going away under it,
-      // the browser reclaiming it — would otherwise leave the gesture open forever, and the
+      // The backstop. Losing the capture without a pointerup (the element going away under it,
+      // the browser reclaiming it) would otherwise leave the gesture open forever, and the
       // selection overlay stood down with it. `onPointerEnd` clears its own state first, so the
       // ordinary case, where this fires just after pointerup, costs nothing.
       handle.addEventListener("lostpointercapture", this.onPointerEnd);
       handle.addEventListener("keydown", this.onKeyDown);
     }
-  }
-
-  /**
-   * Remove every corner-handle listener. The handle elements live in index.html and outlive this
-   * instance, so on dev HMR a second set of drag handlers would otherwise stack on them.
-   */
-  dispose(): void {
-    for (const handle of this.handles) {
-      handle.removeEventListener("pointerdown", this.onPointerDown);
-      handle.removeEventListener("pointermove", this.onPointerMove);
-      handle.removeEventListener("pointerup", this.onPointerEnd);
-      handle.removeEventListener("pointercancel", this.onPointerEnd);
-      handle.removeEventListener("lostpointercapture", this.onPointerEnd);
-      handle.removeEventListener("keydown", this.onKeyDown);
-    }
-  }
-
-  fitPreview(): void {
-    this.frame.style.removeProperty("inline-size");
-    this.frame.style.removeProperty("block-size");
   }
 
   private previewBounds(): { width: number; height: number } {

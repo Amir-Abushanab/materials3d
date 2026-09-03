@@ -2,8 +2,8 @@
  * Direct manipulation of shapes in the viewport: select them, drag them, turn them, resize them.
  *
  * The selection box and its handles are **DOM**, not scene geometry. An in-scene gizmo would go
- * through the same four passes as everything else — depth of field would soften it, haze would
- * fade it out at the bottom of the frame, and the saturation bloom would smear it — which is
+ * through the same four passes as everything else (depth of field would soften it, haze would
+ * fade it out at the bottom of the frame, and the saturation bloom would smear it), which is
  * exactly wrong for a control that has to stay crisp and clickable. Projecting each shape's bounds
  * to screen space and drawing an ordinary overlay keeps the UI sharp and the hit-testing simple.
  *
@@ -21,22 +21,23 @@
  *
  * Everything here reports intent through hooks; the config edits and history commits live in
  * main.ts. The one thing it does read out of the config is group membership, through core's own
- * `expandToGroups` — what a group means for a selection has to be defined in exactly one place,
+ * `expandToGroups`: what a group means for a selection has to be defined in exactly one place,
  * and the panel needs the same answer.
  */
 
 import * as THREE from "three";
 import { expandToGroups, type MaterialItem, type ItemConfig } from "@materials3d/core";
 import type { MaterialRenderer } from "@materials3d/core/renderer";
+import { injectStyle, shortcutBlocked } from "../util/dom";
 
 export interface SelectionHooks {
-  /** A drag or resize started — used to flush a history step before the change. */
+  /** A drag or resize started, used to flush a history step before the change. */
   onEditStart(): void;
   /** Continuous during a gesture: write the live transform back into the item's config. */
   onTransform(item: MaterialItem): void;
   /** The gesture ended; commit it as one history entry with this label. */
   onEditEnd(label: string): void;
-  /** Selection changed. The LAST entry is the primary one — what the panel scrolls to. */
+  /** Selection changed. The LAST entry is the primary one, what the panel scrolls to. */
   onSelect(items: readonly MaterialItem[]): void;
   /** Called after a successful pick, before selecting. Return true if the scene was rebuilt (a
    *  generated scene has to be baked into real shapes first), so the pick can be repeated against
@@ -57,7 +58,7 @@ type Handle = "nw" | "ne" | "se" | "sw";
 const HANDLES: Handle[] = ["nw", "ne", "se", "sw"];
 
 /**
- * Real controls parked inside the host — today, the export frame's corner handles. Presses on
+ * Real controls parked inside the host: today, the export frame's corner handles. Presses on
  * them are never selection gestures, and this listener runs on the CAPTURE phase, so it sees them
  * before the control does and cannot be waved off after the fact by `setInteractive`. The
  * overlay's own handles are plain divs, so they are unaffected.
@@ -80,13 +81,23 @@ const MARQUEE_SLOP = 4;
  *  the effort a deliberate reorientation should cost. */
 const ROTATE_SPEED = 0.01;
 
+/** How long the box keeps tracking after the last input while the scene is paused. Covers the
+ *  camera's own easing after an orbit or a wheel step, which runs on past the event. */
+const SETTLE_MS = 1500;
+
+/** The gestures are not guessable, and a tooltip on the box is where someone will look for them
+ *  the moment a drag does something they did not expect. */
+const BOX_TITLE =
+  "drag to move · shift-drag for depth · right-drag to rotate · shift-right-drag to roll · " +
+  "corners scale · shift-click a shape to add it · ⌘G groups · alt-click drills into a group";
+
 /** Degrees, not the radians the config stores: nobody dials an angle in radians, and the badge
  *  exists to be read mid-gesture. */
 function deg(radians: number): string {
   return `${Math.round(THREE.MathUtils.radToDeg(radians))}°`;
 }
 
-/** World units, to one decimal — the same numbers the panel's position row shows, at the precision
+/** World units, to one decimal: the same numbers the panel's position row shows, at the precision
  *  you can actually steer to by hand. */
 function unit(value: number): string {
   return value.toFixed(1);
@@ -114,7 +125,7 @@ interface DragState {
   /** Distance from the box centre at grab time, for resize ratios. */
   startRadius: number;
   startClientY: number;
-  /** Previous pointer position — rotation is incremental, so it works from the delta. */
+  /** Previous pointer position; rotation is incremental, so it works from the delta. */
   lastX: number;
   lastY: number;
   moved: boolean;
@@ -128,7 +139,7 @@ interface MarqueeState {
   startY: number;
   /** Adding to the selection rather than replacing it. */
   additive: boolean;
-  /** Set once the pointer travels past the slop — before that it is still a click. */
+  /** Set once the pointer travels past the slop; before that it is still a click. */
   live: boolean;
   /** The selection to add to, captured at press. */
   base: MaterialItem[];
@@ -144,7 +155,7 @@ export class SelectionOverlay {
    *  the box around them. Pooled: a marquee changes the count on every pointer move. */
   private readonly outlines: HTMLDivElement[] = [];
   private selected: MaterialItem[] = [];
-  /** True when the selection was made by drilling INTO a group — so it must not re-expand. */
+  /** True when the selection was made by drilling INTO a group, so it must not re-expand. */
   private pierced = false;
   private drag?: DragState;
   private marquee?: MarqueeState;
@@ -156,8 +167,12 @@ export class SelectionOverlay {
   private readonly offset = new THREE.Vector3();
   private readonly delta = new THREE.Vector3();
   private raf = 0;
+  /** While the scene is paused the box only needs to track until the camera settles after an
+   *  input; past this the loop stops rather than repainting a still frame. */
+  private idleUntil = 0;
+  private lastBox = "";
   private disposed = false;
-  /** Stood down while something else owns the stage — see `setInteractive`. */
+  /** Stood down while something else owns the stage; see `setInteractive`. */
   private inert = false;
 
   constructor(
@@ -165,13 +180,14 @@ export class SelectionOverlay {
     private readonly renderer: MaterialRenderer,
     private readonly hooks: SelectionHooks,
   ) {
-    SelectionOverlay.injectStyle();
+    injectStyle("g3-sel-style", CSS);
     this.el = document.createElement("div");
     this.el.className = "g3-sel";
     this.el.hidden = true;
 
     this.box = document.createElement("div");
     this.box.className = "g3-sel-box";
+    this.box.title = BOX_TITLE;
     for (const handle of HANDLES) {
       const el = document.createElement("div");
       el.className = `g3-sel-handle is-${handle}`;
@@ -196,9 +212,14 @@ export class SelectionOverlay {
     host.addEventListener("pointerdown", this.onPointerDown, true);
     host.addEventListener("contextmenu", this.onContextMenu);
     window.addEventListener("keydown", this.onKeyDown);
+    // The renderer's own orbit and dolly move the camera under a paused scene; these are what
+    // restart the tracking loop once it has gone quiet.
+    host.addEventListener("pointerdown", this.wake, true);
+    host.addEventListener("pointermove", this.onHostMove, true);
+    host.addEventListener("wheel", this.wake, { passive: true, capture: true });
   }
 
-  /** The primary selection — the last one added. */
+  /** The primary selection, the last one added. */
   get item(): MaterialItem | null {
     return this.selected[this.selected.length - 1] ?? null;
   }
@@ -230,13 +251,13 @@ export class SelectionOverlay {
    * Replace the selection.
    *
    * `whole` is the group policy: by default any shape pulls its whole group in with it, which is
-   * what makes a group behave as one object from every entry point — click, marquee, shift-click,
+   * what makes a group behave as one object from every entry point: click, marquee, shift-click,
    * and the panel's "locate". Pass false to select exactly what was asked for, which is the
    * drilled-in case.
    */
   setSelection(items: readonly MaterialItem[], whole = true): void {
     // Snapshot first: `wholeGroup()` below reads the live selection, so it has to be assigned
-    // before the comparison — which therefore needs the old values kept aside.
+    // before the comparison, which therefore needs the old values kept aside.
     const was = { items: this.selected, pierced: this.pierced, group: this.el.dataset.group };
     const next = whole ? this.expand(items) : [...new Set(items)];
     const pierced = !whole && next.length > 0;
@@ -264,7 +285,7 @@ export class SelectionOverlay {
     this.sync();
   }
 
-  /** Add or remove one shape — or its whole group — leaving the rest of the selection alone. */
+  /** Add or remove one shape, or its whole group, leaving the rest of the selection alone. */
   toggle(item: MaterialItem): void {
     const group = this.expand([item]);
     this.setSelection(
@@ -279,7 +300,7 @@ export class SelectionOverlay {
    *
    * The membership rule itself is core's `expandToGroups`, working on the configs; this maps the
    * answer back onto the live items. Going through the config rather than reimplementing the walk
-   * over `item.config.group` is deliberate — the panel asks the same question, and two copies of
+   * over `item.config.group` is deliberate: the panel asks the same question, and two copies of
    * "what counts as the same group" would eventually disagree.
    */
   private expand(items: readonly MaterialItem[]): MaterialItem[] {
@@ -310,7 +331,7 @@ export class SelectionOverlay {
   sync = (): void => {
     if (this.disposed || this.selected.length === 0) return;
 
-    // The group box is the union of the members' boxes — the same rectangle you would draw round
+    // The group box is the union of the members' boxes, the same rectangle you would draw round
     // them by eye.
     let minX = Infinity;
     let minY = Infinity;
@@ -335,24 +356,32 @@ export class SelectionOverlay {
       return;
     }
     this.box.style.visibility = "visible";
-    this.box.style.transform = `translate(${minX}px, ${minY}px)`;
-    this.box.style.width = `${width}px`;
-    this.box.style.height = `${height}px`;
-    this.hint.textContent = this.badge();
-    // The gestures are not guessable, and a tooltip on the box is where someone will look for
-    // them the moment a drag does something they did not expect.
-    this.box.title =
-      "drag to move · shift-drag for depth · right-drag to rotate · shift-right-drag to roll · " +
-      "corners scale · shift-click a shape to add it · ⌘G groups · alt-click drills into a group";
+    // This runs every frame while selected, so nothing is written unless it moved: a style write
+    // is a style invalidation even when the value is the same.
+    const key = `${minX},${minY},${width},${height}`;
+    if (key !== this.lastBox) {
+      this.lastBox = key;
+      this.box.style.transform = `translate(${minX}px, ${minY}px)`;
+      this.box.style.width = `${width}px`;
+      this.box.style.height = `${height}px`;
+    }
+    const badge = this.badge();
+    if (this.hint.textContent !== badge) this.hint.textContent = badge;
   };
 
   dispose(): void {
+    // A gesture in flight is finished, not abandoned: the engine switch rebuilds this overlay,
+    // and a drag left half-way would leave a shape displaced with no history entry naming it.
+    this.endGestures();
     this.disposed = true;
     this.stopTracking();
     this.host.removeEventListener("dblclick", this.onDoubleClick);
     this.host.removeEventListener("pointerdown", this.onPointerDown, true);
     this.host.removeEventListener("contextmenu", this.onContextMenu);
     window.removeEventListener("keydown", this.onKeyDown);
+    this.host.removeEventListener("pointerdown", this.wake, true);
+    this.host.removeEventListener("pointermove", this.onHostMove, true);
+    this.host.removeEventListener("wheel", this.wake, true);
     this.marqueeEl.remove();
     this.el.remove();
   }
@@ -405,16 +434,21 @@ export class SelectionOverlay {
         continue;
       }
       el.hidden = false;
-      el.style.transform = `translate(${bounds.x}px, ${bounds.y}px)`;
-      el.style.width = `${bounds.width}px`;
-      el.style.height = `${bounds.height}px`;
+      const transform = `translate(${bounds.x}px, ${bounds.y}px)`;
+      if (el.style.transform !== transform) el.style.transform = transform;
+      const width = `${bounds.width}px`;
+      if (el.style.width !== width) el.style.width = width;
+      const height = `${bounds.height}px`;
+      if (el.style.height !== height) el.style.height = height;
     }
   }
 
   // The scene animates and the camera orbits, so a selected shape moves under the box every
   // frame. A private rAF loop keeps them together without coupling to the render loop, which is
-  // itself stopped whenever the scene is paused or offscreen.
+  // itself stopped whenever the scene is paused or offscreen. Paused, with no gesture in flight
+  // and no input for a while, nothing under the box can move, so the loop stops too.
   private startTracking(): void {
+    this.idleUntil = performance.now() + SETTLE_MS;
     if (this.raf) return;
     const tick = (): void => {
       if (this.disposed || this.selected.length === 0) {
@@ -422,10 +456,24 @@ export class SelectionOverlay {
         return;
       }
       this.sync();
-      this.raf = requestAnimationFrame(tick);
+      const still =
+        this.renderer.getConfig().paused &&
+        !this.drag &&
+        !this.marquee &&
+        performance.now() > this.idleUntil;
+      this.raf = still ? 0 : requestAnimationFrame(tick);
     };
     this.raf = requestAnimationFrame(tick);
   }
+
+  /** Any input that can move the camera restarts tracking, or extends it. */
+  private wake = (): void => {
+    if (this.selected.length > 0) this.startTracking();
+  };
+
+  private onHostMove = (event: PointerEvent): void => {
+    if (event.buttons !== 0) this.wake();
+  };
 
   private stopTracking(): void {
     if (this.raf) cancelAnimationFrame(this.raf);
@@ -435,7 +483,7 @@ export class SelectionOverlay {
   /** Pick a shape, baking the scene first if it is still generated. */
   private pickAt(clientX: number, clientY: number): MaterialItem | null {
     let hit = this.renderer.pick(clientX, clientY);
-    // Only prepare when something was actually hit — baking a scene because someone clicked the
+    // Only prepare when something was actually hit: baking a scene because someone clicked the
     // backdrop would be a surprising edit.
     if (hit) {
       const index = this.renderer.getItems().indexOf(hit);
@@ -455,7 +503,7 @@ export class SelectionOverlay {
     // marquee; this is the gesture that throws the rest away.
     const hit = this.pickAt(event.clientX, event.clientY);
     // A SECOND double-click, on a shape whose group is already selected, drills in to that one
-    // shape — the way every app with grouping lets you reach a member without ungrouping. Only
+    // shape, the way every app with grouping lets you reach a member without ungrouping. Only
     // from the group's own selection, so a stray double-click never silently escapes the group.
     if (hit && !this.pierced && hit.config?.group && this.selected.includes(hit)) {
       this.setSelection([hit], false);
@@ -471,25 +519,24 @@ export class SelectionOverlay {
   };
 
   private onKeyDown = (event: KeyboardEvent): void => {
-    if (this.inert) return;
-    if (event.key === "Escape" && this.selected.length > 0) {
+    // The shared guard: not in a text field or a dropdown, not behind the code dialog, and not
+    // on key repeat. ⌘G is the browser's find-again and Backspace is its Back, and a panel input
+    // has the focus for most of the time anyone spends in the studio.
+    if (this.inert || shortcutBlocked(event)) return;
+    if (event.key === "Escape") {
+      if (this.selected.length === 0) return;
       event.preventDefault();
       this.setSelection([]);
       return;
     }
     const group = event.key.toLowerCase() === "g" && (event.metaKey || event.ctrlKey);
-    // Delete and Backspace both, because which one is "the" delete key depends on the keyboard —
+    // Delete and Backspace both, because which one is "the" delete key depends on the keyboard,
     // and ⌘⌫ falls out of this for nothing, for the Finder habit.
     const remove = event.key === "Delete" || event.key === "Backspace";
     if (!group && !remove) return;
-    // Guarded against text fields: ⌘G is the browser's find-again, Backspace is its Back, and a
-    // panel input has the focus for most of the time anyone spends in the studio. Host chrome
-    // counts too — arrow-nudging the export frame's corner is not a moment to delete shapes.
-    const target = event.target as HTMLElement | null;
-    if (target && (/^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName) || target.isContentEditable)) {
-      return;
-    }
-    if (onChrome(target)) return;
+    // Host chrome counts as a field too: arrow-nudging the export frame's corner is not a moment
+    // to delete shapes.
+    if (onChrome(event.target)) return;
     if (this.selected.length === 0) return;
     event.preventDefault();
     if (remove) this.hooks.onDelete(this.selected);
@@ -515,7 +562,7 @@ export class SelectionOverlay {
       }
     }
 
-    // Modifier + click on a shape edits the selection instead of starting a gesture — the way to
+    // Modifier + click on a shape edits the selection instead of starting a gesture: the way to
     // build one precisely when a marquee would catch the wrong neighbours.
     if (additive && handle === undefined && event.button === 0) {
       const hit = this.pickAt(event.clientX, event.clientY);
@@ -568,7 +615,7 @@ export class SelectionOverlay {
     const primary = this.item;
     if (!primary) return;
 
-    // `home` — the authored pose — not `mesh.position`, which a running motion has already
+    // `home`, the authored pose, not `mesh.position`, which a running motion has already
     // displaced. Measuring the grab against the animated pose is what makes a drag on a moving
     // shape fight the animation and drift.
     const origin = primary.home;
@@ -580,7 +627,7 @@ export class SelectionOverlay {
       home: item.home.clone(),
       scale: item.mesh.scale.clone(),
     }));
-    // The pivot is the mean of the members' origins — the 3D counterpart of the box you can see.
+    // The pivot is the mean of the members' origins, the 3D counterpart of the box you can see.
     // With one shape selected this IS its origin, so every formula below reduces to the
     // single-shape case exactly.
     const pivot = new THREE.Vector3();
@@ -636,7 +683,7 @@ export class SelectionOverlay {
     if (!primary) return;
 
     if (event.shiftKey) {
-      // Shift moves along the view axis — the FULL view direction, not just its world-Z part,
+      // Shift moves along the view axis: the FULL view direction, not just its world-Z part,
       // or the gesture dies once the camera is orbited off-axis. Screen-plane dragging can't
       // reach depth at all, and depth is what puts one rod behind another.
       const direction = this.renderer.viewDirection();
@@ -685,7 +732,7 @@ export class SelectionOverlay {
    * Turn the selection by a pointer delta, about the CAMERA's axes rather than the world's.
    *
    * Dragging right should tip the shape the way it looks like it should tip, whatever angle the
-   * camera has been orbited to — rotating about world X/Y instead would send it turning in a
+   * camera has been orbited to; rotating about world X/Y instead would send it turning in a
    * direction the pointer never moved once the view is off-axis. Horizontal turns about the
    * camera's up, vertical about its right, and shift rolls about the view axis, which is the third
    * degree of freedom a two-axis drag cannot otherwise reach.
@@ -813,7 +860,7 @@ export class SelectionOverlay {
     for (const item of this.renderer.getItems()) {
       const bounds = this.renderer.projectBounds(item);
       if (!bounds) continue;
-      // Intersects, not contains — catching only fully-enclosed shapes makes a marquee feel broken
+      // Intersects, not contains: catching only fully-enclosed shapes makes a marquee feel broken
       // the moment one end of a tall rod sits outside the sweep.
       const overlaps =
         bounds.x < x + width &&
@@ -824,13 +871,10 @@ export class SelectionOverlay {
     }
     return out;
   }
+}
 
-  private static injectStyle(): void {
-    if (document.getElementById("g3-sel-style")) return;
-    const style = document.createElement("style");
-    style.id = "g3-sel-style";
-    style.textContent = `
-/* The layer itself never takes pointer events — only the box and its handles do, so a click in
+const CSS = `
+/* The layer itself never takes pointer events: only the box and its handles do, so a click in
    empty space still reaches the canvas. */
 .g3-sel{position:absolute;inset:0;pointer-events:none;z-index:5;}
 .g3-sel[hidden]{display:none;}
@@ -868,12 +912,9 @@ export class SelectionOverlay {
 .g3-sel-hint{position:absolute;bottom:calc(100% + 6px);left:0;padding:2px 6px;border-radius:5px;
   background:var(--accent);color:#fff;white-space:nowrap;pointer-events:none;
   font-family:var(--mono);font-size:9.5px;letter-spacing:.04em;}
-/* The rubber band. Inert — it is drawn, never pointed at. */
+/* The rubber band. Inert: it is drawn, never pointed at. */
 .g3-sel-marquee{position:absolute;top:0;left:0;box-sizing:border-box;pointer-events:none;z-index:5;
   border:1px solid var(--accent);border-radius:2px;
   background:color-mix(in srgb,var(--accent) 10%,transparent);}
 .g3-sel-marquee[hidden]{display:none;}
 `;
-    document.head.appendChild(style);
-  }
-}

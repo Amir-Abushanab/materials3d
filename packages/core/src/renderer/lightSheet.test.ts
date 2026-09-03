@@ -23,19 +23,14 @@ import { ensureSceneConfig } from "../config/model";
 function presetBeam(): BeamOptions {
   const beam = ensureSceneConfig(PRESETS.prism()).beam;
   if (!beam) throw new Error("the prism preset must carry a beam");
+  const polygon = crossSectionFor(
+    { kind: "prism", r: beam.radius, sides: beam.sides },
+    beam.rotation,
+    0,
+  )!;
   return {
-    polygon: crossSectionFor(
-      { kind: "prism", r: beam.radius, sides: beam.sides },
-      beam.rotation,
-      0,
-    )!,
-    ...aimBeamAtAngle(
-      crossSectionFor({ kind: "prism", r: beam.radius, sides: beam.sides }, beam.rotation, 0)!,
-      beam.entryAngle ?? 0,
-      beam.incidence,
-      beam.width,
-      beam.distance,
-    ),
+    polygon,
+    ...aimBeamAtAngle(polygon, beam.entryAngle ?? 0, beam.incidence, beam.width, beam.distance),
     halfWidth: beam.width,
     z: beam.z,
     ior: beam.ior,
@@ -60,7 +55,7 @@ describe("wavelengthToBeamRgb", () => {
 
   /**
    * The point of using the CIE curves rather than a hue ramp. The eye's photopic response peaks
-   * near 555nm, so a real spectrum is far brighter in the green than at either end — which is what
+   * near 555nm, so a real spectrum is far brighter in the green than at either end, which is what
    * gives it a luminous core instead of reading as equal-weight coloured bars.
    */
   it("weights by the eye's photopic response, so green outshines both ends", () => {
@@ -170,7 +165,7 @@ describe("tracePrism", () => {
       new THREE.Vector2(Math.cos(0.14), Math.sin(0.14)),
       2.4,
     );
-    // Either it escapes after reflecting, or it never escapes at all — both mean bounces > 0.
+    // Either it escapes after reflecting, or it never escapes at all, both mean bounces > 0.
     expect(trapped === undefined || trapped.bounces > 0).toBe(true);
   });
 });
@@ -194,22 +189,13 @@ describe("buildLightSheet", () => {
     const o = presetBeam();
     const { geometry, stats } = buildLightSheet({ ...o, origin: new THREE.Vector2(-18, 40) });
     expect(stats.validBands).toBe(0);
-    // One white quad PER SLICE — the entry face is slanted, so the slices cannot share one quad.
+    // One white quad PER SLICE, the entry face is slanted, so the slices cannot share one quad.
     expect(geometry.getAttribute("position").count).toBe(o.slices * 6);
   });
 
   /**
-   * The regression this file exists for.
-   *
-   * The preset's entry angle is eight degrees above horizontal, and that is load-bearing: level or
-   * downward puts the internal ray past the critical angle at the exit face, so the violet half of
-   * the spectrum totally internally reflects out through the base while the red half leaves
-   * normally, and the rainbow splits into two unrelated streaks. It is a convincing-looking
-   * failure — the frame is still full of colour — so it needs a test rather than an eye.
-   */
-  /**
    * The pointer sweeps incidence across the critical angle on purpose, so what has to hold over
-   * the whole range is not "never bounces" — it is that every position produces a beam that is
+   * the whole range is not "never bounces", it is that every position produces a beam that is
    * actually ON the face and actually traced. A ray that misses the glass, or one that never
    * escapes at all, is the failure; total internal reflection is a feature.
    */
@@ -248,7 +234,7 @@ describe("buildLightSheet", () => {
   /**
    * The half of the sweep that exists to show light bouncing INSIDE the glass. At shallow
    * incidence the internal ray meets the exit face past the critical angle and cannot leave, so it
-   * reflects — and the tracer has to follow that rather than dropping the ray, or the low end of
+   * reflects, and the tracer has to follow that rather than dropping the ray, or the low end of
    * the pointer's range renders as nothing at all.
    */
   it("totally internally reflects at the shallow end of the pointer's range", () => {
@@ -267,7 +253,7 @@ describe("buildLightSheet", () => {
   });
 
   /**
-   * Subdivision invariance — the point of dividing flux by the Jacobian.
+   * Subdivision invariance, the point of dividing flux by the Jacobian.
    *
    * Each wavelength vertex carries a DENSITY, so the physical quantity is the Riemann sum
    * `Σ density · Δλ`, and Δλ shrinks as 1/samples. Doubling the sample count must therefore
@@ -291,6 +277,45 @@ describe("buildLightSheet", () => {
     expect(ratio).toBeGreaterThan(0.8);
     expect(ratio).toBeLessThan(1.25);
   });
+
+  it("fans through a second solid in several segments, not one run to the wall", () => {
+    // With one solid every fan cell is a single quad from the exit face to the wall. A second
+    // solid on the way adds the air gap, its interior and the run beyond, each a quad of its own,
+    // so the mesh grows well past one quad per cell and the scratch it is written into grows too.
+    const base = presetBeam();
+    const beam = ensureSceneConfig(PRESETS.prism()).beam!;
+    const centre = tracePrism(
+      base.polygon,
+      base.origin,
+      base.direction,
+      iorAt(550, base.ior, base.dispersion),
+    )!;
+    const at = centre.origin.clone().addScaledVector(centre.direction, 0.5);
+    const hex = prismCrossSection(0.12, 6, beam.rotation, { x: at.x, y: at.y });
+    const alone = buildLightSheet(base).stats;
+    const chained = buildLightSheet({ ...base, extraSolids: [{ polygon: hex, ior: 1.7 }] }).stats;
+    expect(alone.quads).toBe(alone.slices + alone.samples + (alone.samples - 1) * alone.slices);
+    expect(chained.validBands).toBe(chained.samples);
+    expect(chained.quads).toBeGreaterThan(alone.quads * 2);
+  });
+
+  it("counts the strips it refuses to draw when the beam straddles a vertex", () => {
+    // A wide beam aimed down at a triangle's apex: the half left of the apex enters the left face
+    // and the rest the right, so the beam's outer edges disagree, the strip falls back to slices,
+    // and the slice across the apex has no honest quad. One per wavelength, and counted.
+    const { stats } = buildLightSheet({
+      ...presetBeam(),
+      polygon: prismCrossSection(1, 3),
+      origin: new THREE.Vector2(0.02, 5),
+      direction: new THREE.Vector2(0, -1),
+      halfWidth: 0.3,
+      slices: 3,
+      samples: 16,
+      wallHalfExtent: new THREE.Vector2(6, 6),
+    });
+    expect(stats.validBands).toBe(stats.samples);
+    expect(stats.rejectedTopology).toBe(stats.samples);
+  });
 });
 
 describe("crossSectionFor", () => {
@@ -304,9 +329,9 @@ describe("crossSectionFor", () => {
   });
 
   it("refuses the kinds whose slice is not a convex polygon", () => {
-    // Returning a circle for these is not a rough approximation, it is a different solid — and the
+    // Returning a circle for these is not a rough approximation, it is a different solid, and the
     // tracer's clipping assumes convexity, so it would report crossings that are not there.
-    for (const kind of ["ring", "slab", "arrow", "blob"]) {
+    for (const kind of ["ring", "slab", "arrow", "blob"] as const) {
       expect(crossSectionFor({ kind, r: 1, sides: 72 }, Math.PI / 2, 0)).toBeUndefined();
     }
   });
@@ -324,7 +349,7 @@ describe("crossSectionFor", () => {
   });
 
   it("traces a re-entrant drawn outline too", () => {
-    // Convexity used to be the gate. It is now only a choice of clipper — a star is a perfectly
+    // Convexity used to be the gate. It is now only a choice of clipper, a star is a perfectly
     // good solid and the tracer follows one.
     const star =
       "M50 0 L61.8 33.8 L97.6 34.5 L69 56.2 L79.4 90.5 L50 70 L20.6 90.5 L31 56.2 L2.4 34.5 L38.2 33.8 Z";
@@ -344,11 +369,26 @@ describe("crossSectionFor", () => {
     expect(crossSectionFor({ kind: "path", r: 2, sides: 72 }, 0, 0)).toBeUndefined();
   });
 
+  it("answers a repeated drawn outline from its cache, as a fresh copy each time", () => {
+    // A path target is read on every retrace, so the fitted outline is kept. What comes back is
+    // posed anew each time: a caller that moved one answer must not have moved the next.
+    const star =
+      "M50 0 L61.8 33.8 L97.6 34.5 L69 56.2 L79.4 90.5 L50 70 L20.6 90.5 L31 56.2 L2.4 34.5 L38.2 33.8 Z";
+    const shape = { kind: "path", r: 2, sides: 72, outline: star } as const;
+    const first = crossSectionFor(shape, 0, 0.3, { x: 1, y: 2 })!;
+    const second = crossSectionFor(shape, 0, 0.3, { x: 1, y: 2 })!;
+    expect(second.map((p) => [p.x, p.y])).toEqual(first.map((p) => [p.x, p.y]));
+    expect(second[0]).not.toBe(first[0]);
+    // And a different radius is a different fit, not a stale hit.
+    const larger = crossSectionFor({ ...shape, r: 4 }, 0, 0.3, { x: 1, y: 2 })!;
+    expect(Math.max(...larger.map((p) => p.x))).toBeGreaterThan(Math.max(...first.map((p) => p.x)));
+  });
+
   it("spares a drawn outline the beam's own rotation, and applies the item's roll", () => {
-    // `beamRotation` reconciles the LATHE convention — a lathe's slice is generated here in XZ and
+    // `beamRotation` reconciles the LATHE convention, a lathe's slice is generated here in XZ and
     // the default rotation is what puts a vertex at the top. A path is drawn in XY already, so the
     // same rotation would spin the outline away from where the mesh actually sits.
-    const shape = { kind: "path", r: 2, sides: 72, outline: "M0 0 H40 V20 H0 Z" };
+    const shape = { kind: "path", r: 2, sides: 72, outline: "M0 0 H40 V20 H0 Z" } as const;
     const spun = crossSectionFor(shape, Math.PI / 2, 0)!;
     const still = crossSectionFor(shape, 0, 0)!;
     expect(spun.map((p) => [p.x, p.y])).toEqual(still.map((p) => [p.x, p.y]));
@@ -391,7 +431,7 @@ describe("crossSectionFor", () => {
   it("matches the lathe's own vertex angles", () => {
     // LatheGeometry sweeps from 0 and the item is rotated -90 about X, which puts a vertex at the
     // top in world XY. If these disagree the beam refracts through a solid that is rotated off
-    // the visible one, and the error is a few degrees — visible, and hard to attribute.
+    // the visible one, and the error is a few degrees, visible, and hard to attribute.
     const [apex] = crossSectionFor({ kind: "prism", r: 4, sides: 3 }, Math.PI / 2, 0)!;
     expect(apex.x).toBeCloseTo(0, 9);
     expect(apex.y).toBeCloseTo(4, 9);
@@ -428,6 +468,30 @@ describe("aimBeamAtAngle", () => {
     expect(nearest).toBeGreaterThan(width);
   });
 
+  it("measures the bearing from the polygon's centroid, not the world origin", () => {
+    // A solid stands wherever the scene puts it. Measured from the origin, a bearing toward a
+    // triangle at (5, 0) strikes whichever face happens to face the origin, or nothing at all.
+    const centred = crossSectionFor({ kind: "prism", r: 1, sides: 3 }, Math.PI / 2, 0)!;
+    const moved = crossSectionFor({ kind: "prism", r: 1, sides: 3 }, Math.PI / 2, 0, {
+      x: 5,
+      y: 0,
+    })!;
+    // A few degrees off the normal, so no ray runs through the centroid and out of a far vertex.
+    for (const bearing of [0, 40, 90, 135, 180, 250, 300]) {
+      const c = aimBeamAtAngle(centred, bearing, 5, 0.01, 5);
+      const m = aimBeamAtAngle(moved, bearing, 5, 0.01, 5);
+      const reference = c.origin.clone().addScaledVector(c.direction, 5);
+      const hit = m.origin.clone().addScaledVector(m.direction, 5);
+      // The same point on the outline, carried along with it.
+      expect(hit.x - 5, `bearing ${bearing}`).toBeCloseTo(reference.x, 9);
+      expect(hit.y, `bearing ${bearing}`).toBeCloseTo(reference.y, 9);
+      expect(m.direction.x).toBeCloseTo(c.direction.x, 9);
+      expect(m.direction.y).toBeCloseTo(c.direction.y, 9);
+      expect(tracePrism(centred, c.origin, c.direction, 1.5), `bearing ${bearing}`).toBeDefined();
+      expect(tracePrism(moved, m.origin, m.direction, 1.5), `bearing ${bearing}`).toBeDefined();
+    }
+  });
+
   it("is continuous across a face boundary, unlike a face index", () => {
     // The point this parameterization exists for: sweeping the bearing walks the outline instead
     // of jumping when it crosses a vertex.
@@ -445,7 +509,7 @@ describe("aimBeamAtAngle", () => {
 describe("the angular fast path", () => {
   it("agrees with a full scan on every ray, and is actually taken", () => {
     // The windowed clip is only ever a speed-up: exact when its window holds the right edge, and
-    // falling back to the full scan when it does not. This pins BOTH halves — that the two paths
+    // falling back to the full scan when it does not. This pins BOTH halves, that the two paths
     // are indistinguishable, and that the fast one really fires, since a window that silently
     // never triggered would pass an agreement test trivially.
     const smooth = crossSectionFor({ kind: "sphere", r: 1, sides: 72 }, Math.PI / 2, 0)!;
@@ -482,7 +546,7 @@ describe("the angular fast path", () => {
 });
 
 /**
- * A chain of three DIFFERENT solids for the light to thread — a hexagon, a sphere and a triangular
+ * A chain of three DIFFERENT solids for the light to thread, a hexagon, a sphere and a triangular
  * prism, each with its own index.
  *
  * Held here rather than read out of a preset. It used to be `PRESETS.cascade`, and when that
@@ -495,15 +559,15 @@ const CHAIN = [
   { kind: "prism", sides: 3, r: 0.32, x: -0.6, y: 0.14, spin: 0, ior: 1.62 },
   { kind: "sphere", sides: 72, r: 0.28, x: -0.02, y: 0.02, spin: 0, ior: 1.5 },
   { kind: "hex", sides: 6, r: 0.3, x: 0.62, y: 0, spin: Math.PI / 6, ior: 1.74 },
-];
+] as const;
 
 /** The beam that threads them: the `prism` preset's optics, re-aimed for a chain. The sweep is
  *  narrow because the route that reaches all three survives only a few degrees. */
 function chainBeam() {
   return {
     ...ensureSceneConfig(PRESETS.prism()).beam!,
-    entryAngle: 170,
-    incidence: -35,
+    entryAngle: 235,
+    incidence: 45,
     entrySweep: 26,
   };
 }
@@ -541,7 +605,7 @@ describe("a chain of solids", () => {
     for (let e = 0; e <= 1.0001; e += 0.125) {
       for (let y = 0; y <= 1.0001; y += 0.25) {
         positions++;
-        const incidence = -27 + (-43 - -27) * y;
+        const incidence = beam.incidence + 8 - 16 * y;
         const aim = aimBeamAtAngle(
           solids[0].outline.points,
           (beam.entryAngle ?? 0) + (e - 0.5) * (beam.entrySweep ?? 90),
@@ -603,7 +667,7 @@ function solid(points: THREE.Vector2[], ior = 1.5): Solid {
  * The clipper the tracer has always used is Cyrus-Beck, which treats each edge as a HALF-PLANE and
  * is therefore convex-only: on a notched outline it reports crossings on the far side of the notch
  * that the ray never makes. These cover the general scan that replaces it for such shapes, and the
- * property that matters most — that the two agree wherever both are valid.
+ * property that matters most, that the two agree wherever both are valid.
  */
 
 describe("re-entrant cross-sections", () => {
@@ -626,11 +690,11 @@ describe("re-entrant cross-sections", () => {
 
   it("crosses the same solid twice when the ray passes through its notch", () => {
     // Straight up x = 1, which is inside the notch: the ray enters the lower arm, leaves it into
-    // the gap, then enters the upper arm. Cyrus-Beck cannot express this — the notch is not a
+    // the gap, then enters the upper arm. Cyrus-Beck cannot express this, the notch is not a
     // half-plane of the outline, so the far arm is invisible to it.
     const path = traceSolids([solid(C_SHAPE)], new THREE.Vector2(1, -10), new THREE.Vector2(0, 1));
     expect(path).toBeDefined();
-    // Entry, exit, entry, exit — four surface points, all on ONE solid.
+    // Entry, exit, entry, exit, four surface points, all on ONE solid.
     expect(path!.points.length).toBeGreaterThanOrEqual(4);
     expect(path!.solids.every((i) => i === 0)).toBe(true);
   });
@@ -652,7 +716,7 @@ describe("re-entrant cross-sections", () => {
   });
 
   it("crosses once where the notch is not in the way", () => {
-    // Same solid, same direction, but up its solid back — one entry and one exit.
+    // Same solid, same direction, but up its solid back, one entry and one exit.
     const path = traceSolids(
       [solid(C_SHAPE, 1.0001)],
       new THREE.Vector2(-2, -10),

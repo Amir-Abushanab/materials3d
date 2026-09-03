@@ -170,10 +170,10 @@
       },
       "name": "density",
       "material": {
+        "density": 0.4,
         "ior": 1.45,
         "dispersion": 0,
-        "emission": 0,
-        "density": 0.4
+        "emission": 0
       },
       "motion": {
         "kind": "none",
@@ -226,11 +226,11 @@
       },
       "name": "ior",
       "material": {
+        "path": 0.55,
+        "density": 1.2,
         "ior": 1.03,
         "dispersion": 0,
-        "emission": 0,
-        "density": 1.2,
-        "path": 0.55
+        "emission": 0
       },
       "motion": {
         "kind": "none",
@@ -283,10 +283,10 @@
       },
       "name": "dispersion",
       "material": {
+        "density": 1.2,
         "ior": 1.45,
         "dispersion": 0,
-        "emission": 0,
-        "density": 1.2
+        "emission": 0
       },
       "motion": {
         "kind": "none",
@@ -339,11 +339,11 @@
       },
       "name": "lens",
       "material": {
+        "density": 1.2,
         "ior": 1.45,
         "dispersion": 0,
-        "emission": 0,
-        "density": 1.2,
-        "lens": 0
+        "lens": 0,
+        "emission": 0
       },
       "motion": {
         "kind": "none",
@@ -396,11 +396,11 @@
       },
       "name": "rim",
       "material": {
+        "density": 1.2,
         "ior": 1.45,
         "dispersion": 0,
-        "emission": 0,
-        "density": 1.2,
-        "rim": 0
+        "rim": 0,
+        "emission": 0
       },
       "motion": {
         "kind": "none",
@@ -453,12 +453,12 @@
       },
       "name": "specular",
       "material": {
+        "path": 0.5,
+        "density": 1.2,
         "ior": 1.45,
         "dispersion": 0,
-        "emission": 0,
-        "density": 1.2,
         "specular": 0,
-        "path": 0.5
+        "emission": 0
       },
       "motion": {
         "kind": "none",
@@ -511,11 +511,11 @@
       },
       "name": "saturation",
       "material": {
+        "density": 2.5,
         "ior": 1.45,
         "dispersion": 0,
-        "emission": 0,
-        "density": 2.5,
-        "saturation": 0.3
+        "saturation": 0.3,
+        "emission": 0
       },
       "motion": {
         "kind": "none",
@@ -568,10 +568,10 @@
       },
       "name": "emission",
       "material": {
+        "density": 2,
         "ior": 1.45,
         "dispersion": 0,
-        "emission": 0,
-        "density": 2
+        "emission": 0
       },
       "motion": {
         "kind": "none",
@@ -624,15 +624,15 @@
       },
       "name": "ripple",
       "material": {
+        "path": 0.6,
+        "density": 1.2,
         "ior": 1.33,
         "dispersion": 0,
         "emission": 0,
-        "kind": "liquid",
-        "density": 1.2,
         "ripple": 0,
         "rippleScale": 5,
         "flow": 1.4,
-        "path": 0.6
+        "kind": "liquid"
       },
       "motion": {
         "kind": "none",
@@ -685,10 +685,10 @@
       },
       "name": "iridescence",
       "material": {
+        "density": 0.8,
         "ior": 1.45,
         "dispersion": 0,
         "emission": 0,
-        "density": 0.8,
         "iridescence": 0,
         "filmNm": 420
       },
@@ -743,13 +743,13 @@
       },
       "name": "film (nm)",
       "material": {
+        "path": 0.55,
+        "density": 0.8,
         "ior": 1.45,
         "dispersion": 0,
         "emission": 0,
-        "density": 0.8,
         "iridescence": 0.85,
-        "filmNm": 150,
-        "path": 0.55
+        "filmNm": 150
       },
       "motion": {
         "kind": "none",
@@ -802,10 +802,10 @@
       },
       "name": "position Y",
       "material": {
+        "density": 2,
         "ior": 1.45,
         "dispersion": 0,
-        "emission": 0,
-        "density": 2
+        "emission": 0
       },
       "motion": {
         "kind": "none",

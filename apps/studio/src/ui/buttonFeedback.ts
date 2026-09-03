@@ -1,10 +1,12 @@
 /**
- * In-place feedback ON the button the user just clicked — a green ✓ (success) or red ✕ (failure)
- * with a short label and a tasteful pop — instead of a toast, so confirmation stays where the eye
+ * In-place feedback ON the button the user just clicked, a green ✓ (success) or red ✕ (failure)
+ * with a short label and a tasteful pop, instead of a toast, so confirmation stays where the eye
  * already is. Works on a Tweakpane button (its `.tp-btnv_t` title element) or a plain `<button>`;
  * the resting content (icon + label) is captured and restored, so the button's SVG icon survives the
  * flash. Motion-safe: under reduced-motion the icon + label still swap in, just without the animation.
  */
+
+import { escapeHtml, injectStyle } from "../util/dom";
 
 const svg = (inner: string): string =>
   '<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" ' +
@@ -37,26 +39,14 @@ const CSS = `
 const resting = new WeakMap<HTMLElement, string>();
 const timers = new WeakMap<HTMLElement, number>();
 
-function esc(s: string): string {
-  return s.replace(/[&<>]/g, (c) => (c === "&" ? "&amp;" : c === "<" ? "&lt;" : "&gt;"));
-}
-
-function injectStyle(): void {
-  if (document.getElementById("g3-btn-feedback-style")) return;
-  const style = document.createElement("style");
-  style.id = "g3-btn-feedback-style";
-  style.textContent = CSS;
-  document.head.appendChild(style);
-}
-
 function flash(el: HTMLElement, label: string, duration: number, error: boolean): void {
-  injectStyle();
+  injectStyle("g3-btn-feedback-style", CSS);
   const target = el.querySelector<HTMLElement>(".tp-btnv_t") ?? el;
   // The FIRST flash captures the resting content (icon + label); a re-entrant flash reuses it and
   // just resets the timer, so a flashed state can never be captured AS the resting content.
   if (!resting.has(target)) resting.set(target, target.innerHTML);
   window.clearTimeout(timers.get(target));
-  target.innerHTML = `<span class="g3-bf-ic">${error ? CROSS : CHECK}</span>${esc(label)}`;
+  target.innerHTML = `<span class="g3-bf-ic">${error ? CROSS : CHECK}</span>${escapeHtml(label)}`;
   // Restart the pop/glow even on a rapid re-click.
   el.classList.remove("g3-bf-flash", "g3-bf-err");
   void el.offsetWidth;
@@ -73,7 +63,7 @@ function flash(el: HTMLElement, label: string, duration: number, error: boolean)
   );
 }
 
-/** Flash a green "✓ label" success state on `el`, then revert after `duration` ms — long enough to
+/** Flash a green "✓ label" success state on `el`, then revert after `duration` ms, long enough to
  *  read the confirmation at a glance before it settles back. */
 export function flashButtonSuccess(el: HTMLElement, label = "Done", duration = 2500): void {
   flash(el, label, duration, false);

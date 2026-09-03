@@ -7,7 +7,7 @@ export interface MaterialItem {
   readonly material: THREE.ShaderMaterial;
   /** The config this item was built from (null for items added imperatively with `add()`). */
   readonly config: ItemConfig | null;
-  /** This shape's own motion — resolved, so it is always present even for items added in code. */
+  /** This shape's own motion, resolved, so it is always present even for items added in code. */
   motion: MotionConfig;
   /** Where this shape sits in its motion's cycle, in radians. */
   phase: number;
@@ -15,7 +15,7 @@ export interface MaterialItem {
    *  so pausing, scrubbing and capturing a fixed frame all land in the same place. */
   readonly home: THREE.Vector3;
   readonly homeRotation: THREE.Euler;
-  /** The authored scale — what `wobble` squashes relative to. */
+  /** The authored scale, what `wobble` squashes relative to. */
   readonly homeScale: THREE.Vector3;
   /** Free space for a caller's own per-item state. */
   data: Record<string, unknown>;

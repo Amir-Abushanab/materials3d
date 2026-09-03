@@ -3,7 +3,7 @@
  *
  * The palette is not invented: it comes from a hue histogram of the saturated pixels in the
  * reference frame. That measurement is the whole reason a cosine palette sweeping full hue was
- * rejected — the real distribution is warm, magenta and blue-violet with essentially no green and
+ * rejected: the real distribution is warm, magenta and blue-violet with essentially no green and
  * NO CYAN AT ALL, which no evenly-swept palette will ever produce.
  *
  *   20–40°   19.3%     320–340°  13.2%     220–280°  ~21%
@@ -14,7 +14,7 @@
 import type { SceneConfig, LampConfig } from "@materials3d/core";
 import { hslToHex } from "./util/color";
 
-/** [hueStart, hueEnd, share] — shares are the measured percentages, normalized on use. */
+/** [hueStart, hueEnd, share]; shares are the measured percentages, normalized on use. */
 const HUE_BANDS: readonly [number, number, number][] = [
   [0, 20, 10.0],
   [20, 40, 19.3],
@@ -38,7 +38,7 @@ function sampleHue(rand: () => number): number {
   return HUE_BANDS[HUE_BANDS.length - 1][1];
 }
 
-export interface RandomizeOptions {
+interface RandomizeOptions {
   count?: number;
   rand?: () => number;
 }
@@ -47,14 +47,11 @@ export interface RandomizeOptions {
  * A fresh lamp field: lamps clustered in the lower-middle of plate space (where the reference
  * puts its light), each drawn from the measured hue distribution.
  *
- * Positions are jittered on a loose grid rather than uniformly random — pure uniform sampling
+ * Positions are jittered on a loose grid rather than uniformly random: pure uniform sampling
  * clumps, and two overlapping lamps read as one big one, which loses the empty space between
  * them that makes clear glass clear.
  */
-export function randomLamps({
-  count = 10,
-  rand = Math.random,
-}: RandomizeOptions = {}): LampConfig[] {
+function randomLamps({ count = 10, rand = Math.random }: RandomizeOptions = {}): LampConfig[] {
   const lamps: LampConfig[] = [];
   const columns = Math.ceil(Math.sqrt(count * 1.8));
   for (let i = 0; i < count; i++) {
@@ -80,7 +77,7 @@ export function randomizeLamps(config: SceneConfig): void {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Tasteful randomize — the whole scene, not just the lamps.
+// Tasteful randomize: the whole scene, not just the lamps.
 //
 // Every range below brackets the SHIPPED DEFAULT rather than spanning what the field technically
 // accepts. The reference look is a narrow band of each knob (a long lens, a deep haze, absorption
@@ -118,7 +115,7 @@ export function randomizeConfig(config: SceneConfig, rand: () => number = Math.r
   // Focus tracks the camera, or the whole frame lands outside the sharp band.
   post.focus = camera.distance + between(rand, -2, 2);
   // Aperture and range move TOGETHER. Rolled independently, a wide aperture on a narrow range
-  // blurs everything that isn't exactly on the focal plane, which is most of the scene — the
+  // blurs everything that isn't exactly on the focal plane, which is most of the scene; the
   // reference look keeps a readable band of sharp glass and lets only the far rods go soft.
   const softness = rand();
   post.range = Number((4 + softness * 4).toFixed(2));
@@ -150,7 +147,7 @@ export function randomizeConfig(config: SceneConfig, rand: () => number = Math.r
     scatter.seed = Math.floor(rand() * 10_000);
     // Count follows the span rather than being rolled against it. Independently, a high count on a
     // short span packs the rods into a solid wall and the composition stops reading as separate
-    // pieces of glass at all — which is the whole subject.
+    // pieces of glass at all, which is the whole subject.
     scatter.spanX = Number(between(rand, 14, 19).toFixed(2));
     scatter.count = Math.round(scatter.spanX * between(rand, 0.75, 1.0));
     scatter.spread = Number(between(rand, 2.6, 4.2).toFixed(2));

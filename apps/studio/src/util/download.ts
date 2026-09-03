@@ -5,7 +5,7 @@ export function download(blob: Blob, filename: string): void {
   a.href = url;
   a.download = filename;
   a.click();
-  // Revoking synchronously can beat the download in some browsers; one turn later is safe.
+  // Revoking synchronously can beat the download in some browsers; a second later is safe.
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 

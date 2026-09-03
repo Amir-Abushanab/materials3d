@@ -1,14 +1,14 @@
 /**
- * The glass foundations, as node graphs — twins of the depth pass, the lamp plate and the prism
+ * The glass foundations, as node graphs, twins of the depth pass, the lamp plate and the prism
  * plane walk in `shaders.ts`.
  *
  * Two of these read arrays against a dynamic count, which is the one place where TSL's loop is a
  * genuine `Loop` node rather than a JavaScript unroll: the bound is a uniform, so the shader has to
- * carry the branch. `Loop` needs an `Fn` scope around it — outside one the node stack is null and
+ * carry the branch. `Loop` needs an `Fn` scope around it, outside one the node stack is null and
  * it throws at build time rather than at draw time.
  *
  * EVERY `If`/`Else` CALLBACK HERE TAKES A BLOCK BODY, and that is not a style choice. A concise
- * arrow returns whatever its expression evaluates to, and `x.assign(y)` evaluates to a node — so
+ * arrow returns whatever its expression evaluates to, and `x.assign(y)` evaluates to a node, so
  * TSL reads the branch as having a return VALUE, tries to emit `return <value>;` inside an inlined
  * function, and, finding no function to return from, emits the line commented out and reports the
  * node's generated code as empty. The assignment itself still lands, so the shader keeps working
@@ -17,15 +17,9 @@
  */
 import { TSL } from "three/webgpu";
 import { PRISM_PLANES } from "../../config/model";
-import { sq, srgbToLinear } from "./common";
-
-type Vec = any;
+import { reflect, refract, select, sq, srgbToLinear, type Vec } from "./common";
 
 const { Fn, float, vec3, vec4, Loop, If } = TSL;
-// CONDITION FIRST — see the note in `nodes/common`.
-const select = (cond: Vec, ifTrue: Vec, ifFalse: Vec): Vec => TSL.select(cond, ifTrue, ifFalse);
-const reflect = (i: Vec, n: Vec): Vec => TSL.reflect(i, n);
-const refract = (i: Vec, n: Vec, eta: Vec): Vec => TSL.refract(i, n, eta);
 
 /**
  * Linear depth, split across two channels.
@@ -41,9 +35,6 @@ export const depthPass = (viewZ: Vec, far: number) =>
     const y = d.mul(255).fract();
     return vec4(d.sub(y.div(255)), y, 0, 1);
   })();
-
-/** The two-channel encoding, read back. */
-export const decodeDepth = (rg: Vec): Vec => rg.x.add(rg.y.div(255));
 
 export interface PlateUniforms {
   /** xy = position, z = radius, w = intensity. */
@@ -90,7 +81,7 @@ export const platePass = (u: PlateUniforms) =>
  * the refracted ray can leave through a different face entirely.
  *
  * Only a face the ray is heading OUT through can be an exit, which is what the denominator test
- * enforces — without it the walk finds the plane behind the ray and reports a path through empty
+ * enforces, without it the walk finds the plane behind the ray and reports a path through empty
  * space.
  */
 export const prismExit = (planes: Vec, count: Vec) =>
@@ -115,7 +106,7 @@ export const prismExitNormal = (planes: Vec, count: Vec) =>
     const nearest = float(1e9).toVar();
     const normal = vec3(0, 0, 1).toVar();
     // UNROLLED IN JAVASCRIPT, not a `Loop`. The back-glass walk calls this from inside an `If`, and
-    // a `Loop` carrying `toVar` accumulators nested in another control block does not survive —
+    // a `Loop` carrying `toVar` accumulators nested in another control block does not survive,
     // the accumulators are hoisted out of the scope they belong to and the search returns a face
     // that is not the nearest one. Same failure as the wall's contact shadow, and it showed here as
     // a bright ring on the bevel: the bevel is not one of the traced planes, so which plane the ray
@@ -124,7 +115,7 @@ export const prismExitNormal = (planes: Vec, count: Vec) =>
     // `PRISM_PLANES` is a compile-time constant, so this costs nothing a `Loop` would not. The
     // count stays a runtime guard.
     //
-    // HONESTLY: unrolling this did not change the rendered output — the bevel difference it was
+    // HONESTLY: unrolling this did not change the rendered output, the bevel difference it was
     // suspected of turned out to be elsewhere. It stays because the call site is nested and the
     // identical construct did break the wall, so this is one fewer place for that to hide.
     for (let slot = 0; slot < PRISM_PLANES; slot++) {
@@ -146,11 +137,11 @@ export const prismExitNormal = (planes: Vec, count: Vec) =>
 /**
  * Schlick's Fresnel for a dielectric, from the index rather than from an authored F0.
  *
- * Glass has no free parameter here — the reflectance at normal incidence follows from the index —
+ * Glass has no free parameter here, the reflectance at normal incidence follows from the index,
  * so deriving it keeps the reflection and the refraction describing the same material.
  */
 export const dielectricFresnel = Fn(([ior, facing]: [Vec, Vec]) => {
-  // `sq`, not `.pow(2)` — an ior below 1 makes the base negative, where WGSL's `pow` is
+  // `sq`, not `.pow(2)`, an ior below 1 makes the base negative, where WGSL's `pow` is
   // undefined. See `sq` in ./common.
   const f0 = sq(ior.sub(1).div(ior.add(1)));
   const m = float(1).sub(facing.clamp(0, 1));
@@ -159,14 +150,7 @@ export const dielectricFresnel = Fn(([ior, facing]: [Vec, Vec]) => {
 });
 
 /**
- * Cast a refracted ray at the plane hanging behind the scene and sample where it lands.
- *
- * The ray is never allowed to run parallel to the plate: a grazing refraction would otherwise
- * divide by nearly zero and sample somewhere arbitrarily far away, which reads as a shape smearing
- * the backdrop across itself at exactly the angles where it should be showing its own edge.
- */
-/**
- * The liquid surface — the twin of GLASS_CHUNK's `rippleNormal`.
+ * The liquid surface, the twin of GLASS_CHUNK's `rippleNormal`.
  *
  * Four travelling waves at incommensurate spatial frequencies and unrelated temporal ones. The
  * point of four rather than scrolled noise is that a scrolled texture drifts in one direction and
@@ -190,6 +174,13 @@ export const rippleNormal = Fn(([n, p, phase, scale, amount]: [Vec, Vec, Vec, Ve
   return TSL.normalize(n.add(g.mul(amount).mul(0.16)));
 });
 
+/**
+ * Cast a refracted ray at the plane hanging behind the scene and sample where it lands.
+ *
+ * The ray is never allowed to run parallel to the plate: a grazing refraction would otherwise
+ * divide by nearly zero and sample somewhere arbitrarily far away, which reads as a shape smearing
+ * the backdrop across itself at exactly the angles where it should be showing its own edge.
+ */
 export const backplate = (sampleLamps: Vec, planeZ: Vec, plateScale: Vec, plateOffset: Vec) =>
   Fn(([ro, rd]: [Vec, Vec]) => {
     const dz = rd.z.min(-0.04);
@@ -204,14 +195,13 @@ export interface BackGlassUniforms {
   planeCount: Vec;
   ior: Vec;
   strength: Vec;
-  plateDepth: Vec;
-  /** The room, at whatever cone width the caller wants — mirror-smooth here. */
+  /** The room, at whatever cone width the caller wants, mirror-smooth here. */
   room: (dir: Vec) => Vec;
   bounces: number;
 }
 
 /**
- * The prism's INNER interface — the twin of BACKGLASS_FRAG.
+ * The prism's INNER interface, the twin of BACKGLASS_FRAG.
  *
  * Draws the BACK-facing triangles and, for each fragment, follows the camera ray on into the glass
  * through however many total internal reflections it takes until it escapes, then samples the room
@@ -220,7 +210,7 @@ export interface BackGlassUniforms {
  *
  * The surface event is evaluated AT the face rather than by marching outward from it first. For a
  * convex solid the ray is already on the boundary heading out, so a search for a "next" surface
- * finds some far plane and reports a path through empty space — and which plane it finds changes
+ * finds some far plane and reports a path through empty space, and which plane it finds changes
  * by region, which draws the interior as a set of wedges.
  *
  * The walk carries a `done` flag instead of breaking. A break inside a TSL loop is expressible, but
@@ -275,5 +265,7 @@ export const backGlassPass = (u: BackGlassUniforms) =>
       float(1).sub(dielectricFresnel(u.ior, exitFacing)),
       float(0),
     );
-    return vec4(u.room(dir).mul(u.strength).mul(fresnel).mul(transmission), u.plateDepth);
+    // A constant alpha: the renderer draws this pass with the destination alpha kept (the plate's
+    // alpha is depth, not coverage), so whatever is written here never reaches the plate.
+    return vec4(u.room(dir).mul(u.strength).mul(fresnel).mul(transmission), 1);
   });

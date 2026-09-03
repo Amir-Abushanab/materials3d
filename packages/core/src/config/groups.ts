@@ -3,14 +3,14 @@
  * are testable without a renderer and reusable by anything that edits a scene.
  *
  * See {@link GroupConfig} for why membership lives on the shapes and a group carries no transform
- * of its own. Everything here is a mutation of the supplied config — the studio's edit model is
+ * of its own. Everything here is a mutation of the supplied config, the studio's edit model is
  * "mutate the renderer's own object, then commit a history step", and returning fresh configs
  * would break the identity contract the panel's bindings depend on.
  */
 
 import { MIN_GROUP_SIZE, type SceneConfig, type GroupConfig, type ItemConfig } from "./model";
 
-/** Ids are `g1`, `g2`, … — the lowest free integer, so they stay short, stable and readable in
+/** Ids are `g1`, `g2`, …, the lowest free integer, so they stay short, stable and readable in
  *  hand-edited JSON. Deterministic on purpose: a random id would make two identical grouping
  *  actions produce different configs, and the whole scene is meant to be a pure document. */
 function nextGroupId(config: SceneConfig): string {
@@ -26,7 +26,7 @@ function nextGroupId(config: SceneConfig): string {
  * A default label for a new group.
  *
  * A group gets a REAL name rather than leaning on the positional fallback, so the studio's name
- * field is populated the moment you make one — an empty box with faint placeholder text reads as
+ * field is populated the moment you make one, an empty box with faint placeholder text reads as
  * "unnamed", and the fallback would also renumber itself if an earlier group were deleted. Shapes
  * keep the placeholder instead: there are dozens of them and their fallback is derived from the
  * shape itself, so writing "rod 7" into all of them would only bloat the config.
@@ -71,7 +71,7 @@ export function expandToGroups(config: SceneConfig, items: readonly ItemConfig[]
  * Drop empty and undersized groups, and any registry entry no shape claims.
  *
  * Called after anything that removes shapes. A group whose membership falls below
- * {@link MIN_GROUP_SIZE} is dissolved rather than left as a one-shape group — deleting a shape
+ * {@link MIN_GROUP_SIZE} is dissolved rather than left as a one-shape group, deleting a shape
  * should not leave a lone survivor still reporting itself as grouped.
  */
 export function pruneGroups(config: SceneConfig): void {
@@ -88,7 +88,7 @@ export function pruneGroups(config: SceneConfig): void {
 /**
  * Group these shapes, returning the new group (or `null` if there was nothing to group).
  *
- * Shapes already in other groups are MOVED into the new one, and those groups pruned — the
+ * Shapes already in other groups are MOVED into the new one, and those groups pruned, the
  * PowerPoint behaviour, and the only one that makes repeated grouping predictable. Regrouping a
  * selection that is already exactly one whole group is a no-op rather than a rename, so mashing
  * the shortcut cannot bury a scene under layers of identical groups.
@@ -116,7 +116,7 @@ export function groupItems(config: SceneConfig, items: readonly ItemConfig[]): G
  *
  * It ungroups the whole group, not just the shapes handed in: half-dissolving a group is not a
  * thing anyone means by "ungroup", and since selecting one member selects all of them the
- * distinction only arises after drilling into a single shape — where "ungroup" still plainly means
+ * distinction only arises after drilling into a single shape, where "ungroup" still plainly means
  * the group it is in.
  */
 export function ungroupItems(config: SceneConfig, items: readonly ItemConfig[]): boolean {
@@ -130,7 +130,7 @@ export function ungroupItems(config: SceneConfig, items: readonly ItemConfig[]):
   return true;
 }
 
-/** A group's label, falling back to its position in the registry when it has no name — which is
+/** A group's label, falling back to its position in the registry when it has no name, which is
  *  the hand-authored case, since {@link groupItems} always names what it creates. */
 export function groupLabel(config: SceneConfig, group: GroupConfig): string {
   return group.name ?? `Group ${config.groups.indexOf(group) + 1}`;

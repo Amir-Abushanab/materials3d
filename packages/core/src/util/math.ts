@@ -1,4 +1,4 @@
-/** Shared numeric helpers. Dependency-free — a private copy so the renderer core carries no
+/** Shared numeric helpers. Dependency-free, a private copy so the renderer core carries no
  *  cross-package imports (the studio keeps its own copy under apps/studio/src/util). */
 
 export function clamp(value: number, min: number, max: number): number {
@@ -9,14 +9,8 @@ export function clamp01(value: number): number {
   return clamp(value, 0, 1);
 }
 
-/** Round to `decimals` places, e.g. roundTo(x, 2) → hundredths. */
-export function roundTo(value: number, decimals: number): number {
-  const factor = 10 ** decimals;
-  return Math.round(value * factor) / factor;
-}
-
 /**
- * mulberry32 — a small, fast, seedable PRNG. Scene scatter has to be reproducible: the same
+ * mulberry32, a small, fast, seedable PRNG. Scene scatter has to be reproducible: the same
  * config must generate the same rods on every machine and in every export, or the poster
  * captured at build time would not match what the browser renders.
  */

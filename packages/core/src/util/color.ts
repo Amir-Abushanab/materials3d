@@ -1,10 +1,10 @@
 /**
- * Colour parsing for Materials3D — deliberately *not* three's `Color`.
+ * Colour parsing for Materials3D, deliberately *not* three's `Color`.
  *
  * three r152+ runs colour management by default: `new Color("#f8c852")` converts sRGB to the
  * linear working space on parse, and the renderer converts back on output. That round trip is
  * lossless for a colour on its own, but every piece of MATH in between then happens in linear
- * space — and Materials3D's look was calibrated in display space (see the clear-glass ratio and hue
+ * space, and Materials3D's look was calibrated in display space (see the clear-glass ratio and hue
  * histogram in the technique notes). Beer–Lambert absorption, the chroma-vs-brightness split and
  * the DOF/bloom gathers all change character when you move them to linear.
  *
@@ -27,7 +27,7 @@ const HEX6 = /^#?([\da-f]{2})([\da-f]{2})([\da-f]{2})$/i;
 
 /**
  * Parse `"#rgb"`, `"#rrggbb"` or a `0xrrggbb` number into raw sRGB components (0–1).
- * Unparseable input falls back to white rather than throwing — a bad colour in a config should
+ * Unparseable input falls back to white rather than throwing, a bad colour in a config should
  * make one shape wrong, not take the page down.
  */
 export function parseHex(hex: string | number): RGB {
@@ -64,7 +64,7 @@ export function toHex(rgb: RGB): string {
   return `#${byteHex(rgb[0])}${byteHex(rgb[1])}${byteHex(rgb[2])}`;
 }
 
-/** HSL (h in degrees, s/l in 0–1) from raw sRGB components — the studio's colour maths. */
+/** HSL (h in degrees, s/l in 0–1) from raw sRGB components, the studio's colour maths. */
 export function rgbToHsl(rgb: RGB): [number, number, number] {
   const [r, g, b] = rgb;
   const max = Math.max(r, g, b);

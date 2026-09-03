@@ -11,15 +11,16 @@
  *   MAIN    the same frame again, now refracting the plate.
  *   POST    depth of field, bloom, tone mapping, to the screen.
  *
- * These are ISSUED, not awaited. `renderAsync` is deprecated as of three r181 in favour of
- * `render()` plus a single `await renderer.init()`, and awaiting it per pass cost about 10ms a
- * frame here — a frame is fifteen-odd passes, and that overhead did not vary with scene complexity
- * because it was never about the scene. It also removes every suspension point from `draw`, which
- * is where this engine's visibility save/restore used to interleave with itself. The old note
- * read: the renderer's `renderAsync` means every one of these is awaited rather than issued, so the
- * loop is async end to end where the WebGL engine's is not.
+ * Every pass is ISSUED through the synchronous `render()` after a single `await renderer.init()`,
+ * never awaited one by one: `renderAsync` is deprecated as of three r181, and awaiting fifteen-odd
+ * passes per frame cost about 10ms that had nothing to do with the scene. It also keeps `draw`
+ * free of suspension points, so the pass state it saves and restores cannot interleave with a
+ * second draw.
  */
 import * as THREE from "three/webgpu";
+import { BLOOM_DIVISORS, BLOOM_TAPS } from "../shared";
+
+export { BLOOM_DIVISORS, BLOOM_TAPS };
 
 export interface PassTargets {
   /**
@@ -27,14 +28,14 @@ export interface PassTargets {
    *
    * Separate from `back` because they answer different questions: this is how far away the surface
    * you can SEE is, which is what defocus is measured against, while `back` is where the light
-   * leaves. It is also cleared differently — to the focal depth, so the backdrop sits in focus.
+   * leaves. It is also cleared differently, to the focal depth, so the backdrop sits in focus.
    */
   front: THREE.RenderTarget;
   /** Back-face linear depth, read by the main pass to measure thickness. */
   back: THREE.RenderTarget;
   /** The plate: backdrop plus shapes, un-refracted. Alpha carries linear depth. */
   plate: THREE.RenderTarget;
-  /** The plate WITHOUT the shapes — what `material.bend` refracts. See the WebGL engine's
+  /** The plate WITHOUT the shapes, what `material.bend` refracts. See the WebGL engine's
    *  `renderPlainPlate` for why a real optical path needs a plate with no glass in it. */
   plain: THREE.RenderTarget;
   /** The composed frame, before post. Half-float when a tone map is in play. */
@@ -45,17 +46,6 @@ export interface PassTargets {
   bloom: { a: THREE.RenderTarget; b: THREE.RenderTarget }[];
 }
 
-/** Half-resolution steps of the bloom pyramid; the last is the dust light field, not visible glow. */
-export const BLOOM_DIVISORS = [2, 4, 8, 16] as const;
-export const BLOOM_TAPS = [6, 10, 14, 18] as const;
-
-/**
- * Allocate the pass targets.
- *
- * HDR is conditional on a tone map being configured, and that is not an optimisation: without a
- * half-float colour target the map is applied too late to matter, because the main pass has already
- * clipped everything above one on its way into an 8-bit buffer.
- */
 /** A render target that never gets a zero dimension, however small the divisor makes it. */
 const makeTarget = (w: number, h: number, options: object) =>
   new THREE.RenderTarget(Math.max(1, Math.floor(w)), Math.max(1, Math.floor(h)), options);
@@ -65,8 +55,12 @@ const makeTarget = (w: number, h: number, options: object) =>
  *
  * `width`/`height` are the quality-scaled render size; `outWidth`/`outHeight` are the full
  * drawing-buffer size. The reference draws the scene and post at the former and resolves the finish
- * pass at the latter, because the finish effects — dither lattice, halftone cell, paper grain — are
+ * pass at the latter, because the finish effects (dither lattice, halftone cell, paper grain) are
  * authored in DEVICE pixels and must not be scaled by quality.
+ *
+ * HDR is conditional on a tone map being configured, and that is not an optimisation: without a
+ * half-float colour target the map is applied too late to matter, because the main pass has already
+ * clipped everything above one on its way into an 8-bit buffer.
  */
 export function createTargets(
   width: number,
@@ -84,14 +78,14 @@ export function createTargets(
   const scene = {
     ...base,
     type: hdr ? THREE.HalfFloatType : THREE.UnsignedByteType,
-    // Multisampling covers geometric edges only, and is invisible on a smooth lathe — but a beam's
+    // Multisampling covers geometric edges only, and is invisible on a smooth lathe, but a beam's
     // fan is made of long sub-pixel wedges near the exit face, where it is the difference between
     // a spectrum and a staircase.
     samples: hdr ? 4 : 0,
   };
   return {
     // NEAREST, not linear. The two-channel packing splits depth across r and g, and a blend of the
-    // LOW byte of two different depths decodes to a distance that is in neither of them — which
+    // LOW byte of two different depths decodes to a distance that is in neither of them, which
     // shows up as wedges of wrong thickness wherever depth changes fast, meaning every silhouette.
     front: makeTarget(width, height, {
       ...base,
@@ -111,7 +105,7 @@ export function createTargets(
     finish: makeTarget(outWidth, outHeight, scene),
     // ROUND, not floor, and not the bare quotient: the reference rounds, and at 900x540 flooring
     // gives level 2 a 112x67 target where it has 113x68. That is a different sampling grid for the
-    // widest level the composite reads, which is precisely the broad wash — worth ~3 levels of
+    // widest level the composite reads, which is precisely the broad wash, worth ~3 levels of
     // mean difference on `prism`.
     bloom: BLOOM_DIVISORS.map((d) => ({
       a: makeTarget(Math.max(1, Math.round(width / d)), Math.max(1, Math.round(height / d)), {
@@ -202,9 +196,9 @@ export class FullScreenQuad {
 }
 
 /** A node material for a full-screen pass, with depth testing off and the graph already attached. */
-export function passMaterial(fragment: unknown): THREE.NodeMaterial {
+export function passMaterial(fragment: THREE.Node): THREE.NodeMaterial {
   const material = new THREE.NodeMaterial();
-  material.fragmentNode = fragment as never;
+  material.fragmentNode = fragment;
   material.depthTest = false;
   material.depthWrite = false;
   return material;

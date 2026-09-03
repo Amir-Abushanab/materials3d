@@ -4,7 +4,7 @@
  * One `SceneConfig` object is the single source of truth: the renderer reads it every frame, the
  * Tweakpane panel mutates it in place, and every export serializes it.
  *
- * That object is **the renderer's own** — `renderer.getConfig()`. The renderer normalizes whatever
+ * That object is **the renderer's own**: `renderer.getConfig()`. The renderer normalizes whatever
  * it is handed through `ensureSceneConfig`, which returns a fresh object, so anything holding on
  * to the config it passed *in* is mutating something nothing reads. `adopt()` is the one place
  * that re-syncs, and every path that replaces the scene goes through it.
@@ -27,7 +27,7 @@ import { bakeScatter, MaterialRenderer } from "@materials3d/core/renderer";
 import type { RendererKind } from "@materials3d/core";
 import type { MaterialItem } from "@materials3d/core";
 import { PRESETS } from "@materials3d/core/presets";
-import { ControlPanel, type PanelState, type ViewState } from "./ui/ControlPanel";
+import { ControlPanel, type PanelHooks, type PanelState, type ViewState } from "./ui/ControlPanel";
 import type { CodeEditor, EditorLanguage } from "./ui/CodeEditor";
 import { publishToGallery } from "./publishToGallery";
 import { toast } from "./ui/Toast";
@@ -40,11 +40,12 @@ import {
   exportGpuWarning,
   isFrameWalked,
   type ExportSize,
+  type VideoFormat,
 } from "./output/formats";
 import { randomizeConfig, randomizeLamps } from "./randomize";
 import { presetLabel } from "./presetLabels";
-import { History } from "./history";
-import { HistoryControls } from "./ui/HistoryControls";
+import { CLEAR_UNDO_MS, History } from "./history";
+import { HistoryControls, type HistoryControlsHooks } from "./ui/HistoryControls";
 import { generatePresetThumbs, HistoryThumbnailer } from "./ui/thumbs";
 import { GESTURE_ICONS } from "./ui/icons";
 import { SelectionOverlay } from "./ui/SelectionOverlay";
@@ -52,7 +53,7 @@ import { DEFAULT_GRID, GridOverlay } from "./ui/GridOverlay";
 import { ScrollTestOverlay } from "./ui/ScrollTestOverlay";
 import { OutputResizeHandle } from "./ui/OutputResizeHandle";
 import { RecordingOverlay } from "./ui/RecordingOverlay";
-import { byId, on } from "./util/dom";
+import { byId, on, shortcutBlocked } from "./util/dom";
 import { copy } from "./util/download";
 import { fromLocationHash, toShareUrl } from "./util/share";
 
@@ -67,9 +68,20 @@ const TARGET_LANGUAGE: Record<CodeTarget, EditorLanguage> = {
 
 const JSON_HINT = "Linted as you type; Apply runs the same validator the renderer uses.";
 
+/** A backdrop bigger than this makes every save, share and undo step carry it; refuse it. */
+const MAX_MEDIA_BYTES = 25 * 1024 * 1024;
+
+const ENGINE_OPTIONS = { respectReducedMotion: false };
+
+/** Preset factories by name. Widened to a string index once here, so a name that arrives as a
+ *  string (the reset button, the dev bridge, a share link) is looked up without a cast per site. */
+const PRESET_FACTORIES: Record<string, () => SceneConfig> = PRESETS;
+
 const stage = byId("stage");
 const scene = byId("scene");
 const captureSize = byId("capture-size");
+/** Read by assistive tech, so it is written only once a size has settled; see refitPreview. */
+const captureSizeLive = byId("capture-size-live");
 const dialog = byId<HTMLDialogElement>("dialog");
 const dialogHost = byId("dialog-body");
 const dialogTabs = byId("dialog-tabs");
@@ -90,6 +102,17 @@ let panel: ControlPanel;
 let editor: CodeEditor | null = null;
 let editorLoading: Promise<CodeEditor> | null = null;
 let recording: Recording | null = null;
+/** The frame walk in progress, so the same button that started it can stop it. */
+let walkAbort: AbortController | null = null;
+/**
+ * One export at a time. Every capture pins the backing buffer to the export size and restores it
+ * after, so a second one starting mid-way would restore it under the first; the buttons and the
+ * `s` shortcut all check this before starting.
+ */
+let exporting = false;
+/** What the backing buffer is currently pinned to ("" for container-driven), so a re-pin to the
+ *  same size, which every resize of the render targets would follow, is skipped. */
+let outputKey = "";
 let recordingOverlay: RecordingOverlay;
 let history: History;
 let historyControls: HistoryControls;
@@ -99,7 +122,7 @@ let scrollTest: ScrollTestOverlay;
 /** True while WE swap the config (preset / undo / redo / import). Suppresses edit capture, so a
  *  restore does not immediately commit itself back onto the timeline. */
 const applying = { on: false };
-/** Timestamp of the last panel refresh during a viewport gesture — see the throttle in onTransform. */
+/** Timestamp of the last panel refresh during a viewport gesture; see the throttle in onTransform. */
 let lastPanelSync = 0;
 let codeTarget: CodeTarget = "react";
 let dialogMode: "code" | "json" = "code";
@@ -123,7 +146,7 @@ const state: PanelState = {
   recordProgress: 0,
 };
 
-/** The live config — always the renderer's own object, never a copy. */
+/** The live config: always the renderer's own object, never a copy. */
 function config(): SceneConfig {
   return renderer.getConfig();
 }
@@ -153,7 +176,7 @@ function applyChange(structural: boolean): void {
 /** Copy a dragged mesh's live transform back into its config, so it survives a save or reload. */
 function syncItemTransform(item: MaterialItem): void {
   if (!item.config) return;
-  // Read `home`/`homeRotation`, which the gesture edits — NOT the mesh, whose pose a running
+  // Read `home`/`homeRotation`, which the gesture edits, NOT the mesh, whose pose a running
   // motion has already displaced. Capturing the animated pose would bake a frame of the animation
   // into the shape's resting position every time you touched it.
   const { home, homeRotation, mesh } = item;
@@ -166,10 +189,10 @@ function syncItemTransform(item: MaterialItem): void {
  * Make a scattered scene individually editable.
  *
  * A `scatter` block generates its shapes, so a generated rod has no config of its own to move or
- * highlight. Baking expands it into a concrete `items` list — pixel-identical, since the same
- * generator produced it — and is a normal undoable step, so it costs nothing to try.
+ * highlight. Baking expands it into a concrete `items` list (pixel-identical, since the same
+ * generator produced it) and is a normal undoable step, so it costs nothing to try.
  *
- * Deliberately silent. It fires on the way into a selection, a marquee, a group — gestures where
+ * Deliberately silent. It fires on the way into a selection, a marquee, a group: gestures where
  * the frame does not change and the announcement is the only thing that moves. The history entry
  * is where it belongs on the record.
  */
@@ -184,7 +207,7 @@ function ensureSelectable(): boolean {
 }
 
 /**
- * Delete shapes. The one implementation every remove route funnels into — the panel's per-shape
+ * Delete shapes. The one implementation every remove route funnels into: the panel's per-shape
  * button, its remove-group and remove-selection buttons, and the Delete key.
  *
  * The selection is cleared FIRST: `rebuild()` disposes every `MaterialItem`, and the overlay tracks
@@ -227,14 +250,14 @@ function removeItems(items: readonly MaterialItem[]): void {
 /**
  * Bind the selected shapes into one group, or dissolve the groups they belong to.
  *
- * Grouping is a config edit like any other — it needs a bake first (a generated scene has no
+ * Grouping is a config edit like any other: it needs a bake first (a generated scene has no
  * shapes to group), a history step, and a panel rebuild, because the shape list is laid out BY
  * group. The selection is then re-asserted so the new group comes up selected as one object,
  * which is both the confirmation that it worked and where you want to be next.
  */
 function regroup(items: readonly MaterialItem[], mode: "group" | "ungroup"): void {
   // Indices BEFORE the bake. Baking replaces every `MaterialItem`, so the objects the overlay handed
-  // us — and the configs they point at — are stale on the far side of it. Position is what
+  // us, and the configs they point at, are stale on the far side of it. Position is what
   // survives: the bake preserves order and count by construction.
   const live = renderer.getItems();
   const indices = items.map((item) => live.indexOf(item)).filter((index) => index >= 0);
@@ -258,7 +281,7 @@ function regroup(items: readonly MaterialItem[], mode: "group" | "ungroup"): voi
     mode === "group" ? `group ${configs.length} shapes` : "ungroup",
   );
   toast(mode === "group" ? `Grouped ${configs.length} shapes` : "Ungrouped");
-  // Nothing rebuilt the scene — grouping touches no geometry — so the same `MaterialItem`s are still
+  // Nothing rebuilt the scene (grouping touches no geometry), so the same `MaterialItem`s are still
   // the members, and re-asserting brings the new group up selected as one object.
   selection.setSelection(
     renderer.getItems().filter((item) => item.config && configs.includes(item.config)),
@@ -274,12 +297,17 @@ function regroup(items: readonly MaterialItem[], mode: "group" | "ungroup"): voi
 function adopt(next: Partial<SceneConfig>, name: string, record = true, label?: string): void {
   if (record) history.flush(); // commit any pending manual edit as its own step first
   applying.on = true;
-  selection?.select(null); // the items about to be replaced are what the selection points at
-  renderer.setConfig(next);
-  presetName = name;
-  panel.setConfig(config(), presetName);
-  syncTransparency(config().transparentBackground);
-  applying.on = false;
+  try {
+    selection?.select(null); // the items about to be replaced are what the selection points at
+    renderer.setConfig(next);
+    presetName = name;
+    panel.setConfig(config(), presetName);
+    syncTransparency(config().transparentBackground);
+  } finally {
+    // Never left set: a normalizer throwing on a bad import would otherwise silence history for
+    // every edit after it.
+    applying.on = false;
+  }
   if (record) history.commit(config(), presetName, label);
 }
 
@@ -334,6 +362,18 @@ function renderDialogBody(): void {
   editor.set(snippet, TARGET_LANGUAGE[codeTarget], true);
 }
 
+/** The footer note has to be true of the tab it sits under: the JSON tab is the whole config. */
+function syncDialogNote(): void {
+  if (dialogMode === "json") {
+    dialogNote.textContent = JSON_HINT;
+    return;
+  }
+  dialogNote.textContent =
+    codeTarget === "json"
+      ? "The full config, defaults included."
+      : "Defaults are stripped; what's left is what you changed.";
+}
+
 function buildDialogTabs(): void {
   dialogTabs.replaceChildren();
   if (dialogMode !== "code") return;
@@ -341,10 +381,13 @@ function buildDialogTabs(): void {
     const button = document.createElement("button");
     button.type = "button";
     button.textContent = target.label;
+    // A real tab in a real tablist (the container carries the role), so aria-selected is legal.
+    button.setAttribute("role", "tab");
     button.setAttribute("aria-selected", String(target.id === codeTarget));
     button.addEventListener("click", () => {
       codeTarget = target.id;
       buildDialogTabs();
+      syncDialogNote();
       renderDialogBody();
     });
     dialogTabs.appendChild(button);
@@ -354,9 +397,8 @@ function buildDialogTabs(): void {
 async function openDialog(mode: "code" | "json"): Promise<void> {
   dialogMode = mode;
   dialogTitle.textContent = mode === "code" ? "Get code" : "Edit config";
-  dialogNote.textContent =
-    mode === "code" ? "Defaults are stripped — what's left is what you changed." : JSON_HINT;
   delete dialogNote.dataset.error;
+  syncDialogNote();
   applyButton.hidden = mode !== "json";
   saveButton.hidden = mode !== "json";
   embedButton.hidden = mode !== "code";
@@ -394,30 +436,77 @@ function exportName(): string {
   return `glass-${presetName}`;
 }
 
-/** Re-roll the lamp field — one flushed, labelled history entry. Shared by the panel's shuffle
+/** Re-roll the lamp field: one flushed, labelled history entry. Shared by the panel's shuffle
  *  button and the `r` key, so both take the same commit/toast path. */
 function shuffleLampField(): void {
   history.flush();
   randomizeLamps(config());
-  panel.refresh();
+  // setConfig, not refresh(): the lamps are new objects, and the rows were bound to the old ones.
+  panel.setConfig(config(), presetName);
   applyChange(false);
   history.commit(config(), presetName, "shuffle lamps");
   toast("New lamp field");
 }
 
+/**
+ * Point the renderer's backing buffer at `next`, or back at the container, and repaint a paused
+ * scene, which has no loop to pick the new size up on its own. A no-op when nothing changes: a
+ * pin resizes every render target, and the export paths pin what the preview may already hold.
+ */
+function applyOutputSize(next?: { width: number; height: number }): void {
+  const key = next ? `${next.width}x${next.height}` : "";
+  if (key === outputKey) return;
+  outputKey = key;
+  renderer.setOutputSize(next);
+  if (config().paused) renderer.renderOnce();
+}
+
+/**
+ * What the live preview's buffer is pinned to: the export size while "actual size" is on, else
+ * nothing (container-driven, at device resolution). The pin is what caps the preview's cost at the
+ * export's own: a 4K frame at one CSS pixel per export pixel would otherwise render at four times
+ * the export's pixels on a retina display, live.
+ */
+function previewOutputSize(): { width: number; height: number } | undefined {
+  return view.actualSize
+    ? { width: Math.round(size.width), height: Math.round(size.height) }
+    : undefined;
+}
+
+/** Pin the buffer to the export size for the duration of a capture, then hand it back. */
+async function withExportSize<T>(run: () => Promise<T>): Promise<T> {
+  applyOutputSize({ width: size.width, height: size.height });
+  try {
+    return await run();
+  } finally {
+    applyOutputSize(previewOutputSize());
+  }
+}
+
 function exportImage(): void {
-  void saveStill(renderer, exportName(), state.imageFormat, state.imageQuality, size).then(
-    () => toast(`Saved ${size.width}×${size.height}`),
-    (error: Error) => toast(error.message),
-  );
+  if (exporting) {
+    toast("Wait for the current export to finish");
+    return;
+  }
+  exporting = true;
+  void withExportSize(() =>
+    saveStill(renderer, exportName(), state.imageFormat, state.imageQuality),
+  )
+    .then(
+      () => toast(`Saved ${size.width}×${size.height}`),
+      (error: Error) => toast(error.message),
+    )
+    .finally(() => {
+      exporting = false;
+    });
 }
 
 /**
  * Pick a backdrop image or video off disk.
  *
- * Read as a data URI rather than an object URL so the choice survives a save/reload and travels
- * inside a shared config — an object URL is only valid for the tab that made it. Large files make
- * for large configs; that is the trade for a config that is a single self-contained document.
+ * Read as a data URI rather than an object URL so the choice survives a save/reload: an object URL
+ * is only valid for the tab that made it. Large files make for large configs; that is the trade
+ * for a config that is a single self-contained document, and why there is a ceiling on it.
  */
 function pickBackgroundMedia(kind: "image" | "video"): void {
   const input = document.createElement("input");
@@ -426,18 +515,25 @@ function pickBackgroundMedia(kind: "image" | "video"): void {
   input.addEventListener("change", () => {
     const file = input.files?.[0];
     if (!file) return;
+    if (file.size > MAX_MEDIA_BYTES) {
+      toast(
+        `${file.name} is over ${Math.round(MAX_MEDIA_BYTES / 1024 / 1024)} MB; use a smaller file`,
+      );
+      return;
+    }
     const reader = new FileReader();
     reader.addEventListener("error", () => toast(`Could not read ${file.name}`));
     reader.addEventListener("load", () => {
       const url = typeof reader.result === "string" ? reader.result : undefined;
       if (!url) return;
       const c = config();
-      // One source at a time — a video would otherwise always win and the image look ignored.
+      // One source at a time: a video would otherwise always win and the image look ignored.
       c.backgroundImageUrl = kind === "image" ? url : undefined;
       c.backgroundVideoUrl = kind === "video" ? url : undefined;
       c.backgroundMode = "image";
       applyChange(true);
-      panel.refresh();
+      // setConfig, not refresh(): the mode decides which folder the panel shows for the backdrop.
+      panel.setConfig(config(), presetName);
       history.commit(config(), presetName, `backdrop ${kind}`);
     });
     reader.readAsDataURL(file);
@@ -450,7 +546,7 @@ function pickBackgroundMedia(kind: "image" | "video"): void {
  *
  * Read as TEXT, not as a data URI like the backdrop media above: an outline is not an asset the
  * scene displays, it is geometry the config carries, and it goes through the same
- * {@link outlineFromSvg} the normalizer uses on a pasted string — so an upload and a paste of the
+ * {@link outlineFromSvg} the normalizer uses on a pasted string, so an upload and a paste of the
  * same file cannot produce different shapes.
  *
  * A file with no `<path>` in it says so rather than falling back. Substituting the default outline
@@ -469,7 +565,7 @@ function pickOutlineSvg(shape: ShapeConfig): void {
       const text = typeof reader.result === "string" ? reader.result : "";
       const outline = outlineFromSvg(text, MAX_OUTLINE);
       if (!outline) {
-        toast(`No <path> in ${file.name} — flatten shapes to paths and re-export`);
+        toast(`No <path> in ${file.name}. Flatten shapes to paths and re-export`);
         return;
       }
       shape.outline = outline;
@@ -490,7 +586,7 @@ function pickOutlineSvg(shape: ShapeConfig): void {
   input.click();
 }
 
-/** The badge under the frame. `withWarning` is skipped mid-drag — the size is still changing. */
+/** The badge under the frame. `withWarning` is skipped mid-drag: the size is still changing. */
 function exportAreaLabel(withWarning: boolean): string {
   const width = Math.round(size.width);
   const height = Math.round(size.height);
@@ -502,30 +598,25 @@ function exportAreaLabel(withWarning: boolean): string {
 }
 
 /**
- * Point the preview frame at the export aspect and label it.
- *
- * The renderer is NOT given a fixed output size here — the preview stays at its own device
- * resolution, and `setOutputSize` is reserved for captures. What changes is the SHAPE of the frame,
- * which is what `camera.fit` reconciles the composition against.
- */
-/**
  * Size the preview frame: the export box, either fitted to the stage or at its true pixel size.
  *
  * The fit is computed here rather than left to CSS because CSS cannot express it. `aspect-ratio`
  * needs one axis to be indefinite to derive the other, so `inline-size: 100%` makes width win and
- * a `max-block-size` clamp then truncates the height WITHOUT giving the width back — the frame
+ * a `max-block-size` clamp then truncates the height WITHOUT giving the width back: the frame
  * silently keeps the stage's own proportions. Every export aspect other than one already close to
  * the stage's came out wrong: 1:1, 4:5 and 9:16 all rendered as the same 1.17 letterbox, so
  * choosing a portrait size changed the exported file and the label but not the thing you were
  * composing against.
+ *
+ * Fitted, the renderer is NOT given a size: the preview stays at its own device resolution, and
+ * what changes is the SHAPE of the frame, which is what `camera.fit` reconciles the composition
+ * against. Only actual size pins the buffer, to the export size; see {@link previewOutputSize}.
  */
 function refitPreview(): void {
   stage.classList.toggle("actual-size", view.actualSize);
   if (view.actualSize) {
-    // One export pixel per CSS pixel — the same "100%" a design tool means, and NOT one export
-    // pixel per device pixel. On a 2× display the preview is still rendered at devicePixelRatio,
-    // so this shows the export at its true SIZE while remaining sharper than the file will be;
-    // sizing to device pixels instead would halve the frame and mean nothing to anyone composing.
+    // One export pixel per CSS pixel: the same "100%" a design tool means. With the buffer pinned
+    // to the export size as well, what is on screen is the file, pixel for pixel.
     scene.style.setProperty("inline-size", `${Math.round(size.width)}px`);
     scene.style.setProperty("block-size", `${Math.round(size.height)}px`);
   } else {
@@ -546,7 +637,13 @@ function refitPreview(): void {
     "--capture-aspect",
     `${Math.round(size.width)} / ${Math.round(size.height)}`,
   );
-  captureSize.textContent = exportAreaLabel(true);
+  // Not while a capture holds the pin; its own restore re-reads the preview's wish afterwards.
+  if (!exporting) applyOutputSize(previewOutputSize());
+  const label = exportAreaLabel(true);
+  captureSize.textContent = label;
+  // The live region only once the size has settled, and only when it changed: every write to a
+  // live region is an announcement, and the stage observer calls this on every window resize.
+  if (captureSizeLive.textContent !== label) captureSizeLive.textContent = label;
 }
 
 function toggleRecord(): void {
@@ -554,50 +651,71 @@ function toggleRecord(): void {
     recording.stop();
     return;
   }
-  // Record at the chosen output size, not the preview's: both paths read the backing buffer, so
-  // pinning it is what makes "1920 × 1080" actually mean 1920 × 1080.
-  renderer.setOutputSize({ width: size.width, height: size.height });
-
-  if (isFrameWalked(state.videoFormat)) {
-    // Stepped rather than recorded: deterministic, and the only paths that can carry alpha (WebP)
-    // or produce a GIF at all.
-    state.recording = true;
-    state.recordProgress = 0;
-    panel.syncRecordButton();
-    recordingOverlay.start();
-    const walk = {
-      seconds: state.recordSeconds,
-      fps: state.recordFps,
-      quality: state.imageQuality,
-      onProgress: (fraction: number) => {
-        state.recordProgress = fraction;
-        panel.syncRecordButton();
-      },
-    };
-    const run =
-      state.videoFormat === "gif"
-        ? recordGif(renderer, walk, exportName())
-        : recordAnimatedWebp(renderer, walk, exportName());
-    void run
-      .then(
-        (frames) => toast(`Saved ${frames} frames`),
-        (error: Error) => toast(error.message),
-      )
-      .finally(() => {
-        state.recording = false;
-        state.recordProgress = 0;
-        panel.syncRecordButton();
-        recordingOverlay.stop();
-        renderer.setOutputSize(undefined);
-      });
+  if (walkAbort) {
+    walkAbort.abort();
     return;
   }
+  if (exporting) {
+    toast("Wait for the current export to finish");
+    return;
+  }
+  exporting = true;
+  if (isFrameWalked(state.videoFormat)) void recordFrameWalk();
+  else recordLive(state.videoFormat);
+}
 
+/**
+ * Stepped rather than recorded: deterministic, and the only paths that can carry alpha (WebP) or
+ * produce a GIF at all. Stop ends the walk after the current frame and writes what it has, the
+ * same contract as stopping a live recording early.
+ */
+async function recordFrameWalk(): Promise<void> {
+  const abort = new AbortController();
+  walkAbort = abort;
+  state.recording = true;
+  state.recordProgress = 0;
+  panel.syncRecordButton();
+  recordingOverlay.start();
+  const walk = {
+    seconds: state.recordSeconds,
+    fps: state.recordFps,
+    quality: state.imageQuality,
+    signal: abort.signal,
+    onProgress: (fraction: number) => {
+      state.recordProgress = fraction;
+      panel.syncRecordButton();
+    },
+  };
+  try {
+    // Recorded at the chosen output size, not the preview's: both paths read the backing buffer,
+    // so pinning it is what makes "1920 × 1080" actually mean 1920 × 1080.
+    const frames = await withExportSize(() =>
+      state.videoFormat === "gif"
+        ? recordGif(renderer, walk, exportName())
+        : recordAnimatedWebp(renderer, walk, exportName()),
+    );
+    toast(abort.signal.aborted ? `Stopped. Saved ${frames} frames` : `Saved ${frames} frames`);
+  } catch (error) {
+    toast((error as Error).message);
+  } finally {
+    walkAbort = null;
+    exporting = false;
+    state.recording = false;
+    state.recordProgress = 0;
+    panel.syncRecordButton();
+    recordingOverlay.stop();
+  }
+}
+
+/** MediaRecorder over the canvas stream: real time, at whatever rate the scene sustains. */
+function recordLive(format: VideoFormat): void {
+  applyOutputSize({ width: size.width, height: size.height });
   let started: Recording;
   try {
-    started = startRecording(renderer, state.videoFormat, state.recordSeconds, exportName());
+    started = startRecording(renderer, format, state.recordSeconds, exportName());
   } catch (error) {
-    renderer.setOutputSize(undefined);
+    applyOutputSize(previewOutputSize());
+    exporting = false;
     toast((error as Error).message);
     return;
   }
@@ -613,10 +731,11 @@ function toggleRecord(): void {
     )
     .finally(() => {
       recording = null;
+      exporting = false;
       state.recording = false;
       panel.syncRecordButton();
       recordingOverlay.stop();
-      renderer.setOutputSize(undefined);
+      applyOutputSize(previewOutputSize());
     });
 }
 
@@ -624,7 +743,7 @@ function toggleRecord(): void {
  * (Re)build the overlays that hold a direct reference to the renderer.
  *
  * Extracted because switching engines replaces the renderer object, and these two captured the old
- * one at construction — everything else reaches it through the module-level binding and follows a
+ * one at construction; everything else reaches it through the module-level binding and follows a
  * reassignment on its own.
  */
 function buildRendererOverlays(): void {
@@ -636,10 +755,10 @@ function buildRendererOverlays(): void {
     onTransform: (item) => {
       syncItemTransform(item);
       // The panel binds to the config, and a gesture changes it from outside Tweakpane, so the
-      // rows need re-reading — but THROTTLED. A full pane refresh walks every binding and, through
-      // the pane's change handler, triggers a uniform push and a render; doing that once per
-      // pointer event made a drag stutter and could wedge the page outright. Ten times a second is
-      // indistinguishable while dragging, and onEditEnd guarantees the final value lands.
+      // rows need re-reading, but THROTTLED. A full pane refresh walks every binding, and doing
+      // that once per pointer event made a drag stutter and could wedge the page outright. Ten
+      // times a second is indistinguishable while dragging, and onEditEnd guarantees the final
+      // value lands.
       const now = performance.now();
       if (now - lastPanelSync < 100) return;
       lastPanelSync = now;
@@ -650,7 +769,7 @@ function buildRendererOverlays(): void {
       history.commit(config(), presetName, label);
     },
     onSelect: (items) => {
-      // The panel follows the PRIMARY selection — the last one added. Revealing every member at
+      // The panel follows the PRIMARY selection, the last one added. Revealing every member at
       // once would scroll the pane somewhere arbitrary and expand a dozen folders.
       const primary = items[items.length - 1] ?? null;
       panel.setSelectionCount(items.length);
@@ -672,57 +791,120 @@ function buildRendererOverlays(): void {
  *
  * The node engine is fetched on demand rather than imported at the top: it is a second three build
  * and the studio should not carry it for everyone who never switches. That is the same reason
- * `createMaterials` splits on a literal specifier — see `core-loader-webgpu`.
+ * `createMaterials` splits on a literal specifier; see `core-loader-webgpu`.
  *
  * The config object survives the swap. It is the studio's single source of truth and the new
  * renderer normalizes the same object, so the panel keeps binding to what it was already bound to.
  */
 async function useRenderer(kind: RendererKind): Promise<void> {
   if (kind === rendererKind) return;
+  // Fetched BEFORE the live renderer is touched: the chunk comes over the network and can fail to
+  // arrive, and a scene disposed ahead of a failed import has nothing left to show.
+  const Renderer =
+    kind === "webgpu"
+      ? // The same nominal gap `core-loader-webgpu` bridges: both classes implement `Engine`, and
+        // the compiler checks that, but they share no base type so it cannot see the match here.
+        ((await import("@materials3d/core/renderer-webgpu"))
+          .NodeMaterialRenderer as unknown as typeof MaterialRenderer)
+      : MaterialRenderer;
   const live = config();
   const wasPaused = live.paused;
 
   renderer.stop();
   renderer.dispose();
+  outputKey = ""; // the new renderer starts container-driven, whatever the old one was pinned to
 
-  if (kind === "webgpu") {
-    const { NodeMaterialRenderer } = await import("@materials3d/core/renderer-webgpu");
-    // The same nominal gap `core-loader-webgpu` bridges: both classes implement `Engine`, and the
-    // compiler checks that, but they share no base type so it cannot see the match here.
-    renderer = new NodeMaterialRenderer(scene, live, {
-      respectReducedMotion: false,
-    }) as unknown as MaterialRenderer;
-  } else {
-    renderer = new MaterialRenderer(scene, live, { respectReducedMotion: false });
+  let landed = kind;
+  let failure: unknown;
+  try {
+    renderer = new Renderer(scene, live, ENGINE_OPTIONS);
+  } catch (error) {
+    // The old renderer is already gone, so the reference engine goes back in rather than leaving
+    // the page blank; the failure still reaches the toast.
+    renderer = new MaterialRenderer(scene, live, ENGINE_OPTIONS);
+    landed = "webgl";
+    failure = error;
   }
-  rendererKind = kind;
-  state.renderer = kind;
+  rendererKind = landed;
+  state.renderer = landed;
 
   renderer.start();
   buildRendererOverlays();
-  // Re-point the panel at the NEW renderer's config object — same values, different identity.
+  // Re-point the panel at the NEW renderer's config object: same values, different identity.
   panel.setConfig(config(), presetName);
+  applyOutputSize(previewOutputSize());
   if (wasPaused) renderer.renderOnce();
+  if (failure) throw failure;
 }
 
 // ------------------------------------------------------------------- boot ---
 
-function boot(): void {
-  // A shared link wins over the default preset — someone opening it wants that scene, not ours.
-  const shared = fromLocationHash();
-  const initial = shared ?? PRESETS[presetName]();
-  if (shared) presetName = "custom";
+function randomizeScene(): void {
+  history.flush();
+  randomizeConfig(config());
+  panel.setConfig(config(), presetName);
+  // Structural: the scatter's seed and count changed, so the geometry has to be rebuilt.
+  applyChange(true);
+  history.commit(config(), presetName, "randomize scene");
+  toast("New scene");
+}
 
-  renderer = new MaterialRenderer(scene, initial, { respectReducedMotion: false });
-  renderer.start();
+function resetToPreset(): void {
+  const name = presetName in PRESET_FACTORIES ? presetName : "skewer";
+  adopt(PRESET_FACTORIES[name](), name, true, `reset · ${presetLabel(name)}`);
+}
 
-  history = new History({
-    getLive: () => config(),
-    getPresetName: () => presetName,
-    onChange: () => historyControls?.update(history.getState()),
+function selectPreset(name: string): void {
+  adopt(PRESET_FACTORIES[name](), name, true, presetLabel(name));
+}
+
+/** Resolving false makes the button flash ✕: a refused clipboard write doesn't throw. */
+async function shareLink(): Promise<boolean> {
+  const link = toShareUrl(minimalConfig(config()));
+  if (!link) {
+    toast("Too big for a link. Save the config (.json) instead", 4000);
+    return false;
+  }
+  if (link.strippedMedia) toast("Backdrop media stays out of links; the rest is in", 4000);
+  return copy(link.url);
+}
+
+function syncGrid(): void {
+  grid.set(view.grid, {
+    divisions: view.gridDivisions,
+    centre: view.gridCentre,
+    tilt: view.gridTilt,
   });
+}
 
-  panel = new ControlPanel(byId("pane"), config(), presetName, state, view, size, {
+/** A generated shape was opened for editing: bake, then reveal it on the far side of the bake. */
+function bakeForEdit(index: number): void {
+  // ensureSelectable() rebuilds the panel, so focus the shape after it: the folder the user
+  // just opened only exists on the far side of the bake.
+  ensureSelectable();
+  panel.focusItem(index);
+  selection.select(renderer.getItems()[index] ?? null);
+}
+
+/** No id means "whatever the viewport has selected": the button inside the selection editor. */
+function ungroup(id?: string): void {
+  regroup(
+    id ? renderer.getItems().filter((item) => item.config?.group === id) : selection.items,
+    "ungroup",
+  );
+}
+
+function shapesChanged(label: string): void {
+  // Adding to a generated scene means authoring it, so bake first; otherwise the new shape
+  // would be wiped by the next regeneration from the scatter.
+  ensureSelectable();
+  history.flush();
+  renderer.rebuild();
+  history.commit(config(), presetName, label);
+}
+
+function panelHooks(): PanelHooks {
+  return {
     onChange: applyChange,
     onExportImage: exportImage,
     onToggleRecord: toggleRecord,
@@ -741,31 +923,14 @@ function boot(): void {
       fileInput.value = "";
       fileInput.click();
     },
-    // Resolving false makes the button flash ✕ — a refused clipboard write doesn't throw.
-    onShare: () => copy(toShareUrl(minimalConfig(config()))),
+    onShare: shareLink,
     onShuffle: shuffleLampField,
-    onRandomizeAll: () => {
-      history.flush();
-      randomizeConfig(config());
-      panel.setConfig(config(), presetName);
-      // Structural: the scatter's seed and count changed, so the geometry has to be rebuilt.
-      applyChange(true);
-      history.commit(config(), presetName, "randomize scene");
-      toast("New scene");
-    },
-    onReset: () => {
-      const name = presetName in PRESETS ? presetName : "skewer";
-      adopt(PRESETS[name](), name, true, `reset · ${presetLabel(name)}`);
-    },
+    onRandomizeAll: randomizeScene,
+    onReset: resetToPreset,
     onResetCamera: () => renderer.resetCamera(),
     onTransparencyChange: syncTransparency,
-    onSelectPreset: (name) => adopt(PRESETS[name](), name, true, presetLabel(name)),
-    onViewChanged: () =>
-      grid.set(view.grid, {
-        divisions: view.gridDivisions,
-        centre: view.gridCentre,
-        tilt: view.gridTilt,
-      }),
+    onSelectPreset: selectPreset,
+    onViewChanged: syncGrid,
     onOutputSizeChange: refitPreview,
     onPickBackgroundMedia: pickBackgroundMedia,
     onPickOutline: pickOutlineSvg,
@@ -774,7 +939,7 @@ function boot(): void {
     onRendererChange: (kind) =>
       useRenderer(kind).catch((error: Error) => {
         // Put the control back where the engine actually is, or the panel claims a switch that
-        // did not happen — the second engine is fetched over the network and can fail to arrive.
+        // did not happen: the second engine is fetched over the network and can fail to arrive.
         state.renderer = rendererKind;
         panel.refresh();
         toast(`Could not switch engine: ${error.message}`);
@@ -782,43 +947,24 @@ function boot(): void {
     onExportWallpaper: () => exportWallpaperFolder(config(), exportName(), renderer),
     onPublish: () => publishToGallery(config()),
     onLocateItem: (index) => selection.select(renderer.getItems()[index] ?? null),
-    onBakeForEdit: (index) => {
-      // ensureSelectable() rebuilds the panel, so focus the shape after it — the folder the user
-      // just opened only exists on the far side of the bake.
-      ensureSelectable();
-      panel.focusItem(index);
-      selection.select(renderer.getItems()[index] ?? null);
-    },
+    onBakeForEdit: bakeForEdit,
     onRenamed: (label) => history.commit(config(), presetName, label),
     onGroup: () => regroup(selection.items, "group"),
-    // No id means "whatever the viewport has selected" — the button inside the selection editor.
-    onUngroup: (id) =>
-      regroup(
-        id ? renderer.getItems().filter((item) => item.config?.group === id) : selection.items,
-        "ungroup",
-      ),
+    onUngroup: ungroup,
     onLocateGroup: (id) =>
       selection.setSelection(renderer.getItems().filter((item) => item.config?.group === id)),
     onRemoveShapes: removeConfigs,
     // The overlay holds MaterialItems; the panel edits ItemConfigs. `item.config` is the very same
     // object the panel binds to (the identity contract in buildItems), so this is a lookup, not a
-    // copy — a bulk edit through it lands on the rows the user is looking at.
+    // copy: a bulk edit through it lands on the rows the user is looking at.
     selectedConfigs: () =>
       selection.items.map((item) => item.config).filter((c): c is ItemConfig => Boolean(c)),
-    onShapesChanged: (label) => {
-      // Adding to a generated scene means authoring it, so bake first — otherwise the new shape
-      // would be wiped by the next regeneration from the scatter.
-      ensureSelectable();
-      history.flush();
-      renderer.rebuild();
-      history.commit(config(), presetName, label);
-    },
-  });
-  panel.bindSearch(byId<HTMLInputElement>("control-search-input"));
+    onShapesChanged: shapesChanged,
+  };
+}
 
-  syncTransparency(config().transparentBackground);
-
-  historyControls = new HistoryControls(byId("history-slot"), {
+function historyHooks(): HistoryControlsHooks {
+  return {
     onUndo: doUndo,
     onRedo: doRedo,
     onJump: doJump,
@@ -826,75 +972,77 @@ function boot(): void {
     // toast is up, because clearing history you meant to keep is unrecoverable otherwise.
     onClear: () => {
       history.clear(config(), presetName);
-      toast("History cleared — press U to undo that", 4000);
+      toast("History cleared. Press U to undo that", CLEAR_UNDO_MS);
     },
     thumb: new HistoryThumbnailer((id) => history.getConfigById(id)),
-  });
-  history.reset(config(), presetName, presetLabel(presetName));
-  refitPreview();
-  // The fit is computed, so the stage growing or shrinking no longer re-derives it for free.
-  new ResizeObserver(() => refitPreview()).observe(stage);
+  };
+}
 
-  // Corner-drag the export frame. The renderer is only told about the new size on release —
-  // dragging just reshapes the DOM frame, which is cheap.
-  // Lives for the page's lifetime; its listeners are on elements that do too.
+const GESTURE_HELP = [
+  { icon: GESTURE_ICONS.left, text: "Double-click a shape to select" },
+  { icon: GESTURE_ICONS.left, text: "Drag empty space to marquee" },
+  { icon: GESTURE_ICONS.key, text: "Shift-click to add to the selection" },
+  { icon: GESTURE_ICONS.key, text: "⌘G groups · ⌘⇧G ungroups" },
+  { icon: GESTURE_ICONS.key, text: "Alt-click to drill into a group" },
+  { icon: GESTURE_ICONS.key, text: "Delete removes the selection" },
+  { icon: GESTURE_ICONS.left, text: "Drag to move · Shift for depth" },
+  { icon: GESTURE_ICONS.right, text: "Drag to rotate · Shift to roll" },
+  { icon: GESTURE_ICONS.handles, text: "Corner handles to scale" },
+  { icon: GESTURE_ICONS.right, text: "Right-drag empty space to orbit" },
+  { icon: GESTURE_ICONS.wheel, text: "Wheel zooms" },
+  { icon: GESTURE_ICONS.key, text: "Esc to deselect" },
+];
+
+/**
+ * Corner-drag the export frame. The renderer is only told about the new size on release; dragging
+ * just reshapes the DOM frame, which is cheap. Lives for the page's lifetime; its listeners are on
+ * elements that do too.
+ */
+function bindOutputResize(): void {
   void new OutputResizeHandle(
-    byId("stage"),
+    stage,
     scene,
     [...scene.querySelectorAll<HTMLButtonElement>(".output-resize-handle")],
     size,
     {
       // The frame's corners sit on top of the canvas, so a resize and a marquee are the same
       // sweep over the same pixels: the overlay stands down for the length of the gesture, and
-      // the selection goes with it — its box is projected from the camera the commit refits.
+      // the selection goes with it; its box is projected from the camera the commit refits.
       onDragStart: () => {
         selection.setInteractive(false);
         selection.select(null);
       },
       onPreviewChange: () => {
-        // Label only — the frame is already following the pointer via inline styles.
+        // The visible label only: the frame is already following the pointer via inline styles,
+        // and the live region is written once the gesture ends, not per move.
         captureSize.textContent = exportAreaLabel(false);
       },
       onCommit: (refit) => {
         // First, so a failure in the resize below cannot strand the stage with gestures off.
         selection.setInteractive(true);
-        if (refit) refitPreview();
+        refitPreview();
+        if (!refit) captureSize.textContent = exportAreaLabel(true);
         panel.syncOutputSize();
         renderer.resize();
+        if (config().paused) renderer.renderOnce();
       },
     },
   );
+}
 
-  // The margin around the export frame is still the canvas as far as anyone is concerned, so
-  // pressing there clears the selection exactly as pressing empty space inside the frame does.
-  // Bound to #stage rather than the document: the panel and the dialog are its siblings, so
-  // reaching for a knob can never deselect what the knob is about to edit.
-  on(byId("stage"), "pointerdown", (event) => {
+/**
+ * The margin around the export frame is still the canvas as far as anyone is concerned, so
+ * pressing there clears the selection exactly as pressing empty space inside the frame does.
+ * Bound to #stage rather than the document: the panel and the dialog are its siblings, so
+ * reaching for a knob can never deselect what the knob is about to edit.
+ */
+function bindStageDeselect(): void {
+  on(stage, "pointerdown", (event) => {
     if (!scene.contains(event.target as Node)) selection.select(null);
   });
+}
 
-  historyControls.addHelp([
-    { icon: GESTURE_ICONS.left, text: "Double-click a shape to select" },
-    { icon: GESTURE_ICONS.left, text: "Drag empty space to marquee" },
-    { icon: GESTURE_ICONS.key, text: "Shift-click to add to the selection" },
-    { icon: GESTURE_ICONS.key, text: "⌘G groups · ⌘⇧G ungroups" },
-    { icon: GESTURE_ICONS.key, text: "Alt-click to drill into a group" },
-    { icon: GESTURE_ICONS.key, text: "Delete removes the selection" },
-    { icon: GESTURE_ICONS.left, text: "Drag to move · Shift for depth" },
-    { icon: GESTURE_ICONS.right, text: "Drag to rotate · Shift to roll" },
-    { icon: GESTURE_ICONS.handles, text: "Corner handles to scale" },
-    { icon: GESTURE_ICONS.right, text: "Right-drag empty space to orbit" },
-    { icon: GESTURE_ICONS.wheel, text: "Wheel zooms" },
-    { icon: GESTURE_ICONS.key, text: "Esc to deselect" },
-  ]);
-
-  // Preset thumbnails are real renders, generated after first paint so they never delay startup.
-  void generatePresetThumbs(PRESETS, () => panel.refreshPresetThumbs());
-
-  grid = new GridOverlay(scene);
-  recordingOverlay = new RecordingOverlay(scene);
-  buildRendererOverlays();
-
+function bindDialog(): void {
   on(dialog, "click", (event) => {
     const action = (event.target as HTMLElement).closest<HTMLElement>("[data-action]")?.dataset
       .action;
@@ -912,7 +1060,9 @@ function boot(): void {
       );
     }
   });
+}
 
+function bindFileInput(): void {
   on(fileInput, "change", () => {
     const file = fileInput.files?.[0];
     if (!file) return;
@@ -928,21 +1078,19 @@ function boot(): void {
       () => toast("Could not read that file"),
     );
   });
+}
 
+function bindShortcuts(): void {
   // Undo/redo. Registered separately from the plain shortcuts below because it is the one binding
-  // that WANTS the modifier, and it must not fire while the user is typing in a field — the
-  // browser's own text undo wins there.
+  // that WANTS the modifier, and it must not fire while the user is typing in a field: the
+  // browser's own text undo wins there. Key repeat is allowed: holding it steps back several times.
   on(window, "keydown", (event) => {
     if (!(event.metaKey || event.ctrlKey)) return;
     const key = event.key.toLowerCase();
     if (key !== "z" && key !== "y") return;
     // Not while the modal is up: undoing the scene behind it would leave the dialog showing (and
     // on Apply, re-applying) a config the undo just replaced.
-    if (dialog.open) return;
-    const target = event.target as HTMLElement | null;
-    if (target && (/^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName) || target.isContentEditable)) {
-      return;
-    }
+    if (shortcutBlocked(event, true)) return;
     event.preventDefault();
     if (key === "y" || event.shiftKey) doRedo();
     else doUndo();
@@ -958,13 +1106,9 @@ function boot(): void {
   on(window, "pointercancel", flushOnRelease);
 
   // Keyboard: S saves a still, C opens the code dialog, J the config editor, R re-rolls the lamps,
-  // U takes back a history clear.
+  // U takes back a history clear. Never from a field, a dropdown, behind the dialog, or on repeat.
   on(document, "keydown", (event) => {
-    if (event.metaKey || event.ctrlKey || event.altKey || dialog.open) return;
-    const target = event.target as HTMLElement;
-    if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable) {
-      return;
-    }
+    if (event.metaKey || event.ctrlKey || event.altKey || shortcutBlocked(event)) return;
     if (event.key === "s") exportImage();
     else if (event.key === "c") void openDialog("code");
     else if (event.key === "j") void openDialog("json");
@@ -975,34 +1119,53 @@ function boot(): void {
   });
 }
 
-/**
- * A handle on the running studio, for driving it from outside the page.
- *
- * DEV ONLY, and gated on `import.meta.env.DEV` so it is not in a build. The studio is the fastest
- * way to tune a scene — a slider and a live frame beat a rebuild per guess — but that speed is only
- * available to whoever is holding the mouse. Everything else (an assistant, a script, a REPL in the
- * devtools console) had to go through the config editor, and reloading the page to try a number
- * throws away whatever was on screen.
- *
- * `patch` writes DOTTED PATHS into the live config and pushes them, which is the whole point: the
- * scene keeps its current state and only the named fields move. Nothing is created — a mistyped
- * path throws rather than quietly adding a field the renderer will never read.
- *
- * `structural` is the same distinction the panel draws. Most fields only move uniforms; the item
- * list, the scatter and the quality rebuild geometry. Pass it when a change is one of those.
- *
- * `structural` is inferred from the paths — see {@link needsRebuild} — and can be forced either
- * way with the second argument.
- *
- *   m3d.patch({ "beam.incidence": -20, "post.bloom": 0.4 })
- *   m3d.patch({ "items.0.material.ior": 1.6 })
- *   m3d.get("post.bloom")   m3d.config()   m3d.preset("orb")
- */
+function boot(): void {
+  // A shared link wins over the default preset: someone opening it wants that scene, not ours.
+  const shared = fromLocationHash();
+  const initial = shared ?? PRESET_FACTORIES[presetName]();
+  if (shared) presetName = "custom";
+
+  renderer = new MaterialRenderer(scene, initial, ENGINE_OPTIONS);
+  renderer.start();
+
+  history = new History({
+    getLive: () => config(),
+    getPresetName: () => presetName,
+    onChange: () => historyControls?.update(history.getState()),
+  });
+
+  panel = new ControlPanel(byId("pane"), config(), presetName, state, view, size, panelHooks());
+  panel.bindSearch(byId<HTMLInputElement>("control-search-input"));
+
+  syncTransparency(config().transparentBackground);
+
+  historyControls = new HistoryControls(byId("history-slot"), historyHooks());
+  history.reset(config(), presetName, presetLabel(presetName));
+  refitPreview();
+  // The fit is computed, so the stage growing or shrinking no longer re-derives it for free.
+  new ResizeObserver(() => refitPreview()).observe(stage);
+
+  bindOutputResize();
+  bindStageDeselect();
+  historyControls.addHelp(GESTURE_HELP);
+
+  // Preset thumbnails are real renders, generated after first paint so they never delay startup.
+  generatePresetThumbs(PRESET_FACTORIES, () => panel.refreshPresetThumbs());
+
+  grid = new GridOverlay(scene);
+  recordingOverlay = new RecordingOverlay(scene);
+  buildRendererOverlays();
+
+  bindDialog();
+  bindFileInput();
+  bindShortcuts();
+}
+
 /**
  * Whether a config path needs geometry rebuilt rather than uniforms pushed.
  *
- * `refresh()` re-pushes what lives in a uniform. Everything else is baked at build time — the mesh
- * gradient into a texture, a material into a compiled shader, the items into meshes — and a patch
+ * `refresh()` re-pushes what lives in a uniform. Everything else is baked at build time (the mesh
+ * gradient into a texture, a material into a compiled shader, the items into meshes), and a patch
  * to one of those looks like it did nothing at all, which is a far worse failure than a slow
  * rebuild. Inferred rather than left to the caller, because the caller has no way to know which
  * fields are which, and getting it wrong silently costs a round trip to notice.
@@ -1024,6 +1187,27 @@ function needsRebuild(path: string): boolean {
   );
 }
 
+/**
+ * A handle on the running studio, for driving it from outside the page.
+ *
+ * DEV ONLY, and gated on `import.meta.env.DEV` so it is not in a build. The studio is the fastest
+ * way to tune a scene (a slider and a live frame beat a rebuild per guess), but that speed is only
+ * available to whoever is holding the mouse. Everything else (an assistant, a script, a REPL in the
+ * devtools console) had to go through the config editor, and reloading the page to try a number
+ * throws away whatever was on screen.
+ *
+ * `patch` writes DOTTED PATHS into the live config and pushes them, which is the whole point: the
+ * scene keeps its current state and only the named fields move. Nothing is created; a mistyped
+ * path throws rather than quietly adding a field the renderer will never read.
+ *
+ * `structural` is the same distinction the panel draws. Most fields only move uniforms; the item
+ * list, the scatter and the quality rebuild geometry. It is inferred from the paths (see
+ * {@link needsRebuild}) and can be forced either way with the second argument.
+ *
+ *   m3d.patch({ "beam.incidence": -20, "post.bloom": 0.4 })
+ *   m3d.patch({ "items.0.material.ior": 1.6 })
+ *   m3d.get("post.bloom")   m3d.config()   m3d.preset("orb")
+ */
 function exposeDevBridge(): void {
   if (!import.meta.env.DEV) return;
   const walk = (path: string, create: boolean): [Record<string, unknown>, string] => {
@@ -1058,7 +1242,7 @@ function exposeDevBridge(): void {
     /**
      * `patch`, but it CREATES what is missing.
      *
-     * An item's `material` is a sparse override set — absent means "take the resolved default" —
+     * An item's `material` is a sparse override set (absent means "take the resolved default"),
      * so `items.0.material.iridescence` does not exist until something writes it, and `patch`
      * refusing to create is exactly right for catching a typo and exactly wrong for adding an
      * override. Two verbs rather than a flag, because the safe one should be the one you reach for
@@ -1074,12 +1258,12 @@ function exposeDevBridge(): void {
       return Object.keys(changes).length;
     },
     preset: (name: string) => {
-      if (!(name in PRESETS)) throw new Error(`no preset "${name}"`);
-      adopt(PRESETS[name](), name, true, presetLabel(name));
+      if (!(name in PRESET_FACTORIES)) throw new Error(`no preset "${name}"`);
+      selectPreset(name);
       return name;
     },
-    presets: () => Object.keys(PRESETS),
-    // A still of exactly what is on screen, as a data URI — so a caller with no view of the tab
+    presets: () => Object.keys(PRESET_FACTORIES),
+    // A still of exactly what is on screen, as a data URI, so a caller with no view of the tab
     // can still see what its own change did.
     still: async () => URL.createObjectURL(await renderer.captureImage("image/png", 1)),
   };

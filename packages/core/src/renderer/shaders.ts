@@ -1,11 +1,11 @@
 /**
- * GLSL for the four passes. Written in GLSL1 style (`gl_FragColor`, `texture2D`) — three still
- * shims those onto GLSL ES 3.00 for any `ShaderMaterial` that doesn't set `glslVersion`, so this
+ * GLSL for the four passes. Written in GLSL1 style (`gl_FragColor`, `texture2D`): three shims
+ * those onto GLSL ES 3.00 for any `ShaderMaterial` that doesn't set `glslVersion`, so this
  * compiles unchanged on the WebGL2-only renderer while staying readable next to the technique
- * notes. The one place the WebGL2 upgrade is taken advantage of is the lamp loop, which now
- * breaks at `uLampCount` instead of grinding through all twelve slots.
+ * notes. A few places lean on ES 3.00 directly: loops that break at a uniform count, the int
+ * arrays and dynamic indexing in the finish pass, and the explicit-lod fetch of the baked room.
  *
- * Everything here works in DISPLAY (sRGB) space — see util/color.ts for why.
+ * Everything here works in DISPLAY (sRGB) space, see util/color.ts for why.
  *
  * NO BACKTICKS INSIDE THE SHADER BODIES, not even in a comment. Each shader is a template literal,
  * so a backtick ends it, and what you get is a parse error hundreds of lines further down with
@@ -18,12 +18,78 @@ import { FAR, MAX_LAMPS, MAX_MESH_POINTS, MAX_STOPS } from "../config/model";
 
 const FAR_LITERAL = FAR.toFixed(1);
 
+/** Decode the two-channel linear depth the depth passes write. */
+const DEPTH_DECODE_CHUNK = /* glsl */ `
+  float dec(vec2 e){ return e.x + e.y / 255.0; }`;
+
+/** Saturation as max minus min. The bloom gather and the finish pass both weight by this rather
+ *  than by brightness: a bright-pass is useless against a near-white backdrop, where the
+ *  background is the brightest thing in frame. */
+const SATURATION_CHUNK = /* glsl */ `
+  float sat(vec3 c){ return max(max(c.r, c.g), c.b) - min(min(c.r, c.g), c.b); }`;
+
+/** Narkowicz's ACES fit: punchier and more contrast than the neutral curve, at the cost of hue
+ *  shift. Shared by the post pass and the dust, which tone maps each grain on its own. */
+const ACES_CHUNK = /* glsl */ `
+  vec3 tonemapAces(vec3 v){
+    vec3 c = max(v, vec3(0.0));
+    c = (c * (2.51 * c + 0.03)) / (c * (2.43 * c + 0.59) + 0.14);
+    return clamp(c, 0.0, 1.0);
+  }`;
+
+/**
+ * The sRGB transfer curve, both ways.
+ *
+ * srgbToLinearHdr3 is the decode for an HDR source. The curve is defined on [0,1] and a beam sits
+ * in the hundreds, so feeding that to the transfer function is not an approximation but a
+ * different function: 500 comes back as 2.6 million, and a wide blur then spreads a number that
+ * size over the whole frame. Above one the value is already radiance and passes through.
+ */
+const TRANSFER_CHUNK = /* glsl */ `
+  vec3 srgbToLinear3(vec3 c){
+    vec3 v = max(c, vec3(0.0));
+    return mix(v / 12.92, pow((v + 0.055) / 1.055, vec3(2.4)), step(vec3(0.04045), v));
+  }
+
+  vec3 srgbToLinearHdr3(vec3 c){
+    vec3 v = max(c, vec3(0.0));
+    return mix(srgbToLinear3(min(v, vec3(1.0))), v, step(vec3(1.0), v));
+  }
+
+  vec3 linearToSrgb3(vec3 c){
+    vec3 v = max(c, vec3(0.0));
+    return mix(v * 12.92, 1.055 * pow(v, vec3(1.0 / 2.4)) - 0.055, step(vec3(0.0031308), v));
+  }`;
+
+/**
+ * Open the beam from its CENTRE LINE outward, adapted from the reference's beam-reveal.wgsl.
+ *
+ * A beam that fades up in brightness reads as a lamp being turned on; one that opens from the
+ * middle reads as a beam arriving, which is what this scene is about. The two branches keep it
+ * honest at the ends: at zero the mask is exactly zero rather than a residual hairline down the
+ * axis, and at one it is exactly one rather than a smoothstep that never quite closes.
+ *
+ * The feather has a FLOOR because the outgoing fan carries one flat profile per slice, so fwidth
+ * is zero across a cell's interior and adjacent slices would step against each other.
+ *
+ * Shared by the beam and its caustic, so the wall wash opens with the light that casts it.
+ */
+const REVEAL_CHUNK = /* glsl */ `
+  uniform float uReveal;
+  float widthReveal(float profile){
+    if (uReveal <= 0.0) return 0.0;
+    if (uReveal >= 1.0) return 1.0;
+    float antialias = max(fwidth(profile) * 1.5, 0.04);
+    return 1.0 - smoothstep(max(uReveal - antialias, 0.0), min(uReveal + antialias, 1.0),
+                            abs(profile));
+  }`;
+
 /**
  * The lamp field: a handful of soft Gaussian lamps with empty space between them, returning both
  * a colour and a coverage amount. Shared verbatim by the glass material and the backdrop, so the
  * colour a shape refracts and the colour faintly visible around it come from one definition.
  */
-export const PLATE_CHUNK = /* glsl */ `
+const PLATE_CHUNK = /* glsl */ `
   uniform vec4  uLamp[${MAX_LAMPS}];      // xy = centre, z = radius, w = intensity
   uniform vec3  uLampCol[${MAX_LAMPS}];
   uniform int   uLampCount;
@@ -67,14 +133,25 @@ export const GLASS_VERT = /* glsl */ `
  * Shared GLSL: the room a reflection falls back on, and the analytic interior trace.
  *
  * Interpolated into both glass interfaces rather than duplicated. The room in particular has to
- * have ONE definition — the back face and the front face of the same solid disagreeing about what
+ * have ONE definition, the back face and the front face of the same solid disagreeing about what
  * they reflect is exactly the kind of error nobody spots and nobody can then explain.
  */
-export const GLASS_CHUNK = /* glsl */ `
+const GLASS_CHUNK = /* glsl */ `
   uniform float uPrism, uStudio, uStudioGain;
   uniform vec4 uPrismPlanes[6];
   uniform int uPrismPlaneCount;
 
+  /**
+   * Distance along a ray to the nearest bounding plane it exits through.
+   *
+   * What the reference does instead of displacing the sample in screen space: refract the view
+   * into the glass, walk it to whichever face it actually leaves by, and project THAT point. The
+   * screen-space offset is a good approximation for a rod, whose surface curves smoothly and
+   * whose exit is always roughly opposite the entry. On a solid with flat faces and hard edges it
+   * is not: the refracted ray can leave through a different face entirely, and no rim weighting
+   * reproduces that. It also returns the true optical path length, so Beer-Lambert stops having
+   * to guess a chord.
+   */
   float prismExit(vec3 ro, vec3 rd){
     float nearest = 1e9;
     for (int i = 0; i < 6; i++){
@@ -117,7 +194,7 @@ export const GLASS_CHUNK = /* glsl */ `
    * not decoration: on a mirror-smooth surface a hard-edged panel aliases into a stair-stepped
    * band, and the softness is what makes a reflection read as a light rather than as a polygon.
    *
-   * Adapted from Vercel's vgpu (MIT) — see THIRD-PARTY-NOTICES.md.
+   * Adapted from Vercel's vgpu (MIT), see THIRD-PARTY-NOTICES.md.
    */
   float panelMask(vec3 rd, vec3 dir, vec2 size, float feather){
     vec3 fwd = normalize(dir);
@@ -137,7 +214,7 @@ export const GLASS_CHUNK = /* glsl */ `
    * A sparse three-panel studio: a broad back-left wall, a soft centre fill and a dominant cool
    * key on the right, over a near-black room with a floor/wall seam.
    *
-   * This exists because the lamp plate is a flat panel BEHIND the scene — on a dark backdrop it
+   * This exists because the lamp plate is a flat panel BEHIND the scene, on a dark backdrop it
    * covers almost none of the hemisphere, so glass has nothing to reflect and renders as a flat
    * silhouette. Three intentional surfaces are enough to draw the edges of a solid and tell the
    * eye it is looking at a block of glass rather than a painted triangle.
@@ -160,8 +237,8 @@ export const GLASS_CHUNK = /* glsl */ `
     c += vec3(0.76, 0.88, 1.0) * panelMask(d, vec3(0.612, 0.354, 0.707), vec2(0.5, 0.16), 0.035) * 20.0;
     // Filmic compression, then the gamma-2.2 encode AND the sRGB decode the reference performs.
     //
-    // Both halves matter. The encode alone lifts the room's near-black base of ~0.005 to ~0.077 —
-    // fifteen times brighter — and the reflection then shows a room that is dimly lit everywhere
+    // Both halves matter. The encode alone lifts the room's near-black base of ~0.005 to ~0.077,
+    // fifteen times brighter, and the reflection then shows a room that is dimly lit everywhere
     // instead of black with a few panels in it. Inside a solid that is the difference between the
     // interior reading as black and every wedge of the traced fan glowing. The two curves very
     // nearly cancel; the reference keeps both precisely so the small mismatch between them is
@@ -180,11 +257,11 @@ export const GLASS_CHUNK = /* glsl */ `
 `;
 
 /**
- * The room, PREFILTERED — adapted from vgpu's `environment-map` example (MIT).
+ * The room, PREFILTERED, adapted from vgpu's `environment-map` example (MIT).
  *
  * The analytic {@link GLASS_CHUNK} room answers "what is in this direction" exactly, which is the
  * right answer for a mirror and the wrong one for anything else. A rough surface reflects a CONE,
- * not a ray, and the honest way to shade it is to average the room over that cone — which is far
+ * not a ray, and the honest way to shade it is to average the room over that cone, which is far
  * too expensive per fragment and does not need to be done per fragment at all, because the room
  * does not change. Bake it once into an equirectangular texture, blur that into a mip chain, and a
  * roughness becomes a mip level.
@@ -192,7 +269,7 @@ export const GLASS_CHUNK = /* glsl */ `
  * What it replaces is a fake: roughness used to fade the sharp reflection toward a flat grey, so a
  * rough metal did not reflect a blurred room, it reflected a *less* room. That reads as chalk.
  */
-export const ENV_CHUNK = /* glsl */ `
+const ENV_CHUNK = /* glsl */ `
   uniform sampler2D tEnv;
   uniform vec2 uEnvSize;      // level 0, in texels
   uniform float uEnvTexel;    // radians per texel at level 0
@@ -238,7 +315,7 @@ export const ENV_CHUNK = /* glsl */ `
     vec2 uv = (corner + f * f * (3.0 - 2.0 * f) + 0.5) / levelSize;
     // An EXPLICIT level, not a bias. The three-argument texture2D is a bias in both GLSL ES
     // versions, and a bias is applied on top of whatever the hardware derives from the fragment's
-    // own footprint — which for a reflection is meaningless, since the footprint of the direction
+    // own footprint, which for a reflection is meaningless, since the footprint of the direction
     // is exactly what envLod already accounted for. three rewrites every non-raw ShaderMaterial to
     // GLSL ES 3.00 and defines this spelling as textureLod, so it is available unconditionally.
     return texture2DLodEXT(tEnv, uv, lod).rgb;
@@ -249,11 +326,11 @@ export const ENV_CHUNK = /* glsl */ `
  * The room as a surface actually sees it: sharp for a mirror, a wider cone as it roughens.
  *
  * Injected after {@link ENV_CHUNK} so `studioCone` can fall back to the analytic room when no
- * chain is baked — the two have to agree, because the same scene may shade one material through
+ * chain is baked, the two have to agree, because the same scene may shade one material through
  * each and a disagreement about what the room contains is not something anyone would attribute to
  * this switch.
  */
-export const ENV_LOOKUP = /* glsl */ `
+const ENV_LOOKUP = /* glsl */ `
   uniform float uEnvOn;
   vec3 studioCone(vec3 rd, float roughness){
     if (uEnvOn < 0.5) return studio(rd);
@@ -274,7 +351,7 @@ export const GLASS_FRAG = /* glsl */ `
   /**
    * Camera view-projection, passed explicitly.
    *
-   * three declares projectionMatrix in its VERTEX prefix only — the fragment prefix carries
+   * three declares projectionMatrix in its VERTEX prefix only, the fragment prefix carries
    * viewMatrix and cameraPosition but not the projection. Naming it here silently fails to
    * compile the whole glass program, and the shapes then vanish while every other material in the
    * scene keeps drawing, which is a confusing way to find out.
@@ -287,24 +364,26 @@ export const GLASS_FRAG = /* glsl */ `
   // How much of the refraction comes from the real path through the measured thickness rather
   // than the rim-weighted normal offset. 0 is every scene authored before it existed.
   uniform float uBend;
-  // How much of the body is a MAGNIFIED view of the plate — see MaterialConfig.magnify.
+  // How much of the body is a MAGNIFIED view of the plate, see MaterialConfig.magnify.
   uniform float uMagnify;
   uniform sampler2D tPlain;
   uniform float uConeTransmission;
-  /** 0 in production; a dev harness sets it to dump one intermediate. See the probe below. */
+#ifdef GLSL_PROBES
+  /** A dev harness sets it to dump one intermediate; compiled in only while a probe is active. */
   uniform float uProbe;
+#endif
   /** Per-channel Beer-Lambert absorption, and whether to use it instead of lamp-derived hue. */
   uniform vec3  uAbsorb;
   uniform float uUseAbsorb;
   uniform float uUseTint, uRim, uSpec, uSat, uEmis;
-  // Refracted-hue rotation in turns (0 = as lit) — transmission only, never the reflections.
+  // Refracted-hue rotation in turns (0 = as lit), transmission only, never the reflections.
   uniform float uHue;
   // 0 glass · 1 frosted · 2 glitter · 3 liquid · 4 metal · 5 ceramic · 6 plastic.
   uniform float uKind, uRough, uSparkle, uSparkleScale;
   // Liquid ripple field. uFlowRate is pre-snapped on the CPU so uTime * uFlowRate closes over a
   // loop exactly as motion rates do.
   uniform float uRipple, uRippleScale, uFlowRate, uTime;
-  // Thin-film interference on the Fresnel reflection — strength, and optical thickness in nm.
+  // Thin-film interference on the Fresnel reflection, strength, and optical thickness in nm.
   uniform float uIrid, uFilm;
   uniform vec3  uAlbedo, uEdge;
   uniform float uUseEdge;
@@ -317,10 +396,7 @@ export const GLASS_FRAG = /* glsl */ `
 
   const float FAR = ${FAR_LITERAL};
   ${PLATE_CHUNK}
-
-  /** Decode the two-channel linear depth the depth passes write. */
-  float dec(vec2 e){ return e.x + e.y / 255.0; }
-
+  ${DEPTH_DECODE_CHUNK}
 
   /**
    * A per-pixel rotation for the sample disk, so eleven taps do not lie on the same eleven
@@ -347,7 +423,7 @@ export const GLASS_FRAG = /* glsl */ `
     return normalize(dir + (cos(a) * tangent + sin(a) * bitangent) * r * radius);
   }
 
-  /** Three overlapping Gaussians across the sample sweep — the reference's spectral weights. */
+  /** Three overlapping Gaussians across the sample sweep, the reference's spectral weights. */
   vec3 spectralWeight(float t){
     return vec3(
       exp(-pow((t - 0.05) / 0.45, 2.0)),
@@ -362,17 +438,6 @@ export const GLASS_FRAG = /* glsl */ `
     return plate(h.xy / uPlateScale + uPlateOffset);
   }
 
-  /**
-   * Distance along a ray to the nearest bounding plane it exits through.
-   *
-   * This is what the reference does instead of displacing the sample in screen space: refract the
-   * view into the glass, walk it to whichever face it actually leaves by, and project THAT point.
-   * The screen-space offset below is a good approximation for a rod, whose surface curves smoothly
-   * and whose exit is always roughly opposite the entry. On a solid with flat faces and hard edges
-   * it is not — the refracted ray can leave through a different face entirely, and no amount of
-   * rim weighting reproduces that. It also returns the true optical path length, so Beer-Lambert
-   * stops having to guess a chord.
-   */
   // Total internal reflection returns a zero vector from refract(); fall back to a mirror bounce.
   vec3 bendDir(vec3 V, vec3 N, float eta){
     vec3 r = refract(-V, N, eta);
@@ -389,7 +454,7 @@ export const GLASS_FRAG = /* glsl */ `
    * KEY points nearly straight up, and a highlight is a mirror image of the light: a surface can
    * only show it if its normal tilts toward it. A cylinder standing on end has normals that are
    * all horizontal, so its mirror direction never leaves the y = 0 plane and can never reach a
-   * light at y = 0.86 — no exponent fixes that, because the term is zero before the exponent
+   * light at y = 0.86, no exponent fixes that, because the term is zero before the exponent
    * touches it. That is why uSpec measured dead on every rod, cone and upright prism.
    *
    * So: key plus fill, which is what a real studio does for exactly this reason. This one sits
@@ -412,7 +477,7 @@ export const GLASS_FRAG = /* glsl */ `
 
   /**
    * The liquid surface: travelling trig waves in world space, as a gradient added to the normal.
-   * Trig waves rather than scrolled noise on purpose — each term's temporal frequency is an
+   * Trig waves rather than scrolled noise on purpose, each term's temporal frequency is an
    * INTEGER multiple of the snapped base phase, so a loop that closes for the motion closes for
    * the water too, which scrolled noise can never guarantee. Four directions at incommensurate
    * spatial frequencies is enough to hide the periodicity at hero-section scale.
@@ -447,7 +512,7 @@ export const GLASS_FRAG = /* glsl */ `
   }
 
   // ---------------------------------------------------------------------------------------------
-  // Microfacet BRDF — Cook-Torrance with the Trowbridge-Reitz (GGX) distribution.
+  // Microfacet BRDF. Cook-Torrance with the Trowbridge-Reitz (GGX) distribution.
   //
   // These are the standard real-time forms (Filament's implementations of Walter et al. 2007 and
   // Heitz's height-correlated Smith visibility). They replace the hand-tuned pow(dot, exponent)
@@ -455,12 +520,14 @@ export const GLASS_FRAG = /* glsl */ `
   // whatever looked right at one value and fell apart at the others.
   //
   // ROUGHNESS REMAP: alpha = roughness². Disney's reparameterization, adopted because it makes the
-  // slider perceptually linear — without it almost all of the visible change is crammed into the
+  // slider perceptually linear, without it almost all of the visible change is crammed into the
   // bottom of the range.
   // ---------------------------------------------------------------------------------------------
   const float G3_PI = 3.14159265359;
 
   float D_GGX(float NoH, float a){
+    // Floored as Filament does: at alpha 0 and NoH 1 the denominator is 0 and the lobe is 0/0.
+    a = max(a, 1e-3);
     float a2 = a * a;
     float f = (NoH * a2 - NoH) * NoH + 1.0;
     return a2 / (G3_PI * f * f);
@@ -500,24 +567,11 @@ export const GLASS_FRAG = /* glsl */ `
   }
 
   /**
-   * The opaque kinds.
-   *
-   * There is no environment map here — the only "world" this renderer has is the lamp plate
-   * hanging behind the scene, so that is what gets reflected, projected along the reflection ray
-   * by the same backplate() used for refraction. It is a crude environment, and a metal shape is
-   * only ever as convincing as a flat backdrop standing in for one; what it does buy is that
-   * opaque and transmissive shapes are lit by the SAME field and sit in the same room.
-   *
-   * The plate is also a BACKLIGHT — it is behind everything — so an opaque form would read as a
-   * silhouette on the key alone. The backlight term is what puts a halo on its edges and keeps it
-   * from punching a dead hole in the frame.
-   */
-  /**
    * A separate key for the opaque kinds.
    *
    * KEY above points almost straight up, which is right for glass: there it only drives a small
    * specular accent on a shape that is already lit from behind by the plate. An opaque form has
-   * nothing but this light to reveal it, and the compositions here are mostly VERTICAL cylinders —
+   * nothing but this light to reveal it, and the compositions here are mostly VERTICAL cylinders,
    * whose normals are horizontal, so a vertical key lands on none of them and every shape comes
    * out a flat, identical pastel. This one comes from the upper front-left, so a barrel actually
    * turns through the light.
@@ -525,14 +579,13 @@ export const GLASS_FRAG = /* glsl */ `
   const vec3 OPAQUE_KEY = normalize(vec3(-0.45, 0.55, 0.70));
 
   /**
-   * A stand-in for the room this renderer has no way to represent.
-   *
-   * The lamp plate is a flat panel BEHIND the scene, so it covers almost none of the hemisphere a
-   * reflective surface actually sees. This fills in the rest with the one thing every product shot
-   * has — a bright ceiling and a darker floor — which is what draws a horizon across a metal
-   * cylinder and gives it its form.
+   * The opaque kinds: Cook-Torrance under OPAQUE_KEY, with the room at the surface's own cone
+   * width along the mirror direction and the lamp plate composited over it wherever the
+   * reflection ray reaches the plate. Opaque and transmissive shapes are therefore lit by the
+   * SAME field and sit in the same room. The plate is also a BACKLIGHT, since it hangs behind
+   * everything, and the rim term is what keeps an opaque form from reading as a silhouette on the
+   * key alone.
    */
-
   vec3 shadeOpaque(vec3 N, vec3 V, float ndv){
     vec3 L = OPAQUE_KEY;
     vec3 H = normalize(V + L);
@@ -544,18 +597,18 @@ export const GLASS_FRAG = /* glsl */ `
 
     bool metal = uKind < 4.5;
     // The one line that actually separates a conductor from a dielectric: for a metal the
-    // normal-incidence reflectance IS its colour (measured — see MATERIAL_PRESETS), and there is
+    // normal-incidence reflectance IS its colour (measured, see MATERIAL_PRESETS), and there is
     // no diffuse lobe at all. A dielectric reflects ~4% white regardless of what colour it is,
     // which is why a red plastic has a WHITE highlight and red-gold does not.
     vec3 f0 = metal ? uAlbedo : vec3(0.04);
 
     // Direct light from the key.
     //
-    // D_GGX is a normalized distribution, so its peak goes as 1/alpha² — into the hundreds for a
+    // D_GGX is a normalized distribution, so its peak goes as 1/alpha², into the hundreds for a
     // polished surface. A physical renderer balances that against the light's radiance and then
     // tone-maps; this pipeline is display-referred end to end and does neither, so an untouched
-    // GGX highlight simply clips to a white blob. Compressing it (Reinhard) keeps the LOBE — the
-    // shape and falloff that the whole microfacet model is for — while bounding the peak.
+    // GGX highlight simply clips to a white blob. Compressing it (Reinhard) keeps the LOBE, the
+    // shape and falloff that the whole microfacet model is for, while bounding the peak.
     float D = D_GGX(NoH, a);
     float Vis = V_SmithGGXCorrelated(NoV, NoL, a);
     // Only conductors get the F82 treatment: it is a correction to Schlick's conductor error, and
@@ -567,11 +620,11 @@ export const GLASS_FRAG = /* glsl */ `
 
     // Environment: the lamp plate, along the mirror direction. There is no prefiltered radiance
     // to fall back on here, so a rough surface fades its reflection toward the ambient fill
-    // instead of blurring it — the same trick a mip-biased cubemap would do, minus the cubemap.
+    // instead of blurring it, the same trick a mip-biased cubemap would do, minus the cubemap.
     //
     // Where the reflection ray misses the plate it lands on STUDIO() rather than a constant. That
     // matters more than it sounds: a polished conductor reflects ~96% at every angle, so its
-    // Fresnel term is nearly flat and carries no shading at all — every bit of a metal's form
+    // Fresnel term is nearly flat and carries no shading at all, every bit of a metal's form
     // comes from variation in what it reflects. Against a flat fallback an aluminium rod is a
     // featureless white stripe, which is exactly how this first rendered.
     vec3 R = reflect(-V, N);
@@ -579,7 +632,7 @@ export const GLASS_FRAG = /* glsl */ `
     vec4 behind = backplate(vW, -N);
     vec3 fill = mix(vec3(0.92), behind.rgb, behind.a * 0.6);
     // The room at this surface's own cone width, with the plate over it. Roughness used to fade
-    // the whole thing toward a flat fill colour — a rough metal reflected LESS room rather than a
+    // the whole thing toward a flat fill colour, a rough metal reflected LESS room rather than a
     // blurred one, which reads as chalk. Where a prefiltered chain exists the blur is real, so the
     // fade drops to a token amount; the old weight survives only as the analytic fallback.
     float coneFade = uEnvOn > 0.5 ? uRough * 0.18 : uRough * 0.75;
@@ -590,7 +643,7 @@ export const GLASS_FRAG = /* glsl */ `
     if (metal){
       col = envCol * Fenv + direct * uSpec;
     } else {
-      // CERAMIC keeps a wrapped diffuse term. That is not Lambert and not physical — it stands in
+      // CERAMIC keeps a wrapped diffuse term. That is not Lambert and not physical, it stands in
       // for subsurface scattering, which is most of why unglazed clay reads as clay: light bleeds
       // past the terminator instead of stopping dead at it. PLASTIC gets plain Lambert, so the
       // two differ by their light transport and not just by a gloss number.
@@ -608,10 +661,11 @@ export const GLASS_FRAG = /* glsl */ `
     vec3 V = normalize(uCam - vW);
     float ndv = clamp(dot(N, V), 0.0, 1.0);
 
-    // The opaque kinds never touch the refraction below. Branching on a uniform is coherent —
-    // every fragment of a draw takes the same side — so the transmissive path pays nothing for
+    // The opaque kinds never touch the refraction below. Branching on a uniform is coherent,
+    // every fragment of a draw takes the same side, so the transmissive path pays nothing for
     // this beyond the program being larger.
     if (uKind > 3.5){
+#ifdef GLSL_PROBES
       // DEV PROBE for the opaque families, recomputing the few terms worth comparing rather than
       // threading them out of shadeOpaque. Dev-only, so the duplicated arithmetic costs nothing.
       if (uProbe > 0.5 && uPass > 0.5){
@@ -628,6 +682,7 @@ export const GLASS_FRAG = /* glsl */ `
         gl_FragColor = vec4(dbg, 1.0);
         return;
       }
+#endif
       vec3 oc = shadeOpaque(N, V, ndv);
       oc = mix(vec3(dot(oc, vec3(0.3333))), oc, uSat);
       oc = (oc - 0.5) * 1.04 + 0.5;
@@ -644,7 +699,7 @@ export const GLASS_FRAG = /* glsl */ `
       ndv = clamp(dot(N, V), 0.0, 1.0);
     }
 
-    // LIQUID tilts the normal through a travelling wave field before the ray is bent — the same
+    // LIQUID tilts the normal through a travelling wave field before the ray is bent, the same
     // hook as frosted, animated and smooth instead of seeded and granular. Everything downstream
     // (dispersion, chord, Fresnel, rim) reads the rippled normal, which is why the shimmer stays
     // coherent instead of looking pasted on.
@@ -677,7 +732,7 @@ export const GLASS_FRAG = /* glsl */ `
       float cover = 0.0;
       for (int i = 0; i < CONE_SAMPLES; i++){
         float t = (float(i) + 0.5) / float(CONE_SAMPLES);
-        // uDisp is an offset in ETA, and the three-ray version spanned e0-uDisp to e0+uDisp — so
+        // uDisp is an offset in ETA, and the three-ray version spanned e0-uDisp to e0+uDisp, so
         // the same authored number means the same total spread here.
         vec3 base = bendDir(V, N, e0 + (t - 0.5) * 2.0 * uDisp);
         vec4 p = backplate(vW, coneDirection(base, i, radius, rotation));
@@ -689,7 +744,7 @@ export const GLASS_FRAG = /* glsl */ `
       lit = spectrum / max(weightSum, vec3(1e-4));
       amt = cover / float(CONE_SAMPLES);
     } else {
-      // Three rays at three IORs — hand-rolled dispersion, because the point is the plate field.
+      // Three rays at three IORs, hand-rolled dispersion, because the point is the plate field.
       vec4 pR = backplate(vW, bendDir(V, N, e0 - uDisp));
       vec4 pG = backplate(vW, bendDir(V, N, e0        ));
       vec4 pB = backplate(vW, bendDir(V, N, e0 + uDisp));
@@ -702,7 +757,7 @@ export const GLASS_FRAG = /* glsl */ `
     amt = mix(amt, 1.0, uUseTint);
 
     // Hue rotation of the transmitted light: Rodrigues rotation of the colour vector about the
-    // grey axis — cheap, and it moves only lit, so everything derived from it (the absorption
+    // grey axis, cheap, and it moves only lit, so everything derived from it (the absorption
     // hue, the emission glow) shifts together while reflections keep the true lamp colours.
     // Branching on a uniform is coherent, so a resting shape pays nothing.
     if (abs(uHue) > 0.0005){
@@ -712,7 +767,7 @@ export const GLASS_FRAG = /* glsl */ `
     }
 
     // BASE: what is genuinely behind this fragment. On the main pass that is the plate pass's
-    // frame, displaced in screen space — which is what lets glass refract other glass.
+    // frame, displaced in screen space, which is what lets glass refract other glass.
     // The displacement is RIM-WEIGHTED: a near-flat window in the middle, hard bending at the
     // edge. Uniform displacement reads as frosted; edge-loaded displacement reads as cut.
     vec3 base = uClearCol;
@@ -728,10 +783,13 @@ export const GLASS_FRAG = /* glsl */ `
     if (uPass > 0.5){
       vec2 suv = (vProj.xy / vProj.w) * 0.5 + 0.5;
       vec2 off = vec2(vVN.x / uAspect, vVN.y) * uLens * pow(1.0 - ndv, 1.35) * 3.4;
+      // The view ray refracted into the glass, which the real path, the trace and the lens below
+      // all follow.
+      vec3 inside = bendDir(V, N, 1.0 / max(uIOR, 1.0));
       // THE REAL PATH, for shapes the prism tracer cannot take.
       //
       // The offset above is built from the view-space NORMAL, and at the centre of any convex
-      // shape the normal points at the camera — so vVN.xy is zero there, and the rim weight
+      // shape the normal points at the camera, so vVN.xy is zero there, and the rim weight
       // zeroes it again for good measure. That is deliberate for a plate (a near-flat window in
       // the middle, hard bending at the edge) and wrong for a ball, whose whole optical character
       // is that the middle is the THICKEST part and therefore bends the most. A sphere rendered
@@ -740,20 +798,19 @@ export const GLASS_FRAG = /* glsl */ `
       //
       // So: refract the view ray at the surface, walk it the MEASURED thickness, and project where
       // it comes out. That is the same construction the prism branch below uses, with the back
-      // depth standing in for an analytic exit — available to any shape, since it asks the depth
+      // depth standing in for an analytic exit, available to any shape, since it asks the depth
       // buffer rather than a plane set. Small bend times large thickness is exactly where a ball
       // lens gets its power, which is why this fills in precisely where the normal offset cannot.
       if (uBend > 0.0 && uThick > 0.5){
         float backZ = dec(texture2D(tBack, clamp(suv, vec2(0.0), vec2(1.0))).rg) * FAR;
         float thick = max(backZ - vVZ, 0.0);
         if (thick > 0.0){
-          vec3 inside = bendDir(V, N, 1.0 / max(uIOR, 1.0));
           vec4 exitClip = uViewProj * vec4(vW + inside * thick, 1.0);
           vec2 traced = ((exitClip.xy / max(exitClip.w, 1e-5)) * 0.5 + 0.5) - suv;
           off = mix(off, traced, uBend);
           // From the plate WITHOUT the glass in it. A refracted ray near the centre of a convex
           // solid lands back inside that solid's own silhouette, where the ordinary plate holds
-          // its clear-glass pixel rather than the backdrop — so bending the ray further only ever
+          // its clear-glass pixel rather than the backdrop, so bending the ray further only ever
           // finds more flat colour. See renderPlainPlate for the trade this makes.
           vec4 plain = texture2D(tPlain, clamp(suv + off, vec2(0.002), vec2(0.998)));
           base = mix(base, plain.rgb, 0.94 * uBend);
@@ -761,7 +818,6 @@ export const GLASS_FRAG = /* glsl */ `
         }
       }
       if (uPrism > 0.5){
-        vec3 inside = bendDir(V, N, 1.0 / max(uIOR, 1.0));
         float t = prismExit(vW, inside);
         if (t > 0.0){
           tracedPath = t;
@@ -782,7 +838,7 @@ export const GLASS_FRAG = /* glsl */ `
       // MAGNIFY: stop displacing a screen-space sample and just look through the glass.
       //
       // Everything above moves a sample around the FRAME, so the furthest it can ever move is
-      // bounded by the shape's own size on screen — which is why bend fixes the flat disc and
+      // bounded by the shape's own size on screen, which is why bend fixes the flat disc and
       // still does not magnify. A lens magnifies because the ray keeps going: refract at the
       // surface and follow it to the plate, and the further back the plate hangs the more of it a
       // given angular deviation sweeps across.
@@ -793,17 +849,16 @@ export const GLASS_FRAG = /* glsl */ `
       // never touch base.
       //
       // It reads the analytic lamp field rather than the rendered plate, so it sees no other glass
-      // — the same trade bend makes, for the same reason, and it cannot sample itself at all.
+      //, the same trade bend makes, for the same reason, and it cannot sample itself at all.
       if (uMagnify > 0.0){
-        vec3 through = bendDir(V, N, 1.0 / max(uIOR, 1.0));
-        base = mix(base, backplate(vW, through).rgb, uMagnify);
+        base = mix(base, backplate(vW, inside).rgb, uMagnify);
       }
     }
 
     // Beer-Lambert. The optical path is either MEASURED from the back-face depth pass, or falls
     // back to an analytic chord through a cylinder.
     //
-    // 2R·(N·V) is exactly the chord through a cylinder — which is why the fallback survived so
+    // 2R·(N·V) is exactly the chord through a cylinder, which is why the fallback survived so
     // long: the reference scene is entirely rods, and there it is not an approximation at all. It
     // is wrong for everything else. A sphere gets one constant across its whole disc, a cone the
     // same value at tip and base, a ring the same looking through the hole as through the wall.
@@ -811,11 +866,11 @@ export const GLASS_FRAG = /* glsl */ `
     // The pow(ndv, 0.40) is a deliberate cheat kept in BOTH paths: the true chord falls off so
     // fast at the silhouette that it leaves a wide white rim eating most of the shape's width.
     // Since a cylinder's measured thickness is exactly 2·uPath·ndv, multiplying the measurement by
-    // ndv^-0.6 reproduces the authored curve identically for rods while being correct elsewhere —
+    // ndv^-0.6 reproduces the authored curve identically for rods while being correct elsewhere,
     // the shaping is preserved, only the geometry term stops being a guess.
     float chord;
     if (tracedPath > 0.0){
-      // The trace already walked the real path — this is the exact distance through the glass for
+      // The trace already walked the real path, this is the exact distance through the glass for
       // this fragment's refracted ray, not an approximation of it.
       chord = tracedPath;
     } else if (uThick > 0.5){
@@ -829,14 +884,14 @@ export const GLASS_FRAG = /* glsl */ `
 
     // Colour as LIGHT, not pigment: take the lamp's chroma and keep the brightness of what is
     // behind. mix(white, tint, absorb) darkens as it saturates and looks muddy. The 0.55 matters
-    // too — full chroma normalization turns smooth gradients into hard posterized patches.
+    // too, full chroma normalization turns smooth gradients into hard posterized patches.
     vec3 hue = lit / max(max(lit.r, max(lit.g, lit.b)), 0.001);
     hue = mix(lit, hue, 0.55);
     vec3 col = base * mix(vec3(1.0), hue, trans);
 
     // ABSORPTION overrides that, when a material asks for it.
     //
-    // The model above gives glass no colour of its own — it borrows chroma from whatever lamps
+    // The model above gives glass no colour of its own, it borrows chroma from whatever lamps
     // happen to sit behind it. That is the right call for a pale studio full of coloured light,
     // and it cannot express the most recognisable property of coloured glass: that the thick parts
     // are more saturated than the thin ones. It also means a shape in a dark scene has nothing to
@@ -851,14 +906,14 @@ export const GLASS_FRAG = /* glsl */ `
     }
     col += lit * trans * uEmis;
 
-    float F = 0.04 + 0.96 * pow(1.0 - ndv, 5.0);
+    float F = F_Schlick(vec3(0.04), ndv).x;
     vec3 R = reflect(-V, N);
     vec4 rf = backplate(vW, R);
     // Where the reflection ray misses the plate, land it on the studio rather than on a flat
     // constant. Metals have always done this; glass did not, which is why a shape over a dark
     // backdrop had nothing to reflect and came out a silhouette with no faces.
     vec3 rfCol = mix(studio(R), rf.rgb, rf.a);
-    // The film tints what the surface REFLECTS — reflection, rim and specular — never what it
+    // The film tints what the surface REFLECTS, reflection, rim and specular, never what it
     // transmits: interference happens to the bounced wave, and colouring the transmission too
     // reads as dye. A film also reflects far more than bare glass and its coloured band reaches
     // much further in from the silhouette, hence the strength boost and the widened rim window.
@@ -893,7 +948,7 @@ export const GLASS_FRAG = /* glsl */ `
     dbgLobe = lobe;
     col += lobe * uSpec * mix(vec3(1.0), film, uIrid);
 
-    // GLITTER — a field of tiny mirrors embedded in the surface. Each cell gets its own normal,
+    // GLITTER, a field of tiny mirrors embedded in the surface. Each cell gets its own normal,
     // so only the few facets that happen to point at the key light fire, and which ones those are
     // changes as the shape turns. That flicker IS the effect; a smooth highlight is not glitter.
     //
@@ -901,7 +956,7 @@ export const GLASS_FRAG = /* glsl */ `
     // the facet response is the microfacet NDF (a very tight GGX lobe) rather than an arbitrary
     // exponent, and the CELL DENSITY is tied to the screen-space footprint. Without that second
     // part the cells shrink below a pixel as a shape recedes and the sparkle turns into crawling
-    // noise — which is the aliasing their paper exists to solve.
+    // noise, which is the aliasing their paper exists to solve.
     if (uKind > 1.5 && uKind < 2.5){
       float footprint = max(fwidth(vW.x) + fwidth(vW.y), 1e-4);
       float density = min(uSparkleScale, 0.85 / footprint);
@@ -917,8 +972,9 @@ export const GLASS_FRAG = /* glsl */ `
     col = mix(vec3(dot(col, vec3(0.3333))), col, uSat);
     col = (col - 0.5) * 1.04 + 0.5;
 
+#ifdef GLSL_PROBES
     // DEV PROBE, the twin of the one in NodeMaterialRenderer's glass graph. Substituted on the
-    // MAIN pass only, and carrying the same alpha as the real path — the plate is drawn by this
+    // MAIN pass only, and carrying the same alpha as the real path: the plate is drawn by this
     // same program, so a probe that returned unconditionally would rewrite the plate the main pass
     // then samples, and every reading taken through it would describe a frame that never existed.
     if (uProbe > 0.5 && uPass > 0.5){
@@ -935,7 +991,7 @@ export const GLASS_FRAG = /* glsl */ `
       else if (uProbe > 15.5 && uProbe < 16.5) dbg = vec3(dbgGuard);
       else if (uProbe > 16.5 && uProbe < 17.5) dbg = vec3(dbgPlateA / 32.0);
       // The guard's MARGIN, centred on 0.5 so its sign is readable and it does not saturate the
-      // way the raw depths do — those run to FAR on any backdrop pixel.
+      // way the raw depths do, those run to FAR on any backdrop pixel.
       else if (uProbe > 17.5 && uProbe < 18.5) dbg = vec3((dbgPlateA - vVZ + 16.0) / 32.0);
       else if (uProbe > 18.5 && uProbe < 19.5) dbg = vec3(dbgOff.x * 5.0 + 0.5, dbgOff.y * 5.0 + 0.5, 0.5);
       else if (uProbe > 20.5 && uProbe < 21.5) dbg = vec3(dbgLobe);
@@ -947,11 +1003,11 @@ export const GLASS_FRAG = /* glsl */ `
       // must return exactly this, and any deviation is the instrument, not the renderer.
       else if (uProbe > 25.5 && uProbe < 26.5) dbg = vec3(0.25, 0.5, 0.75);
       // The lobe's ARGUMENT, before the exponent. Splits "the reflection vector differs" from
-      // "the power differs" — at 40 the second is invisible in the first.
+      // "the power differs", at 40 the second is invisible in the first.
       else if (uProbe > 26.5 && uProbe < 27.5) dbg = vec3(max(dot(reflect(-V, N), KEY), 0.0));
       // CALIBRATION, VARYING. The constant probe cannot expose anything that depends on how a
       // value is interpolated, resolved or written. This is a horizontal ramp of the fragment's
-      // own x — provably identical in both engines — so whatever difference it shows IS the
+      // own x, provably identical in both engines, so whatever difference it shows IS the
       // instrument's floor for a non-constant quantity, and nothing smaller can be attributed.
       // (No backticks in this file: it is one big template literal, and they end it.)
       else if (uProbe > 27.5 && uProbe < 28.5) dbg = vec3(gl_FragCoord.x / 1000.0);
@@ -966,7 +1022,7 @@ export const GLASS_FRAG = /* glsl */ `
       // each around 7 world units and their difference is under one, so a probe scaled for the
       // absolute depths quantises the interesting quantity into nothing.
       // The UV the back-depth fetch actually uses. This engine projects; the node engine reads
-      // screenUV, and those are not the same convention — worth being able to see.
+      // screenUV, and those are not the same convention, worth being able to see.
       // The shading normal, so N and V can be compared separately when ndv disagrees.
       else if (uProbe > 33.5 && uProbe < 34.5) dbg = N * 0.5 + 0.5;
       // The plate sample position, in ONE convention both engines can be read in. The raw offsets
@@ -982,10 +1038,11 @@ export const GLASS_FRAG = /* glsl */ `
       gl_FragColor = vec4(dbg, 1.0);
       return;
     }
+#endif
 
     // Alpha does two different jobs. On the PLATE pass it carries linear depth, which is what the
     // main pass validates its samples against. On the MAIN pass nothing reads depth back, so it
-    // carries coverage instead — that is what lets the post pass composite the scene over a
+    // carries coverage instead, that is what lets the post pass composite the scene over a
     // transparent background.
     gl_FragColor = vec4(col, uPass > 0.5 ? 1.0 : vVZ / FAR);
   }`;
@@ -997,29 +1054,15 @@ export const BACKDROP_VERT = /* glsl */ `
     gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
   }`;
 
-/** The backdrop samples the same lamps, faintly. If colour appears *only* inside glass, the eye
- *  reads it as tint however it was computed — a faint presence in the gaps is what sells
- *  "behind". */
-/**
- * The value-noise hash and the noise built on it.
- *
- * Extracted so the parity harness can test the SOURCE rather than a copy of it. It used to be
- * inline here, and the parity case for valueNoise carried its own hand-written twin that used a
- * different hash — so the case passed while the two engines disagreed, which is the one failure
- * mode a parity case must not have.
- *
- * Hoskins' sine-free hash: fract(sin(x) * 43758) turns whatever a backend does in the last bits of
- * sin into an unrelated value, so it is not reproducible across backends. This is multiply, add,
- * dot and fract only.
- */
 /**
  * The wall's footprint maths: the soft maximum, the contour transition, and the signed distance to
  * a grounded shape.
  *
- * Extracted for the same reason as {@link NOISE_CHUNK} — so the parity harness tests THIS, rather
+ * Exported for the same reason as {@link NOISE_CHUNK}: so the parity harness tests THIS, rather
  * than a transcription of it that can quietly drift. `footprintDistance` reads `uWallGrounding`,
  * so anything including this chunk has to declare it.
  */
+/** @public Read by scripts/tsl-parity.mjs through dist, so parity cases build from the source. */
 export const FOOTPRINT_CHUNK = /* glsl */ `
   float softMax(float a, float b, float rounding){
     float r = max(rounding, 0.0001);
@@ -1051,7 +1094,7 @@ export const FOOTPRINT_CHUNK = /* glsl */ `
    * A 0 -> 1 transition centred ON the contour, so the true silhouette sits at the half value.
    *
    * NOT named 'half'. That is a reserved word in GLSL ES 3.00, and three rewrites every non-raw
-   * ShaderMaterial to 3.00 — so the declaration failed to compile, took the whole backdrop program
+   * ShaderMaterial to 3.00, so the declaration failed to compile, took the whole backdrop program
    * with it, and the wall mode drew nothing at all. A dead backdrop looks like a scene that simply
    * has no wall configured, which is why it survived so long.
    */
@@ -1061,6 +1104,19 @@ export const FOOTPRINT_CHUNK = /* glsl */ `
   }
 `;
 
+/**
+ * The value-noise hash and the noise built on it, shared by the wall and the caustic that lands
+ * on it, so the two agree about where the plaster is high.
+ *
+ * Exported so the parity harness can test the SOURCE rather than a copy of it: a hand-written
+ * twin in a test case can pass while the two engines disagree, which is the one failure mode a
+ * parity case must not have.
+ *
+ * Hoskins' sine-free hash: fract(sin(x) * 43758) turns whatever a backend does in the last bits of
+ * sin into an unrelated value, so it is not reproducible across backends. This is multiply, add,
+ * dot and fract only.
+ */
+/** @public Read by scripts/tsl-parity.mjs through dist, so parity cases build from the source. */
 export const NOISE_CHUNK = /* glsl */ `
   float hash12(vec2 p){
     vec3 p3 = fract(vec3(p.xyx) * 0.1031);
@@ -1068,7 +1124,7 @@ export const NOISE_CHUNK = /* glsl */ `
     return fract((p3.x + p3.y) * p3.z);
   }
 
-  /** Bilinear value noise — enough to break a flat wall up without reading as a pattern. */
+  /** Bilinear value noise, enough to break a flat wall up without reading as a pattern. */
   float valueNoise(vec2 p){
     vec2 i = floor(p);
     vec2 f = fract(p);
@@ -1079,6 +1135,9 @@ export const NOISE_CHUNK = /* glsl */ `
       u.y);
   }`;
 
+/** The painted backdrop. It samples the same lamps as the glass, faintly: if colour appears only
+ *  inside glass the eye reads it as tint however it was computed, and a faint presence in the
+ *  gaps is what sells "behind". */
 export const BACKDROP_FRAG = /* glsl */ `
   precision highp float;
   varying vec2 vUv;
@@ -1107,7 +1166,7 @@ export const BACKDROP_FRAG = /* glsl */ `
   uniform float uWallShadow, uWallGrounding;
   uniform float uWallProbe;
   // The second, finer noise octave. Supplied by the renderer since the wall was written, but never
-  // DECLARED here — so the program failed to compile and the whole backdrop drew nothing. It went
+  // DECLARED here, so the program failed to compile and the whole backdrop drew nothing. It went
   // unnoticed behind the 'half' reserved-word error above it, which failed first.
   uniform float uWallMicroFreq, uWallMicroNormal;
   uniform vec4  uGround[GROUND_SLOTS];        // (centre.xy, apothem, sides)
@@ -1129,7 +1188,7 @@ export const BACKDROP_FRAG = /* glsl */ `
    * normalize(vec3(x, y, 1)) silently rescales z, so a strong field flattens itself: doubling
    * the strength past a point stops tilting the normal any further. Clamping the XY to unit length
    * and solving z from it keeps the normal on the hemisphere and keeps strength meaning something
-   * all the way up — and a field that would have tipped past horizontal lands exactly at grazing
+   * all the way up, and a field that would have tipped past horizontal lands exactly at grazing
    * instead of folding through.
    */
   vec3 wallNormalFromXy(vec2 xy){
@@ -1139,7 +1198,7 @@ export const BACKDROP_FRAG = /* glsl */ `
 
 
   /**
-   * Log-sum-exp soft maximum — the reference's smoothMaximum3, generalized to a running fold.
+   * Log-sum-exp soft maximum, the reference's smoothMaximum3, generalized to a running fold.
    *
    * Intersecting a polygon's half-planes with a hard max and then feathering the result keeps a
    * fully opaque core with needle-sharp vertices however wide the blur gets, which is not what a
@@ -1157,7 +1216,7 @@ export const BACKDROP_FRAG = /* glsl */ `
   uniform int   uImageFit;                       // 0 cover, 1 contain, 2 stretch
   uniform float uImageZoom, uImageAspect;
   uniform vec2  uImageOffset;
-  /** Visible fraction of this plane, per axis — the plane is deliberately oversized. */
+  /** Visible fraction of this plane, per axis, the plane is deliberately oversized. */
   uniform vec2  uFrame;
 
   ${PLATE_CHUNK}
@@ -1181,7 +1240,7 @@ export const BACKDROP_FRAG = /* glsl */ `
 
   void main(){
     // The backdrop plane is bigger than the frustum (it has to be, or an orbit reveals its edge),
-    // so map the VISIBLE window of it to 0..1 before painting — otherwise every gradient and image
+    // so map the VISIBLE window of it to 0..1 before painting, otherwise every gradient and image
     // would be authored against a rectangle wider than the one being exported.
     vec2 fuv = (vUv - 0.5) / max(uFrame, vec2(1e-4)) + 0.5;
 
@@ -1205,8 +1264,8 @@ export const BACKDROP_FRAG = /* glsl */ `
       //
       // A lit SURFACE rather than a painted ramp, adapted from the reference's wall-common.wgsl.
       // The prism there does not float in black: it stands a few millimetres in front of a wall,
-      // and almost everything that reads as depth — the falloff around the beam, the contact
-      // shadow under the glass, the sheen the fan picks up — is that wall responding to light.
+      // and almost everything that reads as depth, the falloff around the beam, the contact
+      // shadow under the glass, the sheen the fan picks up, is that wall responding to light.
       //
       // The reference samples two BAKED textures here: a material map and a GPU-baked global light
       // mask. Neither is portable, so both are analytic below: a value-noise material and a
@@ -1219,11 +1278,11 @@ export const BACKDROP_FRAG = /* glsl */ `
       // a perfect mirror sheet.
       float m = valueNoise(wp * uWallScale) * 0.5 + valueNoise(wp * uWallScale * 3.7) * 0.5;
 
-      // TWO normal fields at different frequencies, not one — the reference's wall-normal.wgsl.
+      // TWO normal fields at different frequencies, not one, the reference's wall-normal.wgsl.
       // A single field has to choose: coarse enough to shape the light across the wall, or fine
       // enough to break up the specular, and it cannot be both. The large scale bends the diffuse
       // over hand-sized areas; the micro runs seven times faster and is what stops the sheen
-      // reading as a mirror sheet. Their strengths are theirs — 0.22 and 1.05 — and the micro
+      // reading as a mirror sheet. Their strengths are theirs, 0.22 and 1.05, and the micro
       // being the far stronger of the two is the point: it is the surface, the large scale is
       // only the wall not being flat.
       //
@@ -1267,7 +1326,7 @@ export const BACKDROP_FRAG = /* glsl */ `
       float baseExposure = mix(uWallFloor, uWallHighlight, gl);
       vec3 globalIllum = vec3(gl * uWallAmbientLight * (0.5 + 0.5 * m) * mix(0.25, 1.0, facing));
 
-      // Contact shadow and ambient occlusion where a solid meets the wall — the shape of the
+      // Contact shadow and ambient occlusion where a solid meets the wall, the shape of the
       // solid, not a disc under the middle of the scene. Adapted from the reference's floor-AO
       // pass, which is where the reason for the odd soft-max below is spelled out.
       //
@@ -1282,8 +1341,8 @@ export const BACKDROP_FRAG = /* glsl */ `
       float grounding = mix(1.0, 1.0 - uWallShadow, occl);
 
       c = (direct * baseExposure + globalIllum) * grounding;
-      // Dev taps, so the wall can be bisected against the node engine's twin. uWallProbe is
-      // never set in production, where this compiles to a branch on a constant zero.
+#ifdef GLSL_PROBES
+      // Dev taps, so the wall can be bisected against the node engine's twin.
       if (uWallProbe > 0.5) {
         if (uWallProbe < 1.5) c = vec3(m);
         else if (uWallProbe < 2.5) c = N * 0.5 + 0.5;
@@ -1298,10 +1357,11 @@ export const BACKDROP_FRAG = /* glsl */ `
         else if (uWallProbe < 11.5) c = vec3(occl);
         else c = vec3(footprintDistance(wp, uGround[0], uGroundPhase[0]) * 4.0 + 0.5);
       }
+#endif
     } else if (uMode == 1){
       if (uGradType == 3){
         // Mesh: inverse-distance blend of the blobs. Weights are normalized, so the field is a
-        // true average — no blob can blow past the palette's range.
+        // true average, no blob can blow past the palette's range.
         vec3 acc = vec3(0.0);
         float wsum = 0.0;
         for (int i = 0; i < ${MAX_MESH_POINTS}; i++){
@@ -1327,11 +1387,13 @@ export const BACKDROP_FRAG = /* glsl */ `
 
     vec2 p = (vUv - 0.5) * uSize / uPlateScale + uPlateOffset;
     vec4 lp = plate(p);
-    // Dev taps for the lamp overlay, sharing uWallProbe's slot space — see the wall taps above.
+#ifdef GLSL_PROBES
+    // Dev taps for the lamp overlay, sharing uWallProbe's slot space with the wall taps above.
     if (uWallProbe > 19.5) {
       if (uWallProbe < 20.5) { gl_FragColor = vec4(lp.rgb, 1.0); return; }
       gl_FragColor = vec4(vec3(lp.a), 1.0); return;
     }
+#endif
     gl_FragColor = vec4(mix(c, lp.rgb, lp.a * uShow), 1.0);
   }`;
 
@@ -1384,19 +1446,16 @@ export const POST_FRAG = /* glsl */ `
   const float FAR = ${FAR_LITERAL};
   const float TAPS = float(DOF_TAPS);
   const float GOLDEN_ANGLE = 2.39996323;
-
-  float dec(vec2 e){ return e.x + e.y / 255.0; }
-
-  // Weight bloom by SATURATION, not brightness. A standard bright-pass is useless against a
-  // near-white backdrop — the background is the brightest thing in frame.
-  float sat(vec3 c){ return max(max(c.r, c.g), c.b) - min(min(c.r, c.g), c.b); }
+  ${DEPTH_DECODE_CHUNK}
+  ${SATURATION_CHUNK}
+  ${ACES_CHUNK}
 
   /**
-   * Khronos PBR "neutral" tone map, adapted from Vercel's vgpu (MIT) — see THIRD-PARTY-NOTICES.
+   * Khronos PBR "neutral" tone map, adapted from Vercel's vgpu (MIT), see THIRD-PARTY-NOTICES.
    *
    * The reason this is here rather than a plain clamp: an additive light sheet delivers values far
    * above 1, and clamping each channel independently drives every bright colour to a primary or a
-   * secondary. A spectrum clipped that way turns into magenta / cyan / yellow bars — the hue is
+   * secondary. A spectrum clipped that way turns into magenta / cyan / yellow bars, the hue is
    * destroyed exactly where the picture is brightest. This compresses the PEAK and desaturates
    * toward it, so an over-range colour fades to white through its own hue instead of hard-edging
    * into someone else's.
@@ -1417,16 +1476,9 @@ export const POST_FRAG = /* glsl */ `
     return mix(c, vec3(newPeak), amount);
   }
 
-  /** Narkowicz's ACES fit — punchier and more contrast than neutral, at the cost of hue shift. */
-  vec3 tonemapAces(vec3 v){
-    vec3 c = max(v, vec3(0.0));
-    c = (c * (2.51 * c + 0.03)) / (c * (2.43 * c + 0.59) + 0.14);
-    return clamp(c, 0.0, 1.0);
-  }
-
   void main(){
-    // Mirroring is a flip of the SOURCE lookup, so the haze ramp and the caustic pool below —
-    // which key off the vertical position — flip with the picture rather than staying put.
+    // Mirroring is a flip of the SOURCE lookup, so the haze ramp and the caustic pool below,
+    // which key off the vertical position, flip with the picture rather than staying put.
     vec2 vUv = mix(vUvIn, vec2(1.0) - vUvIn, step(0.5, uMirror));
 
     float dC = dec(texture2D(tDepth, vUv).rg) * FAR;
@@ -1439,34 +1491,45 @@ export const POST_FRAG = /* glsl */ `
     float wsum = 1.0;
     vec3 glow = vec3(0.0);
 
-    for (int k = 0; k < DOF_TAPS; k++){
-      float fi = float(k) + 1.0;
-      float a = fi * GOLDEN_ANGLE;
-      vec2 dir = vec2(cos(a), sin(a));
-      float rad = sqrt(fi / TAPS) * r0;
-      vec2 uv2 = vUv + dir * rad / uRes;
+    // The two gathers share one spiral, and each runs only for a consumer: a closed aperture
+    // gathers the centre tap over and over for an identity, and the pyramid replaces the
+    // saturation gather outright. Uniform branches, so the skip is coherent and free.
+    bool dof = uAperture > 0.0;
+    bool gather = uBloomMode < 0.5 && uBloom > 0.0;
+    if (dof || gather){
+      for (int k = 0; k < DOF_TAPS; k++){
+        float fi = float(k) + 1.0;
+        float a = fi * GOLDEN_ANGLE;
+        vec2 dir = vec2(cos(a), sin(a));
+        if (dof){
+          float rad = sqrt(fi / TAPS) * r0;
+          vec2 uv2 = vUv + dir * rad / uRes;
 
-      // Occlusion guard: a sample in FRONT of this fragment only contributes in proportion to
-      // its own circle of confusion, so a sharp foreground shape doesn't smear over a blurred one.
-      float d2 = dec(texture2D(tDepth, uv2).rg) * FAR;
-      float r2 = clamp(abs(d2 - uFocus) / uRange, 0.0, 1.0) * uAperture * uScale;
-      float w = (d2 < dC - 0.4) ? smoothstep(0.0, rad + 0.001, r2) : 1.0;
-      sum += texture2D(tColor, uv2) * w;
-      wsum += w;
-
-      vec3 g = texture2D(tColor, vUv + dir * (sqrt(fi / TAPS) * uBloomRadius * uScale) / uRes).rgb;
-      // Threshold on saturation, not brightness — same reasoning as sat() above.
-      glow += g * max(sat(g) - uBloomThresh, 0.0);
+          // Occlusion guard: a sample in FRONT of this fragment only contributes in proportion
+          // to its own circle of confusion, so a sharp foreground shape doesn't smear over a
+          // blurred one.
+          float d2 = dec(texture2D(tDepth, uv2).rg) * FAR;
+          float r2 = clamp(abs(d2 - uFocus) / uRange, 0.0, 1.0) * uAperture * uScale;
+          float w = (d2 < dC - 0.4) ? smoothstep(0.0, rad + 0.001, r2) : 1.0;
+          sum += texture2D(tColor, uv2) * w;
+          wsum += w;
+        }
+        if (gather){
+          vec3 g = texture2D(tColor, vUv + dir * (sqrt(fi / TAPS) * uBloomRadius * uScale) / uRes).rgb;
+          // Threshold on saturation, not brightness, for the reason sat() gives.
+          glow += g * max(sat(g) - uBloomThresh, 0.0);
+        }
+      }
     }
     // The gather is over PREMULTIPLIED colour, which is the only form you can blur across an
     // alpha edge without bleeding: three premultiplies the clear colour, so a transparent
     // background clears to black whatever RGB it was given, and averaging that as straight colour
-    // drags every soft edge toward black. Un-premultiply once here and the rest of the pass —
-    // haze, vignette, grain — works in straight colour exactly as it does over a backdrop.
+    // drags every soft edge toward black. Un-premultiply once here and the rest of the pass,
+    // haze, vignette, grain, works in straight colour exactly as it does over a backdrop.
     vec4 acc = sum / wsum;
     float alphaIn = acc.a;
     vec3 straight = acc.rgb / max(alphaIn, 1e-4);
-    // Either the gather above or the pyramid, never both — they are two answers to the same
+    // Either the gather above or the pyramid, never both, they are two answers to the same
     // question and summing them doubles the halo.
     vec3 bloom = uBloomMode > 0.5
       ? texture2D(tBloom, vUv).rgb * uBloom
@@ -1477,7 +1540,7 @@ export const POST_FRAG = /* glsl */ `
     float alpha = min(1.0, alphaIn + max(max(bloom.r, bloom.g), bloom.b));
 
     if (uCaustics > 0.001){
-      // A downward saturation-weighted gather — a screen-space approximation of light pooling
+      // A downward saturation-weighted gather, a screen-space approximation of light pooling
       // under the glass, not refracted photons.
       vec3 caus = vec3(0.0);
       for (int k = 0; k < CAUSTIC_TAPS; k++){
@@ -1523,17 +1586,17 @@ export const FINISH_VERT = /* glsl */ `
  * The finish pass: light shafts and print-style stylisation over the composited frame.
  *
  * Why a second pass rather than more code at the tail of {@link POST_FRAG}: every effect here
- * needs to SAMPLE the finished image somewhere other than the current fragment — a ray march
+ * needs to SAMPLE the finished image somewhere other than the current fragment, a ray march
  * toward a light source, a quantized block centre, a halftone cell centre. Inside the post pass
  * the only thing available is `tColor`, which is the main pass *before* depth of field, haze and
  * bloom, so a dot screen would be built from an image the viewer never sees. The renderer skips
  * this pass entirely when every effect is off, so the cost is zero unless it is asked for.
  *
  * `tDiffuse` is premultiplied (the post pass writes it that way for the drawing buffer), so this
- * un-premultiplies once up front, works in straight colour throughout — which is what all the
- * luminance and threshold maths below assume — and premultiplies once at the end.
+ * un-premultiplies once up front, works in straight colour throughout, which is what all the
+ * luminance and threshold maths below assume, and premultiplies once at the end.
  *
- * `dither` and `halftone` are DERIVED FROM @paper-design/shaders (Apache-2.0) — see
+ * `dither` and `halftone` are DERIVED FROM @paper-design/shaders (Apache-2.0), see
  * THIRD-PARTY-NOTICES.md and the per-effect notes below.
  */
 export const FINISH_FRAG = /* glsl */ `
@@ -1553,8 +1616,7 @@ export const FINISH_FRAG = /* glsl */ `
   const vec3 LUMA = vec3(0.2126, 0.7152, 0.0722);
 
   float luma(vec3 c){ return dot(c, LUMA); }
-  /** Saturation, the same discriminator the bloom gather uses — see POST_FRAG. */
-  float sat(vec3 c){ return max(max(c.r, c.g), c.b) - min(min(c.r, c.g), c.b); }
+  ${SATURATION_CHUNK}
 
   /** Straight (un-premultiplied) colour at uv. */
   vec4 src(vec2 uv){
@@ -1606,13 +1668,12 @@ export const FINISH_FRAG = /* glsl */ `
     float alpha = base.a;
 
     // ---- Light shafts ------------------------------------------------------
-    // Marches back toward the source accumulating what it passes through. Wave3D weights the
-    // march by coverage alone, which works there because its shafts are authored over a
-    // transparent background — alpha already says "this is the subject". Materials3D composites over
-    // a near-white backdrop where alpha is 1 everywhere, so coverage alone would make the
-    // BACKGROUND the brightest emitter and blow the frame out. Weighting by saturation as well is
-    // the same trick the bloom gather uses, and it picks out exactly what a light shaft should
-    // come from: the tinted, dispersed light that has already been through the glass.
+    // Marches back toward the source accumulating what it passes through, weighted by coverage
+    // AND saturation. Coverage alone only works over a transparent background, where alpha
+    // already says "this is the subject"; over a near-white backdrop alpha is 1 everywhere, so the
+    // BACKGROUND would be the brightest emitter and blow the frame out. Saturation is the bloom
+    // gather's trick, and it picks out exactly what a light shaft should come from: the tinted,
+    // dispersed light that has already been through the glass.
     // Over a transparent background the shafts still carry their own coverage in, or they would
     // be multiplied away against alpha 0 and never appear.
     if (uInner > 0.001){
@@ -1690,23 +1751,6 @@ export const FINISH_FRAG = /* glsl */ `
     gl_FragColor = vec4(col * alpha, alpha);
   }`;
 
-/**
- * The prism beam's mesh (see `lightSheet.ts`).
- *
- * The tracer decides where every vertex goes and what colour it carries; two things are left to
- * the fragment because they vary continuously and the mesh is coarse:
- *
- *   RADIAL — a Gaussian across the beam's width with a smoothstep cutoff at its edge. The slices
- *   are only two dozen thin quads, so without this the beam's edge is a staircase.
- *
- *   LONGITUDINAL — geometric dilution along the outgoing run, `1 / (1 + rate·travel)^power` over a
- *   travel normalized 0 at the glass to 1 at the wall. At the reference's 3.8 / 3.7 that is a
- *   roughly 280× falloff across the frame, and it is most of why the fan reads as light spreading
- *   out rather than as a painted stripe. A plain exponential was tried there and rejected: it
- *   introduces a second abrupt fade near the wall, where this leaves a soft tail.
- *
- * Adapted from Vercel's vgpu (MIT) — see THIRD-PARTY-NOTICES.md.
- */
 /** A straight copy, used to move a blurred scratch target into one mip of the environment. */
 export const BLIT_FRAG = /* glsl */ `
   precision highp float;
@@ -1714,13 +1758,6 @@ export const BLIT_FRAG = /* glsl */ `
   varying vec2 vUvIn;
   void main(){ gl_FragColor = texture2D(tSrc, vUvIn); }`;
 
-/**
- * The same copy with alpha forced to one, for dumping a target to the screen.
- *
- * The plate stores linear DEPTH in alpha. Letting that reach the canvas composites the dump away at
- * about one percent opacity, which reads as the two engines holding completely different plates
- * when they do not. The node engine's dump has always forced alpha; this is its twin.
- */
 /** A target's ALPHA as greyscale, so coverage can be diffed the way colour is. */
 export const BLIT_ALPHA_FRAG = /* glsl */ `
   precision highp float;
@@ -1728,6 +1765,13 @@ export const BLIT_ALPHA_FRAG = /* glsl */ `
   varying vec2 vUvIn;
   void main(){ gl_FragColor = vec4(vec3(texture2D(tSrc, vUvIn).a), 1.0); }`;
 
+/**
+ * The same copy with alpha forced to one, for dumping a target to the screen.
+ *
+ * The plate stores linear DEPTH in alpha. Letting that reach the canvas composites the dump away at
+ * about one percent opacity, which reads as the two engines holding completely different plates
+ * when they do not. The node engine's dump forces alpha too; this is its twin.
+ */
 export const BLIT_OPAQUE_FRAG = /* glsl */ `
   precision highp float;
   uniform sampler2D tSrc;
@@ -1748,7 +1792,7 @@ export const ENV_BAKE_FRAG = /* glsl */ `
  * One axis of the blur that builds the chain, with the equirect distortion compensated.
  *
  * A row near a pole covers far less solid angle than one at the equator, so a blur of constant
- * texel width is a blur of wildly varying ANGLE — the poles smear into streaks while the middle
+ * texel width is a blur of wildly varying ANGLE, the poles smear into streaks while the middle
  * barely moves. Dividing the horizontal step by sin(theta) makes the kernel angular instead, which
  * is the only version of it that means anything on a sphere. The vertical pass needs no such
  * correction, and applying it there would pull the poles apart instead.
@@ -1768,7 +1812,7 @@ export const ENV_BLUR_FRAG = /* glsl */ `
     float sinTheta = max(sin(vUvIn.y * ENV_PI), 0.15);
     float scale = mix(1.0, 1.0 / sinTheta, uCompensate);
     vec2 step = uDir * uTexel * uRadius * scale;
-    // The five-tap bilinear-paired Gaussian: three fetches per side reconstruct nine taps.
+    // A bilinear-paired Gaussian: the centre plus two fetches per side reconstruct nine taps.
     float offsets[3];
     float weights[3];
     offsets[0] = 0.0;         weights[0] = 0.2270270270;
@@ -1811,7 +1855,7 @@ export const BEAM_VERT = /* glsl */ `
  *   coverage and never blows out however much energy arrives.
  *
  *   IT OUTLIVES THE BEAM. Its falloff scales are 0.12 on the rate and 0.5 on the power, so where
- *   the beam's own glow has died the caustic is still going — which is exactly the relationship
+ *   the beam's own glow has died the caustic is still going, which is exactly the relationship
  *   between a light and the wall it lights.
  *
  *   IT GOES NEUTRAL WITH DISTANCE. Saturated spectrum near the glass, washing toward a pale glow
@@ -1828,40 +1872,31 @@ export const CAUSTIC_FRAG = /* glsl */ `
   uniform float uRateScale, uPowerScale, uNormalInfluence, uNormalElevation;
   uniform float uWallScale, uWallNormal;
   uniform vec2  uBeamDir;
+  ${REVEAL_CHUNK}
+  ${NOISE_CHUNK}
   varying vec3 vCol;
   varying float vProfile;
   varying float vTravel;
   varying float vWave;
   varying vec2 vWorld;
 
-  float hash12c(vec2 p){
-    vec3 p3 = fract(vec3(p.xyx) * 0.1031);
-    p3 += dot(p3, p3.yzx + 33.33);
-    return fract((p3.x + p3.y) * p3.z);
-  }
-  float noise2(vec2 p){
-    vec2 i = floor(p);
-    vec2 f = fract(p);
-    vec2 u = f * f * (3.0 - 2.0 * f);
-    return mix(mix(hash12c(i), hash12c(i + vec2(1.0, 0.0)), u.x),
-               mix(hash12c(i + vec2(0.0, 1.0)), hash12c(i + vec2(1.0)), u.x), u.y);
-  }
-
   void main(){
     float r = abs(vProfile);
-    float radial = exp(-uEdgeFalloff * r * r) * (1.0 - smoothstep(0.55, 1.0, r));
+    // Opens with the beam, so the wall is never lit by light that has not arrived yet.
+    float radial = exp(-uEdgeFalloff * r * r) * (1.0 - smoothstep(0.55, 1.0, r))
+                 * widthReveal(vProfile);
     float distance = clamp(vTravel / max(uTravelScale, 0.001), 0.0, 1.0);
     float outgoing = 1.0 / pow(
       1.0 + max(uFalloffRate, 0.0) * max(uRateScale, 0.0) * max(vTravel, 0.0),
       max(uFalloffPower * max(uPowerScale, 0.0), 0.0001));
 
-    // The wall's own relief modulates what lands on it — ridges facing the beam catch more. The
+    // The wall's own relief modulates what lands on it, ridges facing the beam catch more. The
     // reference reads this from its baked normal map; the same value-noise field the wall mode
     // uses stands in, so the two agree about where the plaster is high.
     float e = 0.02;
-    float m0 = noise2(vWorld * uWallScale * 3.7);
-    float mx = noise2((vWorld + vec2(e, 0.0)) * uWallScale * 3.7);
-    float my = noise2((vWorld + vec2(0.0, e)) * uWallScale * 3.7);
+    float m0 = valueNoise(vWorld * uWallScale * 3.7);
+    float mx = valueNoise((vWorld + vec2(e, 0.0)) * uWallScale * 3.7);
+    float my = valueNoise((vWorld + vec2(0.0, e)) * uWallScale * 3.7);
     vec3 N = normalize(vec3((m0 - mx) * uWallNormal, (m0 - my) * uWallNormal, 1.0));
     float elev = clamp(uNormalElevation, 1.0, 89.0) * 0.01745329252;
     vec3 incident = normalize(vec3(normalize(uBeamDir) * cos(elev), sin(elev)));
@@ -1881,31 +1916,30 @@ export const CAUSTIC_FRAG = /* glsl */ `
     gl_FragColor = vec4(tint * coverage * surface * step(0.0, vWave), 0.0);
   }`;
 
+/**
+ * The prism beam's mesh (see `lightSheet.ts`).
+ *
+ * The tracer decides where every vertex goes and what colour it carries; two things are left to
+ * the fragment because they vary continuously and the mesh is coarse:
+ *
+ *   RADIAL: a Gaussian across the beam's width with a smoothstep cutoff at its edge. The slices
+ *   are only two dozen thin quads, so without this the beam's edge is a staircase.
+ *
+ *   LONGITUDINAL: geometric dilution along the outgoing run, `1 / (1 + rate·travel)^power` over a
+ *   travel normalized 0 at the glass to 1 at the wall. At the reference's 3.8 / 3.7 that is a
+ *   roughly 280× falloff across the frame, and it is most of why the fan reads as light spreading
+ *   out rather than as a painted stripe. A plain exponential was tried there and rejected: it
+ *   introduces a second abrupt fade near the wall, where this leaves a soft tail.
+ *
+ * Adapted from Vercel's vgpu (MIT), see THIRD-PARTY-NOTICES.md.
+ */
 export const BEAM_FRAG = /* glsl */ `
   precision highp float;
-  uniform float uIntensity, uEdgeFalloff, uFalloffRate, uFalloffPower, uReveal;
+  uniform float uIntensity, uEdgeFalloff, uFalloffRate, uFalloffPower;
+  ${REVEAL_CHUNK}
   varying vec3 vCol;
   varying float vProfile;
   varying float vTravel;
-
-  /**
-   * Open the bundle from its CENTRE LINE outward — adapted from the reference's beam-reveal.wgsl.
-   *
-   * A beam that fades up in brightness reads as a lamp being turned on; one that opens from the
-   * middle reads as a beam arriving, which is what this scene is about. The two branches are what
-   * keep it honest at the ends: at zero the mask is exactly zero rather than a residual hairline
-   * down the axis, and at one it is exactly one rather than a smoothstep that never quite closes.
-   *
-   * The feather has a FLOOR because the outgoing fan carries one flat profile per slice, so
-   * fwidth is zero across a cell's interior and adjacent slices would step against each other.
-   */
-  float widthReveal(float profile){
-    if (uReveal <= 0.0) return 0.0;
-    if (uReveal >= 1.0) return 1.0;
-    float antialias = max(fwidth(profile) * 1.5, 0.04);
-    return 1.0 - smoothstep(max(uReveal - antialias, 0.0), min(uReveal + antialias, 1.0),
-                            abs(profile));
-  }
 
   void main(){
     float r = abs(vProfile);
@@ -1919,12 +1953,12 @@ export const BEAM_FRAG = /* glsl */ `
   }`;
 
 /**
- * Multi-scale bloom, adapted from Vercel's vgpu (MIT) — see THIRD-PARTY-NOTICES.md.
+ * Multi-scale bloom, adapted from Vercel's vgpu (MIT), see THIRD-PARTY-NOTICES.md.
  *
  * The post pass's own bloom is a golden-angle gather at ONE radius, taken in the same loop as the
  * depth of field. That is cheap and it is enough for a pale studio where the bloom is a bit of
  * glow around a saturated core. It cannot represent a light source: a real halo spans several
- * octaves at once — a tight core, a mid falloff and a very broad wash — and a single-radius gather
+ * octaves at once, a tight core, a mid falloff and a very broad wash, and a single-radius gather
  * has to pick one of those and lose the others.
  *
  * This is the standard answer: threshold the highlights, build a half-resolution pyramid, blur
@@ -1976,7 +2010,7 @@ export const BLOOM_BLUR_FRAG = /* glsl */ `
     // than an approximation. A sample placed between texels i and i+1 comes back from a linear
     // sampler as (1-f)·T(i) + f·T(i+1); choosing f = w(i+1)/(w(i)+w(i+1)) makes that precisely the
     // two weighted taps the loop would otherwise have fetched separately. The eighteen-tap level
-    // goes from thirty-five fetches to nineteen for a bit-identical result — the sampler does the
+    // goes from thirty-five fetches to nineteen for a bit-identical result, the sampler does the
     // arithmetic either way, and it does it for free.
     //
     // It relies on the source being LINEAR filtered and on the offsets being in texel units from a
@@ -2001,7 +2035,7 @@ export const BLOOM_BLUR_FRAG = /* glsl */ `
 /**
  * Halve the resolution with a 4-tap box, which is the only correct way down a pyramid.
  *
- * Point-sampling instead — reading one texel of the level above — throws away three quarters of
+ * Point-sampling instead, reading one texel of the level above, throws away three quarters of
  * the signal, and on anything thin and diagonal that is catastrophic: the beam becomes a staircase
  * at half resolution, and every level below inherits and blurs those blocks back over the frame as
  * hatching and fog around it. The artefact appears NEXT to the bright thing, not on it, which is
@@ -2022,7 +2056,7 @@ export const BLOOM_DOWN_FRAG = /* glsl */ `
   }`;
 
 /**
- * The particle light field, built straight from the HDR scene — adapted from the reference's
+ * The particle light field, built straight from the HDR scene, adapted from the reference's
  * particle-light-downsample.wgsl.
  *
  * An 8x8 area filter reducing all the way to a sixteenth in ONE step, rather than chaining four
@@ -2038,35 +2072,20 @@ export const PARTICLE_DOWN_FRAG = /* glsl */ `
   uniform vec2 uTexel;   // 1 / source size
   uniform vec2 uScale;   // source size / target size
   varying vec2 vUvIn;
-
-  /**
-   * Display to linear, ON THE DISPLAY RANGE ONLY.
-   *
-   * The curve is defined on [0,1] and this target is HDR: the beam sits in the hundreds. Feeding
-   * that to the transfer function is not an approximation, it is a different function — 500 comes
-   * back as 2.6 million — and the wide blur below then spreads a number that size over the entire
-   * frame, so every grain in it saturates the response and the field lights up everywhere. Above
-   * one the value is already radiance and passes through.
-   */
-  vec3 srgbToLinear3(vec3 c){
-    vec3 v = max(c, vec3(0.0));
-    vec3 clamped = min(v, vec3(1.0));
-    vec3 lo = mix(clamped / 12.92, pow((clamped + 0.055) / 1.055, vec3(2.4)), step(vec3(0.04045), clamped));
-    return mix(lo, v, step(vec3(1.0), v));
-  }
+  ${TRANSFER_CHUNK}
 
   void main(){
     vec3 c = vec3(0.0);
     for (int y = 0; y < 8; y++){
       for (int x = 0; x < 8; x++){
         vec2 grid = vec2(float(x), float(y)) - vec2(3.5);
-        // Decoded per TAP, before the average. This renderer's working space is display-referred —
-        // a preset's sRGB hex is used as-is and written out as-is — and the reference's is linear
+        // Decoded per TAP, before the average. This renderer's working space is display-referred,
+        // a preset's sRGB hex is used as-is and written out as-is, and the reference's is linear
         // radiance. Its response constant is calibrated against the latter, so the field has to be
         // linearized before that constant means anything. Decoding after the average would be a
         // different filter: sixty-four display values do not average to the display value of their
         // linear mean.
-        c += srgbToLinear3(texture2D(tSrc, vUvIn + grid * 0.125 * uScale * uTexel).rgb);
+        c += srgbToLinearHdr3(texture2D(tSrc, vUvIn + grid * 0.125 * uScale * uTexel).rgb);
       }
     }
     gl_FragColor = vec4(max(c / 64.0, vec3(0.0)), 1.0);
@@ -2091,11 +2110,11 @@ export const BLOOM_COMPOSITE_FRAG = /* glsl */ `
   }`;
 
 /**
- * Sparse volumetric dust, adapted from Vercel's vgpu (MIT) — see THIRD-PARTY-NOTICES.md.
+ * Sparse volumetric dust, adapted from Vercel's vgpu (MIT), see THIRD-PARTY-NOTICES.md.
  *
  * Every instance is a screen-facing quad whose seed selects one of four progressively rarer
  * populations: mostly just-resolved powder, some readable flakes, rare soft motes and the odd
- * defocused bokeh. Sizes are in PIXELS rather than world units, which is the point — real dust
+ * defocused bokeh. Sizes are in PIXELS rather than world units, which is the point, real dust
  * near the lens is enormous and out of focus while dust across the room is a pinprick, and a
  * world-space sphere cannot express both.
  *
@@ -2107,7 +2126,7 @@ export const BLOOM_COMPOSITE_FRAG = /* glsl */ `
 export const DUST_VERT = /* glsl */ `
   attribute vec2 aCorner;   // -1..1 across the quad
   attribute float aId;      // per-grain index; every other property is hashed from it
-  uniform vec2  uRes;
+  uniform vec2  uRes;       // the drawing buffer, in pixels: the field draws straight to the canvas
   uniform float uTime, uSize, uDrift, uPlaneZ, uCamDist;
   uniform vec3  uExtent;
   varying vec2  vCorner;
@@ -2160,7 +2179,7 @@ export const DUST_VERT = /* glsl */ `
     float seedShape = hash11(id * 13.531 + 47.0);
     float seedAngle = hash11(id * 17.273 + 59.0);
 
-    // A TRIANGULAR depth distribution — the sum of two uniforms — concentrates most motes on the
+    // A TRIANGULAR depth distribution, the sum of two uniforms, concentrates most motes on the
     // light sheet's own plane. The remaining spread still reads as volume without the violent
     // parallax of grains sitting right against the lens.
     float z = uPlaneZ + (sz + sDepth - 1.0) * uExtent.z;
@@ -2184,7 +2203,7 @@ export const DUST_VERT = /* glsl */ `
     // FLIPPED for the sampler. The reference is WGSL, where a screen uv and a texture uv share an
     // origin at the top left; GLSL's texture2D has it at the bottom left. Handing a top-down uv
     // straight to the sampler reads the light field mirrored about the horizontal midline, so
-    // grains light up in the reflection of the beam rather than on it — and the frame's dark half
+    // grains light up in the reflection of the beam rather than on it, and the frame's dark half
     // fills with specks while the bright half is bare.
     vLightUv = vec2(snapped.x, 1.0 - snapped.y);
     ndc = vec2(snapped.x * 2.0 - 1.0, 1.0 - snapped.y * 2.0);
@@ -2201,7 +2220,7 @@ export const DUST_VERT = /* glsl */ `
     vec2 ay = vec2(-ax.y, ax.x);
     vec2 shaped = ax * aCorner.x * aspect + ay * aCorner.y / max(aspect, 0.001);
 
-    // Every larger mote is dimmer than an equivalently lit smaller one, continuously — with a
+    // Every larger mote is dimmer than an equivalently lit smaller one, continuously, with a
     // floor, so sub-pixel grains cannot blink out entirely.
     float opacity = min(1.0, pow(1.5 / max(look.x, 1.5), 0.9));
     float energy = 0.3 + 1.1 * pow(seedEnergy, 3.0);
@@ -2227,7 +2246,7 @@ export const DUST_FRAG = /* glsl */ `
   precision highp float;
   uniform sampler2D tLight, tColor;
   uniform float uIntensity, uResponse, uFalloffPower, uExposure;
-  uniform vec2 uRes;
+  uniform vec2 uRes;        // the drawing buffer, so gl_FragCoord / uRes is this fragment's screen uv
   varying vec2 vCorner;
   varying vec2 vLightUv;
   varying float vSoft;
@@ -2248,21 +2267,8 @@ export const DUST_FRAG = /* glsl */ `
     return !(neg && pos);
   }
 
-  vec3 tonemapAces(vec3 v){
-    vec3 c = max(v, vec3(0.0));
-    c = (c * (2.51 * c + 0.03)) / (c * (2.43 * c + 0.59) + 0.14);
-    return clamp(c, 0.0, 1.0);
-  }
-
-  vec3 linearToSrgb3(vec3 c){
-    vec3 v = max(c, vec3(0.0));
-    return mix(v * 12.92, 1.055 * pow(v, vec3(1.0 / 2.4)) - 0.055, step(vec3(0.0031308), v));
-  }
-
-  vec3 srgbToLinear3(vec3 c){
-    vec3 v = max(c, vec3(0.0));
-    return mix(v / 12.92, pow((v + 0.055) / 1.055, vec3(2.4)), step(vec3(0.04045), v));
-  }
+  ${ACES_CHUNK}
+  ${TRANSFER_CHUNK}
 
   void main(){
     float r2 = dot(vCorner, vCorner);
@@ -2307,7 +2313,7 @@ export const DUST_FRAG = /* glsl */ `
     float energy = illumination * radial * vSparkle * uExposure * uIntensity;
     float displayEnergy = linearToSrgb3(tonemapAces(vec3(energy))).r;
 
-    // Alpha stays ZERO — an additive layer must not add coverage, or a premultiplied compositor
+    // Alpha stays ZERO, an additive layer must not add coverage, or a premultiplied compositor
     // darkens exactly the pixels it was meant to brighten.
     gl_FragColor = vec4(lightColor * displayEnergy * vOpacity, 0.0);
   }`;
@@ -2316,8 +2322,8 @@ export const DUST_FRAG = /* glsl */ `
  * The prism's INNER interface, adapted from the reference's glass-back.wgsl.
  *
  * Their glass is two passes and this is the one that gives a solid an interior. It draws the
- * BACK-facing triangles and, for each fragment, follows the camera ray on into the glass — through
- * however many total internal reflections it takes — until it escapes, then samples the studio
+ * BACK-facing triangles and, for each fragment, follows the camera ray on into the glass, through
+ * however many total internal reflections it takes, until it escapes, then samples the studio
  * along that exit direction. It never reads the scene: its job is to put reflected room light
  * INSIDE the body, so the far faces return light back through the near ones.
  *
@@ -2357,15 +2363,15 @@ export const BACKGLASS_FRAG = /* glsl */ `
     vec3 outward = normalize(vNp);
     float f0 = pow((uIOR - 1.0) / (uIOR + 1.0), 2.0);
 
-    // Evaluate the event AT this surface. Marching outward from here first — looking for a "next"
-    // surface — is meaningless for a convex solid: the ray is already on the boundary heading out,
+    // Evaluate the event AT this surface. Marching outward from here first, looking for a "next"
+    // surface, is meaningless for a convex solid: the ray is already on the boundary heading out,
     // so the search finds some far plane and reports a path through empty space. Which plane it
     // finds changes by region, and that partition is precisely the wedges it drew.
     float facing = clamp(dot(-incident, outward), 0.0, 1.0);
     float fresnel = dielectricFresnel(f0, facing);
 
     // The transmitted branch is the see-through, and the plate below already carries it. What this
-    // pass contributes is the part that REFLECTS back into the glass — follow that until it gets
+    // pass contributes is the part that REFLECTS back into the glass, follow that until it gets
     // out, and whatever room it then sees is what this fragment shows.
     vec3 dir = normalize(reflect(incident, outward));
     vec3 pos = vWp;
@@ -2392,7 +2398,7 @@ export const BACKGLASS_FRAG = /* glsl */ `
     float exitFacing = clamp(dot(dir, lastN), 0.0, 1.0);
     float transmission = escaped > 0.5 ? (1.0 - dielectricFresnel(f0, exitFacing)) : 0.0;
     // Through the same cone lookup the front interface uses. Mirror-smooth, so the cone is zero
-    // and the level comes entirely from the screen footprint — which is what stops the room
+    // and the level comes entirely from the screen footprint, which is what stops the room
     // aliasing where a face turns away and compresses it into a handful of pixels.
     vec3 env = studioCone(dir, 0.0) * uBackStrength * fresnel * transmission;
 

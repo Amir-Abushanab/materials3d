@@ -1,10 +1,8 @@
 // Assemble native single-frame WebP files (from canvas.toBlob("image/webp")) into one animated
 // WebP. Hand-rolled and dependency-free: the browser already encodes each frame's VP8 bitstream
 // natively, so we only wrap those frames in the animation container. No WASM encoder, and the
-// output keeps full 24-bit colour AND alpha — which is why this is the recording format that can
+// output keeps full 24-bit colour AND alpha, which is why this is the recording format that can
 // carry a transparent background, where WebM/MP4 cannot.
-//
-// Ported from Wave Studio's exporter; the container handling is identical because the format is.
 //
 // Container layout (all multi-byte fields little-endian):
 //   RIFF <size> WEBP
@@ -70,9 +68,9 @@ const u32le = (b: Uint8Array, o: number): number =>
   (b[o] | (b[o + 1] << 8) | (b[o + 2] << 16) | (b[o + 3] << 24)) >>> 0;
 
 /**
- * Pull a frame's image sub-chunks (an optional ALPH plus the VP8/VP8L bitstream — each with its
+ * Pull a frame's image sub-chunks (an optional ALPH plus the VP8/VP8L bitstream, each with its
  * own header + padding) out of a canvas-encoded WebP file. These bytes are exactly what an ANMF
- * chunk carries. We keep *only* those image chunks and drop everything else — the RIFF header and
+ * chunk carries. We keep *only* those image chunks and drop everything else: the RIFF header and
  * any container-level metadata (VP8X, and crucially ICCP/EXIF/XMP). Chrome's
  * `canvas.toBlob("image/webp")` emits an extended file with an embedded colour profile (ICCP) on
  * colour-managed displays; left inside an ANMF frame that metadata is invalid and makes the whole
@@ -139,7 +137,7 @@ export function encodeAnimatedWebp(
   body.u32(0x00000000); // background, BGRA
   body.u16(loop);
 
-  // One ANMF per frame — full canvas, "do not blend" so each frame simply overwrites the last.
+  // One ANMF per frame: full canvas, "do not blend" so each frame simply overwrites the last.
   for (const p of parsed) {
     const payload = 16 + p.data.length;
     body.fourcc("ANMF");
@@ -160,7 +158,7 @@ export function encodeAnimatedWebp(
   out.u32(4 + bodyBytes.length); // "WEBP" + all chunks
   out.fourcc("WEBP");
   out.bytes(bodyBytes);
-  // Copy the view into a fresh ArrayBuffer-backed array — a subarray is typed
+  // Copy the view into a fresh ArrayBuffer-backed array: a subarray is typed
   // Uint8Array<ArrayBufferLike>, which the Blob (BlobPart) type rejects.
   return new Blob([new Uint8Array(out.take())], { type: "image/webp" });
 }

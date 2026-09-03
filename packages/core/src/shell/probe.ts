@@ -1,10 +1,10 @@
 // Capability probes for the shell. Kept dependency-free (no three) so they can run before the
-// heavy renderer chunk is fetched — the shell decides poster-vs-upgrade from these.
+// heavy renderer chunk is fetched, the shell decides poster-vs-upgrade from these.
 
 /**
  * Synchronously test whether the browser can give us a usable WebGL context. Uses
  * `failIfMajorPerformanceCaveat` so a software/blocklisted renderer reports as unavailable and we
- * keep the poster — four passes per frame on a software rasterizer is a slideshow. Releases the
+ * keep the poster, four passes per frame on a software rasterizer is a slideshow. Releases the
  * throwaway context immediately via WEBGL_lose_context so probing doesn't consume one of the
  * browser's ~16 live contexts.
  */
@@ -40,7 +40,7 @@ export function prefersReducedData(): boolean {
   return conn?.saveData === true;
 }
 
-/** The container's shorter side in CSS pixels — the input to the small-viewport poster gate. */
+/** The container's shorter side in CSS pixels, the input to the small-viewport poster gate. */
 export function minSide(container: HTMLElement): number {
   return Math.min(container.clientWidth || 0, container.clientHeight || 0);
 }

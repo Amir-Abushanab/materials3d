@@ -1,7 +1,7 @@
 /**
  * A beam of white light, refracted through a shape and dispersed into a spectrum.
  *
- * The rest of this renderer bends a *plate* — colour that already exists behind the glass, sampled
+ * The rest of this renderer bends a *plate*, colour that already exists behind the glass, sampled
  * in screen space and offset by the surface normal. That model cannot produce this effect. A prism
  * beam is not a distortion of something behind the glass; it is a ray with its own geometry, whose
  * exit angle differs per wavelength, and which keeps travelling through empty space after it
@@ -14,12 +14,12 @@
  * ---
  *
  * The optics, colorimetry and mesh topology here are **derived from Vercel's `vgpu` prism
- * background** (MIT — see THIRD-PARTY-NOTICES.md). Four ideas came from that source, and each one
+ * background** (MIT, see THIRD-PARTY-NOTICES.md). Four ideas came from that source, and each one
  * is the difference between a picture that reads as light and one that reads as coloured bands:
  *
  *   1. FRESNEL. Transmission at each boundary is the real Fresnel average of both polarizations,
  *      accumulated at entry and exit and folded into vertex intensity. A beam approaching the
- *      critical angle then dims into total internal reflection instead of vanishing abruptly —
+ *      critical angle then dims into total internal reflection instead of vanishing abruptly,
  *      which matters enormously once the beam is allowed to move.
  *   2. COLORIMETRY. Wavelength becomes colour through the CIE 1931 matching functions, weighted by
  *      the D65 daylight spectrum and the eye's photopic response. Green is inherently brighter
@@ -28,11 +28,12 @@
  *   3. TOPOLOGY. The outgoing fan is a CONNECTED sheet spanning adjacent wavelengths, not N
  *      independent overlapping ribbons, so colour interpolates in the rasterizer and cannot band.
  *   4. DENSITY. Vertex brightness is flux divided by the angular spread between neighbouring
- *      wavelengths — a Jacobian. Where the fan compresses it brightens; where it spreads it dims,
+ *      wavelengths, a Jacobian. Where the fan compresses it brightens; where it spreads it dims,
  *      and the total is invariant under subdivision. This is what gives a spectrum its
  *      characteristic bright core and soft ends.
  */
 import * as THREE from "three";
+import type { ShapeKind } from "../config/model";
 import { fitOutline, isConvex, traceableOutline } from "./svgPath";
 
 /** Visible range, in nanometres. */
@@ -68,7 +69,7 @@ export interface BeamOptions {
   z: number;
   /** Cauchy base index. See {@link iorAt}. */
   ior: number;
-  /** Cauchy strength term — how far the fan spreads. */
+  /** Cauchy strength term, how far the fan spreads. */
   dispersion: number;
   /** Wavelength vertices across the visible range. */
   samples: number;
@@ -80,7 +81,7 @@ export interface BeamOptions {
    * Rays terminate here rather than after a fixed distance, and that is not bookkeeping: it is
    * what makes the fan a thing that arrives somewhere. The spectral density divides flux by the
    * spread it occupies, so the exposure that balances the picture is a function of how far the
-   * light travels before it stops — which is why the reference's `PRISM_LIGHT_EXPOSURE` only makes
+   * light travels before it stops, which is why the reference's `PRISM_LIGHT_EXPOSURE` only makes
    * sense against a wall of a particular size.
    */
   wallHalfExtent: THREE.Vector2;
@@ -97,7 +98,7 @@ export interface LightSheet {
     slices: number;
     /** Wavelengths that reached the glass and produced a drawable path. */
     validBands: number;
-    /** Strips dropped because the beam's two edges disagreed — see {@link matchingTopology}. */
+    /** Strips dropped because the beam's two edges disagreed, see {@link matchingTopology}. */
     rejectedTopology: number;
     quads: number;
     /** First vertex of the outgoing fan. The mesh is written white → internal → fan, so this is
@@ -110,7 +111,7 @@ export interface LightSheet {
 
 /**
  * Analytic approximations of the CIE 1931 colour matching functions.
- * Wyman, Sloan and Shirley, JCGT 2013 — via vgpu (MIT).
+ * Wyman, Sloan and Shirley, JCGT 2013, via vgpu (MIT).
  */
 function cieX(nm: number): number {
   const t1 = (nm - 442) * (nm < 442 ? 0.0624 : 0.0374);
@@ -161,7 +162,7 @@ function d65Power(nm: number): number {
  *
  * Monochromatic colours lie outside sRGB, so the matrix product goes negative in a channel for
  * most of the spectrum. Shifting the whole triplet toward the neutral axis is the smallest
- * positive gamut mapping that preserves hue ordering, and it happens BEFORE the shared exposure —
+ * positive gamut mapping that preserves hue ordering, and it happens BEFORE the shared exposure,
  * which is what makes integrating across the range reconstruct D65 white rather than handing every
  * wavelength the same peak energy.
  *
@@ -192,22 +193,10 @@ export function wavelengthToBeamRgb(nm: number, target = new THREE.Color()): THR
 }
 
 /**
- * Where a beam starts and which way it points, from an angle of incidence and a point of impact.
- *
- * Incidence is measured from the entry face's NORMAL, not from world X, and that is the whole
- * reason this function exists. Angle-from-world couples "how steeply does it hit" to "where does it
- * hit": swing it and the entry point slides off the face, so the usable range collapses to a
- * degree or two. Measured from the normal, the two are independent — the prism never moves, the
- * source swings around it on a fixed radius, and the pointer can drive incidence and impact point
- * on separate axes.
- *
- * Adapted from Vercel's vgpu (MIT) — see THIRD-PARTY-NOTICES.md.
- */
-/**
  * The polygon a shape cuts in the beam's plane, or undefined if it cuts nothing the tracer can use.
  *
- * The tracer is shape-agnostic — it refracts against edges, and a circle is a polygon with enough
- * of them — so making a beam follow a sphere needs nothing but the right outline. What it cannot do
+ * The tracer is shape-agnostic, it refracts against edges, and a circle is a polygon with enough
+ * of them, so making a beam follow a sphere needs nothing but the right outline. What it cannot do
  * is guess. Three things have to be read per kind:
  *
  *   `sides` counts FACES on a prism and radial SEGMENTS everywhere else, so the two are read
@@ -220,48 +209,81 @@ export function wavelengthToBeamRgb(nm: number, target = new THREE.Color()): THR
  *   `beamRotation` applies to the lathes and NOT to `path`. It exists to reconcile conventions: a
  *   lathe's cross-section is generated here from scratch, in XZ, and the beam's default rotation is
  *   what puts a vertex at the top to match a `prism` rolled -90° about X. A `path` is drawn in XY
- *   already — the sheet's own plane — so the same rotation would spin the drawn outline away from
+ *   already, the sheet's own plane, so the same rotation would spin the drawn outline away from
  *   where the mesh actually sits. Only the item's own `roll` applies to it.
  *
  * Undefined for the kinds whose slice the tracer cannot make sense of, and returning a circle for
- * them — which is what this used to do for six of eleven kinds — is not a rough approximation but
+ * them, which is what this used to do for six of eleven kinds, is not a rough approximation but
  * a different solid: a `ring` is an annulus with a hole the light should cross, `slab` and `arrow`
  * are extrusions whose cross-section is their outline rather than anything lathed, and a `blob` is
  * bumpy by construction.
  *
  * `path` is the one kind that answers per SHAPE rather than per kind, because its outline is
- * authored. It does not have to be convex — `clipEntry` scans a re-entrant outline edge by edge —
+ * authored. It does not have to be convex, `clipEntry` scans a re-entrant outline edge by edge,
  * only SIMPLE. A self-crossing contour is refused, and that is the one gate worth keeping: a
  * figure-of-eight has no inside for the tracer's entering-and-leaving bookkeeping to be right
  * about, so it would not look approximate, it would look random.
  */
 export function crossSectionFor(
-  shape: { kind: string; r: number; sides: number; outline?: string },
+  shape: { kind: ShapeKind; r: number; sides: number; outline?: string },
   beamRotation: number,
   roll: number,
   centre?: { x: number; y: number },
 ): THREE.Vector2[] | undefined {
   const { kind, r, sides } = shape;
   if (kind === "path") {
-    if (!shape.outline) return undefined;
-    const [outer] = fitOutline(shape.outline, r);
-    if (!outer) return undefined;
-    const traceable = traceableOutline(outer, r);
+    const traceable = shape.outline ? traceablePath(shape.outline, r) : undefined;
     return traceable && posePolygon(traceable, roll, centre);
   }
   const segments = Math.max(3, Math.round(sides));
   const radius =
-    kind === "prism" || kind === "hex"
+    kind === "prism" ||
+    kind === "hex" ||
+    kind === "rod" ||
+    kind === "disc" ||
+    kind === "sphere" ||
+    kind === "droplet"
       ? r
-      : kind === "rod" || kind === "disc" || kind === "sphere" || kind === "droplet"
-        ? r
-        : // Averaged over its height, which is where a sheet through the middle cuts it.
-          kind === "cone"
-          ? r / 2
-          : 0;
+      : // Averaged over its height, which is where a sheet through the middle cuts it.
+        kind === "cone"
+        ? r / 2
+        : 0;
   if (radius <= 0) return undefined;
-  const count = kind === "hex" ? 6 : kind === "prism" ? segments : segments;
-  return prismCrossSection(radius, count, beamRotation + roll, centre);
+  return prismCrossSection(radius, kind === "hex" ? 6 : segments, beamRotation + roll, centre);
+}
+
+/**
+ * Drawn outlines already fitted, simplified and checked, keyed by the outline and the radius it
+ * was fitted to.
+ *
+ * A `path` target is read again on every retrace, and a pointer binding retraces on every move.
+ * Parsing, tessellating, simplifying and the quadratic simplicity check come to a few milliseconds
+ * for a pasted outline, all of it for an answer that cannot change while the string and the radius
+ * do not. Kept small and least-recently-used: a scene names a handful of targets, and an editor
+ * cycling through outlines should not pin every one it has ever tried.
+ */
+const traceablePaths = new Map<string, THREE.Vector2[] | undefined>();
+const TRACEABLE_PATHS_MAX = 8;
+
+function traceablePath(outline: string, r: number): THREE.Vector2[] | undefined {
+  const key = `${r}|${outline}`;
+  if (traceablePaths.has(key)) {
+    const hit = traceablePaths.get(key);
+    // Re-inserted so the map's order is recency, which is what the eviction below reads.
+    traceablePaths.delete(key);
+    traceablePaths.set(key, hit);
+    return hit;
+  }
+  const [outer] = fitOutline(outline, r);
+  const traceable = outer ? traceableOutline(outer, r) : undefined;
+  traceablePaths.set(key, traceable);
+  if (traceablePaths.size > TRACEABLE_PATHS_MAX) {
+    for (const oldest of traceablePaths.keys()) {
+      traceablePaths.delete(oldest);
+      break;
+    }
+  }
+  return traceable;
 }
 
 /** Spin a drawn outline about its own centre and put it where the item stands. `prismCrossSection`
@@ -280,6 +302,18 @@ function posePolygon(
   );
 }
 
+/**
+ * Where a beam starts and which way it points, from a BEARING around the outline rather than a
+ * face index.
+ *
+ * A face index is the handle for a faceted solid and means nothing on a round one, and it jumps at
+ * every vertex; a bearing walks the outline continuously, which is what lets a pointer sweep the
+ * entry point around a sphere as smoothly as along one face of a prism. It is measured about the
+ * polygon's own centroid, not the world origin, because a solid stands wherever the scene puts it,
+ * and a bearing from anywhere else strikes the wrong face or misses.
+ *
+ * Incidence is measured from the struck face's normal, exactly as in {@link aimBeam}.
+ */
 export function aimBeamAtAngle(
   polygon: THREE.Vector2[],
   entryDegrees: number,
@@ -289,12 +323,13 @@ export function aimBeamAtAngle(
 ): { origin: THREE.Vector2; direction: THREE.Vector2 } {
   const theta = (entryDegrees * Math.PI) / 180;
   const ray = new THREE.Vector2(Math.cos(theta), Math.sin(theta));
+  const centre = centroid(polygon);
   const sign = windingSign(polygon);
 
-  // Where the ray from the centre leaves the outline, and which edge it leaves through. Walking
+  // Where the ray from the centroid leaves the outline, and which edge it leaves through. Walking
   // every edge rather than solving for one keeps this correct for a polygon that is not regular.
   let bestT = Infinity;
-  let point = ray.clone();
+  let point = centre.clone().add(ray);
   let inward = new THREE.Vector2(-ray.x, -ray.y);
   for (let i = 0; i < polygon.length; i++) {
     const a = polygon[i];
@@ -302,9 +337,9 @@ export function aimBeamAtAngle(
     const edge = b.clone().sub(a);
     const denominator = ray.x * edge.y - ray.y * edge.x;
     if (Math.abs(denominator) < 1e-12) continue;
-    const u = ((a.x * edge.y - a.y * edge.x) / denominator) * 1;
+    const u = ((a.x - centre.x) * edge.y - (a.y - centre.y) * edge.x) / denominator;
     if (u <= 1e-9 || u >= bestT) continue;
-    const hit = ray.clone().multiplyScalar(u);
+    const hit = centre.clone().addScaledVector(ray, u);
     const along = edge.dot(hit.clone().sub(a)) / Math.max(edge.lengthSq(), 1e-12);
     if (along < -1e-6 || along > 1 + 1e-6) continue;
     bestT = u;
@@ -312,7 +347,7 @@ export function aimBeamAtAngle(
     inward = new THREE.Vector2((edge.y * sign) / length, (-edge.x * sign) / length).negate();
 
     // Pulled clear of both corners by the beam's own footprint. An angle can land exactly ON a
-    // vertex — 30° is one on a hexagon at this rotation — and a beam striking a corner physically
+    // vertex, 30° is one on a hexagon at this rotation, and a beam striking a corner physically
     // splits between two faces, which the tracer does not model: it follows one of them and the
     // half of the beam that belongs to the other simply goes missing. The footprint along the face
     // grows as 1/cos(incidence), so the clearance has to grow with it.
@@ -332,6 +367,18 @@ export function aimBeamAtAngle(
   return { origin: point.addScaledVector(direction, -distance), direction };
 }
 
+/**
+ * Where a beam starts and which way it points, from an angle of incidence and a point of impact.
+ *
+ * Incidence is measured from the entry face's NORMAL, not from world X, and that is the whole
+ * reason this function exists. Angle-from-world couples "how steeply does it hit" to "where does it
+ * hit": swing it and the entry point slides off the face, so the usable range collapses to a
+ * degree or two. Measured from the normal, the two are independent: the prism never moves, the
+ * source swings around it on a fixed radius, and the pointer can drive incidence and impact point
+ * on separate axes.
+ *
+ * Adapted from Vercel's vgpu (MIT), see THIRD-PARTY-NOTICES.md.
+ */
 export function aimBeam(
   polygon: THREE.Vector2[],
   face: number,
@@ -372,7 +419,7 @@ export function aimBeam(
  *
  * This is `base + strength/µm²`, NOT normalized around the middle of the range: `ior` is the index
  * at infinite wavelength, and the real index across the visible band sits well above it. That is
- * the reference implementation's parameterization, kept so its glass presets transfer unchanged —
+ * the reference implementation's parameterization, kept so its glass presets transfer unchanged,
  * `BEAM_DISPERSION` in `presets.ts` carries matched pairs so nobody has to hold it in their head.
  */
 export function iorAt(nm: number, ior: number, dispersion: number): number {
@@ -384,7 +431,7 @@ export function iorAt(nm: number, ior: number, dispersion: number): number {
  * Vertex scratch, reused between retraces.
  *
  * The sheet is over three thousand quads at the shipped settings, and each vertex was nine
- * `Array.push` calls into five growing JS arrays — around 170,000 of them per retrace, which is a
+ * `Array.push` calls into five growing JS arrays, around 170,000 of them per retrace, which is a
  * retrace every frame the pointer moves. Profiling put that push at 14% of the trace and the
  * garbage it made at another 16%, together more than the ray casting it exists to record.
  *
@@ -403,14 +450,22 @@ const vertexScratch = {
 
 function ensureVertexCapacity(vertices: number): void {
   if (vertexScratch.capacity >= vertices) return;
-  // Grown in one step to the bound rather than doubled: the bound is exact and known up front, so
-  // there is nothing to amortize.
-  vertexScratch.capacity = vertices;
-  vertexScratch.positions = new Float32Array(vertices * 3);
-  vertexScratch.colors = new Float32Array(vertices * 3);
-  vertexScratch.profiles = new Float32Array(vertices);
-  vertexScratch.travels = new Float32Array(vertices);
-  vertexScratch.waves = new Float32Array(vertices);
+  // Doubled, with the part already written carried over, because a sheet's size is only known
+  // once it has been traced: a fan cell is one quad for a beam that leaves one solid cleanly and
+  // about thirty for one that bounces its way through six, and sizing every retrace for the second
+  // holds tens of megabytes open for a mesh that needs a few hundred kilobytes.
+  const capacity = Math.max(vertices, vertexScratch.capacity * 2);
+  const grow = (old: Float32Array<ArrayBuffer>, width: number): Float32Array<ArrayBuffer> => {
+    const next = new Float32Array(capacity * width);
+    next.set(old);
+    return next;
+  };
+  vertexScratch.capacity = capacity;
+  vertexScratch.positions = grow(vertexScratch.positions, 3);
+  vertexScratch.colors = grow(vertexScratch.colors, 3);
+  vertexScratch.profiles = grow(vertexScratch.profiles, 1);
+  vertexScratch.travels = grow(vertexScratch.travels, 1);
+  vertexScratch.waves = grow(vertexScratch.waves, 1);
 }
 
 const cross2 = (ax: number, ay: number, bx: number, by: number) => ax * by - ay * bx;
@@ -418,13 +473,13 @@ const cross2 = (ax: number, ay: number, bx: number, by: number) => ax * by - ay 
 /**
  * The outline flattened for the tracer, built once per sheet.
  *
- * A retrace runs `samples × (slices + 2)` rays — over three thousand at the shipped settings — and
+ * A retrace runs `samples × (slices + 2)` rays, over three thousand at the shipped settings, and
  * each one walks every edge two to four times. At three edges that is nothing; a sphere is traced
  * as ninety-six, and the same work is then thirty-two times as much. Everything here is loop-
  * invariant and was being recomputed inside it: the winding sign is an O(n) pass that `tracePrism`
  * ran per RAY, and the outward normals are fixed per edge but were normalized per candidate hit.
  *
- * Typed arrays rather than `Vector2[]` for the same reason — the inner loop reads eight numbers
+ * Typed arrays rather than `Vector2[]` for the same reason, the inner loop reads eight numbers
  * per edge, and reading them from flat arrays avoids a pointer chase and a modulo per edge.
  */
 export interface PreparedPolygon {
@@ -490,17 +545,12 @@ export function preparePolygon(
     nx[i] = px / length;
     ny[i] = py / length;
   }
-  // Regular means every vertex the same distance from the origin AND evenly spaced, which is what
-  // makes the angular lookup exact. Checked rather than assumed: the fallback is a full scan, so
-  // an outline that fails this is slower but never wrong.
-  // The CENTROID, not the origin: a scene puts its solids where it likes, and a polygon that is
-  // regular about its own centre is still regular after being moved.
-  let cx = 0;
-  let cy = 0;
-  for (const v of poly) {
-    cx += v.x / count;
-    cy += v.y / count;
-  }
+  // Regular means every vertex the same distance from the CENTROID and evenly spaced, which is
+  // what makes the angular lookup exact. About the centroid rather than the origin because a scene
+  // puts its solids where it likes, and a polygon that is regular about its own centre is still
+  // regular after being moved. Checked rather than assumed: the fallback is a full scan, so an
+  // outline that fails this is slower but never wrong.
+  const { x: cx, y: cy } = centroid(poly);
   const circumradius = count > 0 ? Math.hypot(poly[0].x - cx, poly[0].y - cy) : 0;
   const phase = count > 0 ? Math.atan2(poly[0].y - cy, poly[0].x - cx) : 0;
   const step = (Math.PI * 2) / Math.max(count, 1);
@@ -535,12 +585,12 @@ export function preparePolygon(
 }
 
 /**
- * Where a ray enters and leaves the solid, in ONE pass — Cyrus–Beck clipping.
+ * Where a ray enters and leaves the solid, in ONE pass. Cyrus–Beck clipping.
  *
  * Requires a CONVEX outline, which every cross-section here is: a convex polygon is the
  * intersection of its edges' half-planes, so a ray is inside exactly between the last half-plane
  * it enters and the first it leaves. Testing edges as half-planes rather than as segments drops
- * the per-edge cost to a dot, a divide and a compare — the segment form needs a second divide and
+ * the per-edge cost to a dot, a divide and a compare, the segment form needs a second divide and
  * two more compares just to ask whether the crossing landed between the endpoints, and a convex
  * outline makes that question redundant.
  *
@@ -563,7 +613,7 @@ let clipExitEdge = -1;
  *
  * The polygon is inscribed in its circumcircle, so wherever the ray crosses that circle bounds
  * where it can cross the polygon: within one edge either side, plus a margin. Writes the two
- * window centres and returns false when the ray misses the circumcircle entirely — which is a
+ * window centres and returns false when the ray misses the circumcircle entirely, which is a
  * genuine miss, since the polygon is inside it.
  */
 let windowEnter = 0;
@@ -597,13 +647,12 @@ function angularWindow(
 }
 
 /**
- * Cyrus–Beck over a contiguous run of edges, wrapping.
+ * The clip of {@link clipConvex} over a contiguous run of edges, wrapping.
  *
- * Exact for any run that CONTAINS the true edge, which is what makes the window safe: at the real
- * entry point the ray is inside every half-plane, so no other entering edge can report a larger
- * `t`, and the max over a subset holding the right one is therefore the max over all of them. The
- * same argument gives the exit as a min. Whether the run held the right edge is checked by the
- * caller, which is cheaper than proving the window's bounds.
+ * Exact for any run that CONTAINS the true edge: at the real entry point the ray is inside every
+ * half-plane, so no other entering edge reports a larger `t`, and the max over a subset holding
+ * the right one is the max over all of them. The exit is the mirror, as a min. Whether the run
+ * held the right edge is checked by the caller, which is cheaper than proving the window's bounds.
  */
 function clipRange(
   poly: PreparedPolygon,
@@ -720,18 +769,15 @@ function clipConvex(
 /**
  * Where a ray ENTERS a solid, whatever shape it is.
  *
- * Convex outlines go to Cyrus-Beck, which answers entry and exit together and is what every lathe
- * cross-section in the language uses. A re-entrant outline cannot: it is not the intersection of
- * its half-planes, so a half-plane test reports crossings on the far side of a notch that the ray
- * never makes, which is the failure that used to keep drawn silhouettes out of a beam's path.
- *
- * The general answer is the nearest forward crossing where the ray is heading INWARD — against the
- * edge's outward normal — and lands between that edge's endpoints. Both qualifiers matter: without
- * the direction test a ray leaving through the far wall counts as an entry, and without the segment
- * test every edge's infinite line does.
+ * A convex outline goes to {@link clipConvex}. A re-entrant one is not the intersection of its
+ * half-planes, so a half-plane test reports crossings on the far side of a notch that the ray
+ * never makes, and it is scanned edge by edge as segments instead: the nearest forward crossing
+ * where the ray is heading INWARD, against the edge's outward normal, and lands between that
+ * edge's endpoints. Both qualifiers matter. Without the direction test a ray leaving through the
+ * far wall counts as an entry, and without the segment test every edge's infinite line does.
  *
  * `SURFACE_EPS` is applied here, not left to the caller. A ray stepping on from a previous exit
- * starts exactly on this solid's boundary, so the edge it just left crosses at t ≈ 0 — and
+ * starts exactly on this solid's boundary, so the edge it just left crosses at t of about 0, and
  * returning that would make the caller skip the solid as "behind the ray", which is precisely what
  * has to work for a beam to leave a notch and come back into the same shape.
  */
@@ -760,7 +806,7 @@ function clipEntry(poly: PreparedPolygon, ox: number, oy: number, dx: number, dy
  * crossing where the ray is heading OUTWARD.
  *
  * Requiring the outward direction rather than taking the nearest crossing of any kind is what
- * keeps the refraction honest — the exit normal is read straight off this edge, so picking an
+ * keeps the refraction honest, the exit normal is read straight off this edge, so picking an
  * inward-facing one would refract the ray through a wall it is not standing at.
  */
 function clipExit(poly: PreparedPolygon, ox: number, oy: number, dx: number, dy: number): boolean {
@@ -781,6 +827,18 @@ function clipExit(poly: PreparedPolygon, ox: number, oy: number, dx: number, dy:
   clipExitT = bestT;
   clipExitEdge = bestEdge;
   return true;
+}
+
+/** Mean of the vertices, which is the centre a regular polygon is regular about. */
+function centroid(poly: readonly THREE.Vector2[]): THREE.Vector2 {
+  const count = poly.length;
+  let cx = 0;
+  let cy = 0;
+  for (const v of poly) {
+    cx += v.x / count;
+    cy += v.y / count;
+  }
+  return new THREE.Vector2(cx, cy);
 }
 
 /** Positive for counter-clockwise winding, which decides which perpendicular faces outward. */
@@ -845,7 +903,7 @@ export interface PrismPath {
   origin: THREE.Vector2;
   direction: THREE.Vector2;
   bounces: number;
-  /** Entry, every reflection point, then the exit — in traversal order. */
+  /** Entry, every reflection point, then the exit, in traversal order. */
   points: THREE.Vector2[];
   /** Polygon edge index for each entry in {@link points}. */
   edges: number[];
@@ -857,8 +915,8 @@ export interface PrismPath {
    *
    * The mesh treats the two halves differently and the split has to be recorded rather than
    * assumed. Up to here every wavelength still overlaps every other, so the beam is drawn as one
-   * white-summing ribbon per wavelength; past it they have visibly separated and everything —
-   * the air gaps between solids and the interiors of the later ones alike — has to be drawn as a
+   * white-summing ribbon per wavelength; past it they have visibly separated and everything,
+   * the air gaps between solids and the interiors of the later ones alike, has to be drawn as a
    * fan spanning adjacent wavelengths, or the spectrum bands into stripes.
    */
   firstExit: number;
@@ -901,7 +959,7 @@ export function tracePrism(
  * The order is found rather than given: at each step the nearest solid the ray actually enters
  * wins, so moving a shape changes the route without anything having to be re-authored. Between
  * solids the ray travels in air and keeps the direction it left with, which is where the spectrum
- * does most of its visible separating — a fan leaving one prism arrives at the next already
+ * does most of its visible separating, a fan leaving one prism arrives at the next already
  * spread, and each wavelength then refracts on its own terms.
  *
  * A ray that never escapes the last solid it entered returns undefined and is not drawn, exactly
@@ -930,17 +988,17 @@ export function traceSolids(
     // behind it, reports no forward entry and is skipped.
     let nearest = -1;
     let nearestT = Infinity;
+    let entryEdge = -1;
     for (let i = 0; i < solids.length; i++) {
       if (!clipEntry(solids[i].outline, fromX, fromY, heading.x, heading.y)) continue;
       if (clipEnterT <= SURFACE_EPS || clipEnterT >= nearestT) continue;
       nearestT = clipEnterT;
       nearest = i;
+      entryEdge = clipEnterEdge;
     }
     if (nearest < 0) break;
 
     const { outline, ior } = solids[nearest];
-    clipEntry(outline, fromX, fromY, heading.x, heading.y);
-    const entryEdge = clipEnterEdge;
     const entryNormal = traceNormal;
     entryNormal.set(outline.nx[entryEdge], outline.ny[entryEdge]);
 
@@ -1007,8 +1065,8 @@ export function traceSolids(
  * Whether two rays took the same route through the glass.
  *
  * The two edges of a finite beam only bound a band if they entered the same face, bounced the same
- * number of times and left the same face. When they disagree — which happens whenever the beam
- * straddles a vertex, or one edge total-internally-reflects and the other does not — connecting
+ * number of times and left the same face. When they disagree, which happens whenever the beam
+ * straddles a vertex, or one edge total-internally-reflects and the other does not, connecting
  * them draws a quad across the inside of the prism that corresponds to no light at all. Dropping
  * the band is the honest answer, and `stats.rejectedTopology` counts how often it happens.
  */
@@ -1020,17 +1078,34 @@ function matchingTopology(a: PrismPath, b: PrismPath): boolean {
 
 // -------------------------------------------------------------------- mesh --
 
-/** Origin at a normalized coordinate across the finite collimated beam. */
-function profileOrigin(o: BeamOptions, dir: THREE.Vector2, profile: number): THREE.Vector2 {
-  const perp = new THREE.Vector2(-dir.y, dir.x);
-  return o.origin.clone().addScaledVector(perp, o.halfWidth * Math.min(1, Math.max(-1, profile)));
+/**
+ * Scratch for the mesh pass, for the same reason the tracer has its own: the pass ran to tens of
+ * thousands of short-lived vectors per retrace, and a retrace happens on every pointer move.
+ */
+const meshStart = new THREE.Vector2();
+const meshStartLo = new THREE.Vector2();
+const meshStartHi = new THREE.Vector2();
+const meshEndLo = new THREE.Vector2();
+const meshEndHi = new THREE.Vector2();
+
+/** Origin at a normalized coordinate across the finite collimated beam, written into `out`. */
+function profileOrigin(
+  o: BeamOptions,
+  dir: THREE.Vector2,
+  profile: number,
+  out: THREE.Vector2,
+): THREE.Vector2 {
+  const offset = o.halfWidth * Math.min(1, Math.max(-1, profile));
+  out.x = o.origin.x + -dir.y * offset;
+  out.y = o.origin.y + dir.x * offset;
+  return out;
 }
 
 interface Node {
   nm: number;
   /** Path through the centre of each slice; drives the outgoing fan. */
   paths: (PrismPath | undefined)[];
-  /** Path along a slice BOUNDARY; gives the internal strips their width. Sparse — only the two
+  /** Path along a slice BOUNDARY; gives the internal strips their width. Sparse, only the two
    *  outer entries are filled eagerly, the rest on demand via {@link Node.traceBoundary}. */
   boundaries: (PrismPath | undefined)[];
   /** Fills in an interior boundary, for the rare case where the outer pair disagree. */
@@ -1041,7 +1116,7 @@ interface Node {
  * How far downstream of the exit face the spectral spread is measured, in world units.
  *
  * Not at the exit itself, and the difference is not subtle. Adjacent wavelengths leave the glass
- * from very nearly the same point — they differ in ANGLE, not position — so the spread measured at
+ * from very nearly the same point, they differ in ANGLE, not position, so the spread measured at
  * the face is close to zero and the density that divides by it goes to infinity. One unit
  * downstream the fan has actually opened, which is where the quantity is meaningful. Ported from
  * the reference; its exposure constant only makes sense against this.
@@ -1053,49 +1128,59 @@ const DENSITY_MEASURE_DISTANCE = 1;
  *
  * A finite difference against the neighbouring wavelengths estimates how much width a normalized
  * wavelength interval occupies once it has left the glass. Dividing flux by that Jacobian is what
- * keeps total energy stable as the mesh is subdivided — and, far more visibly, it is what gives
+ * keeps total energy stable as the mesh is subdivided, and, far more visibly, it is what gives
  * the fan a bright core where the wavelengths crowd together and soft ends where they spread.
  */
 function spectralDensity(
-  nodes: (Node | undefined)[],
+  nodes: Node[],
   index: number,
   slice: number,
   exposure: number,
   inputWidth: number,
   weight: number,
 ): number {
-  const path = nodes[index]?.paths[slice];
+  const path = nodes[index].paths[slice];
   if (!path) return 0;
 
   // Walk out to the nearest neighbour on each side that actually traced, so a wavelength whose
   // band was rejected does not zero the density of the ones beside it.
-  const traced = (i: number) => Boolean(nodes[i]?.paths[slice]);
   let left = index;
   for (let i = index - 1; i >= 0; i--) {
-    if (traced(i)) {
+    if (nodes[i].paths[slice]) {
       left = i;
       break;
     }
   }
   let right = index;
   for (let i = index + 1; i < nodes.length; i++) {
-    if (traced(i)) {
+    if (nodes[i].paths[slice]) {
       right = i;
       break;
     }
   }
   if (left === right) return 0;
 
-  const lp = nodes[left]?.paths[slice];
-  const rp = nodes[right]?.paths[slice];
+  const lp = nodes[left].paths[slice];
+  const rp = nodes[right].paths[slice];
   if (!lp || !rp || !matchingTopology(lp, rp)) return 0;
 
-  const dir = lp.direction.clone().add(rp.direction).normalize();
-  // Measured downstream, where the wavelengths have separated — see DENSITY_MEASURE_DISTANCE.
-  const lref = lp.origin.clone().addScaledVector(lp.direction, DENSITY_MEASURE_DISTANCE);
-  const rref = rp.origin.clone().addScaledVector(rp.direction, DENSITY_MEASURE_DISTANCE);
-  const span = rref.sub(lref);
-  const width = Math.abs(cross2(span.x, span.y, dir.x, dir.y));
+  // Scalars, in the order three's vector methods would apply them, so the result is the same to
+  // the bit without the three vectors a call used to leave for the collector.
+  let dx = lp.direction.x + rp.direction.x;
+  let dy = lp.direction.y + rp.direction.y;
+  const inverse = 1 / (Math.sqrt(dx * dx + dy * dy) || 1);
+  dx *= inverse;
+  dy *= inverse;
+  // Measured downstream, where the wavelengths have separated; see DENSITY_MEASURE_DISTANCE.
+  const spanX =
+    rp.origin.x +
+    rp.direction.x * DENSITY_MEASURE_DISTANCE -
+    (lp.origin.x + lp.direction.x * DENSITY_MEASURE_DISTANCE);
+  const spanY =
+    rp.origin.y +
+    rp.direction.y * DENSITY_MEASURE_DISTANCE -
+    (lp.origin.y + lp.direction.y * DENSITY_MEASURE_DISTANCE);
+  const width = Math.abs(cross2(spanX, spanY, dx, dy));
   const normalized = (right - left) / (nodes.length - 1);
   const jacobian = width / normalized;
   if (jacobian <= 1e-9) return 0;
@@ -1103,27 +1188,50 @@ function spectralDensity(
 }
 
 /**
- * First point at which a forward ray leaves the axis-aligned wall rectangle.
+ * `nearest`, or the distance to the wall plane at `side` on one axis when that is closer and the
+ * ray is still within the other axis's extent `hOther` there.
+ */
+function wallDistance(
+  o: number,
+  d: number,
+  oOther: number,
+  dOther: number,
+  side: number,
+  hOther: number,
+  nearest: number,
+): number {
+  const distance = (side - o) / d;
+  if (distance <= 0 || distance >= nearest) return nearest;
+  return Math.abs(oOther + dOther * distance) <= hOther + 1e-6 ? distance : nearest;
+}
+
+/**
+ * First point at which a forward ray leaves the axis-aligned wall rectangle, written into `out`.
  *
  * Ported from the reference. A ray that never meets the rectangle is returned unmoved, which
  * collapses its quad to nothing rather than drawing a streak off into space.
  */
-function rayToWall(from: THREE.Vector2, dir: THREE.Vector2, half: THREE.Vector2): THREE.Vector2 {
-  const o = [from.x, from.y];
-  const d = [dir.x, dir.y];
-  const h = [half.x, half.y];
+function rayToWall(
+  from: THREE.Vector2,
+  dir: THREE.Vector2,
+  half: THREE.Vector2,
+  out: THREE.Vector2,
+): THREE.Vector2 {
   let nearest = Number.POSITIVE_INFINITY;
-  for (let axis = 0; axis < 2; axis++) {
-    const component = d[axis];
-    if (Math.abs(component) < 1e-8) continue;
-    for (const side of [-h[axis], h[axis]]) {
-      const distance = (side - o[axis]) / component;
-      if (distance <= 0 || distance >= nearest) continue;
-      const other = 1 - axis;
-      if (Math.abs(o[other] + d[other] * distance) <= h[other] + 1e-6) nearest = distance;
-    }
+  // Unrolled in the reference's order, X walls then Y and the near side of each first, so a tie
+  // resolves the way it always has.
+  if (Math.abs(dir.x) >= 1e-8) {
+    nearest = wallDistance(from.x, dir.x, from.y, dir.y, -half.x, half.y, nearest);
+    nearest = wallDistance(from.x, dir.x, from.y, dir.y, half.x, half.y, nearest);
   }
-  return Number.isFinite(nearest) ? from.clone().addScaledVector(dir, nearest) : from.clone();
+  if (Math.abs(dir.y) >= 1e-8) {
+    nearest = wallDistance(from.y, dir.y, from.x, dir.x, -half.y, half.x, nearest);
+    nearest = wallDistance(from.y, dir.y, from.x, dir.x, half.y, half.x, nearest);
+  }
+  if (!Number.isFinite(nearest)) return out.copy(from);
+  out.x = from.x + dir.x * nearest;
+  out.y = from.y + dir.y * nearest;
+  return out;
 }
 
 /**
@@ -1131,14 +1239,14 @@ function rayToWall(from: THREE.Vector2, dir: THREE.Vector2, half: THREE.Vector2)
  *
  * Three parts, and they are genuinely different objects rather than three styles of one ribbon:
  *
- *   WHITE INPUT — one quad from source to entry face, drawn once in white. All the wavelengths
+ *   WHITE INPUT, one quad from source to entry face, drawn once in white. All the wavelengths
  *   share this path, so drawing it per-wavelength would sum N overlapping ribbons to reach a
  *   colour we already know is white.
  *
- *   INTERNAL STRIPS — per wavelength, per slice, per segment between bounces. These are where the
+ *   INTERNAL STRIPS, per wavelength, per slice, per segment between bounces. These are where the
  *   glass looks lit from within.
  *
- *   OUTGOING FAN — quads spanning ADJACENT WAVELENGTHS. This is the important one: the fan is a
+ *   OUTGOING FAN, quads spanning ADJACENT WAVELENGTHS. This is the important one: the fan is a
  *   continuous surface whose colour interpolates across the rasterizer, so it cannot band no
  *   matter how few samples are used, and the density term makes its brightness physical.
  */
@@ -1148,18 +1256,10 @@ export function buildLightSheet(o: BeamOptions): LightSheet {
   const slices = Math.max(1, Math.floor(o.slices));
   const inputWidth = o.halfWidth * 2;
 
-  // Every quad the three sections can emit: one per slice for the white input, one per sample for
-  // the internal strip, and one per adjacent sample pair per slice for the fan. Sections that get
-  // dropped only leave the tail unused.
-  // Each fan cell can now be several segments — one per air gap and solid interior the ray
-  // crosses — rather than one run to the wall.
-  const fanSegments = 2 + 2 * MAX_SOLIDS * (MAX_BOUNCES + 1);
-  const maxQuads =
-    slices +
-    samples * (MAX_SOLIDS * (MAX_BOUNCES + 2)) +
-    Math.max(0, samples - 1) * slices * fanSegments;
-  ensureVertexCapacity(maxQuads * 6);
-  const { positions, colors, profiles: profiles2, travels, waves } = vertexScratch;
+  // Sized for the common sheet: one white quad per slice, one strip per wavelength and one fan quad
+  // per cell. A beam that bounces, or threads several solids, grows into more as it is written.
+  ensureVertexCapacity((slices + samples + Math.max(0, samples - 1) * slices) * 6);
+  const buffers = vertexScratch;
   let vertexCount = 0;
   let quads = 0;
 
@@ -1170,17 +1270,18 @@ export function buildLightSheet(o: BeamOptions): LightSheet {
     travel: number,
     nm: number,
   ) => {
+    if (vertexCount === buffers.capacity) ensureVertexCapacity(vertexCount + 1);
     const i = vertexCount++;
     const j = i * 3;
-    positions[j] = p.x;
-    positions[j + 1] = p.y;
-    positions[j + 2] = o.z;
-    colors[j] = c[0];
-    colors[j + 1] = c[1];
-    colors[j + 2] = c[2];
-    profiles2[i] = profile;
-    travels[i] = travel;
-    waves[i] = nm;
+    buffers.positions[j] = p.x;
+    buffers.positions[j + 1] = p.y;
+    buffers.positions[j + 2] = o.z;
+    buffers.colors[j] = c[0];
+    buffers.colors[j + 1] = c[1];
+    buffers.colors[j + 2] = c[2];
+    buffers.profiles[i] = profile;
+    buffers.travels[i] = travel;
+    buffers.waves[i] = nm;
   };
   /** `a`,`b` are the near edge pair (colour `ca`); `c`,`d` the far pair (colour `cb`). */
   const quad = (
@@ -1213,7 +1314,7 @@ export function buildLightSheet(o: BeamOptions): LightSheet {
   // Slice centres sit at the MIDPOINT of each boundary interval, not spread across the full width.
   // Spanning [-1,1] with the centres as well as the boundaries puts them half a slice out of step,
   // so the outgoing fan (built from centres) and the internal strips (built from boundaries)
-  // disagree about where each slice is — which shows up as hatching across the entry face.
+  // disagree about where each slice is, which shows up as hatching across the entry face.
   const profiles: number[] = [];
   const weights: number[] = [];
   let weightSum = 0;
@@ -1227,12 +1328,12 @@ export function buildLightSheet(o: BeamOptions): LightSheet {
   for (let i = 0; i < slices; i++) weights[i] /= weightSum;
 
   // ---- trace every wavelength, at slice centres and slice boundaries ----
-  const nodes: (Node | undefined)[] = [];
+  const nodes: Node[] = [];
   let validBands = 0;
   let rejectedTopology = 0;
 
-  // Flattened ONCE for the whole sheet. `tracePrism` used to derive the winding sign per ray, an
-  // O(edges) pass in front of an O(edges) trace, which doubled the cost of every round shape.
+  // Flattened ONCE for the whole sheet: the winding sign and the edge normals are loop-invariant,
+  // and deriving them per ray is an O(edges) pass in front of every O(edges) trace.
   const outlines = [
     preparePolygon(o.polygon),
     ...(o.extraSolids ?? []).map((extra) => preparePolygon(extra.polygon)),
@@ -1253,17 +1354,17 @@ export function buildLightSheet(o: BeamOptions): LightSheet {
 
   for (let s = 0; s < samples; s++) {
     const nm = LAMBDA_MIN + ((LAMBDA_MAX - LAMBDA_MIN) * s) / (samples - 1);
-    const paths = profiles.map((p) => traceAt(profileOrigin(o, dir, p), nm));
+    const paths = profiles.map((p) => traceAt(profileOrigin(o, dir, p, meshStart), nm));
 
     // Only the two OUTER boundaries are traced up front. The internal strip is drawn full-width
     // whenever they agree, which is the overwhelmingly common case, and the 23 traces in between
-    // would then be thrown away — that is most of the cost of a retrace, and a retrace happens on
+    // would then be thrown away, that is most of the cost of a retrace, and a retrace happens on
     // every frame the pointer moves. The rest are filled in lazily, only when the outer pair
     // disagree and the strip has to be subdivided after all.
     const boundaries: (PrismPath | undefined)[] = Array.from({ length: slices + 1 });
     const traceBoundary = (i: number) => {
       const t = slices === 1 ? (i === 0 ? -1 : 1) : (i / slices) * 2 - 1;
-      return traceAt(profileOrigin(o, dir, t), nm);
+      return traceAt(profileOrigin(o, dir, t, meshStart), nm);
     };
     boundaries[0] = traceBoundary(0);
     boundaries[slices] = traceBoundary(slices);
@@ -1271,9 +1372,9 @@ export function buildLightSheet(o: BeamOptions): LightSheet {
     nodes.push({ nm, paths, boundaries, traceBoundary });
   }
 
-  const densities = nodes.map((node, i) =>
-    profiles.map((_, slice) =>
-      node ? spectralDensity(nodes, i, slice, o.exposure, inputWidth, weights[slice]) : 0,
+  const densities = nodes.map((_node, i) =>
+    profiles.map((_profile, slice) =>
+      spectralDensity(nodes, i, slice, o.exposure, inputWidth, weights[slice]),
     ),
   );
 
@@ -1282,16 +1383,16 @@ export function buildLightSheet(o: BeamOptions): LightSheet {
   // One quad PER SLICE, not one for the whole beam. The entry face is slanted, so the slices meet
   // it at staggered points; ending a single wide quad at one shared point leaves its flat end
   // cutting across the face while the internal strips start at their true positions, and the
-  // mismatch draws a row of notches across the entry — the beam appears to arrive through a comb.
+  // mismatch draws a row of notches across the entry, the beam appears to arrive through a comb.
   // Per-slice quads end exactly where their own strip begins and the seam disappears.
-  const reference = nodes.find((n) => n?.boundaries.some(Boolean));
+  const reference = nodes.find((n) => n.boundaries.some(Boolean));
   const white = [INPUT_BEAM_RADIANCE, INPUT_BEAM_RADIANCE, INPUT_BEAM_RADIANCE] as const;
   for (let slice = 0; slice < slices; slice++) {
     const tLo = slices === 1 ? -1 : (slice / slices) * 2 - 1;
     const tHi = slices === 1 ? 1 : ((slice + 1) / slices) * 2 - 1;
-    const startLo = profileOrigin(o, dir, tLo);
-    const startHi = profileOrigin(o, dir, tHi);
-    // Every wavelength shares the path up to the glass, so any traced boundary gives the entry —
+    const startLo = profileOrigin(o, dir, tLo, meshStartLo);
+    const startHi = profileOrigin(o, dir, tHi, meshStartHi);
+    // Every wavelength shares the path up to the glass, so any traced boundary gives the entry,
     // but the boundaries are traced lazily, so these have to be materialized rather than read.
     // Left unmaterialized they read as undefined, the fallback runs, and the white beam is drawn
     // straight across the frame as though the prism were not there.
@@ -1300,9 +1401,11 @@ export function buildLightSheet(o: BeamOptions): LightSheet {
       reference.boundaries[slice + 1] ??= reference.traceBoundary(slice + 1);
     }
     const endLo =
-      reference?.boundaries[slice]?.points[0] ?? rayToWall(startLo, dir, o.wallHalfExtent);
+      reference?.boundaries[slice]?.points[0] ??
+      rayToWall(startLo, dir, o.wallHalfExtent, meshEndLo);
     const endHi =
-      reference?.boundaries[slice + 1]?.points[0] ?? rayToWall(startHi, dir, o.wallHalfExtent);
+      reference?.boundaries[slice + 1]?.points[0] ??
+      rayToWall(startHi, dir, o.wallHalfExtent, meshEndHi);
     quad(startLo, startHi, endLo, endHi, white, white, tLo, tHi, 0, 0);
   }
 
@@ -1314,7 +1417,6 @@ export function buildLightSheet(o: BeamOptions): LightSheet {
   let sumB = 0;
   const scratch = new THREE.Color();
   for (const node of nodes) {
-    if (!node) continue;
     wavelengthToBeamRgb(node.nm, scratch);
     sumR += scratch.r;
     sumG += scratch.g;
@@ -1323,13 +1425,12 @@ export function buildLightSheet(o: BeamOptions): LightSheet {
   const internalScale = INPUT_BEAM_RADIANCE / Math.max(sumR, sumG, sumB, 1);
 
   for (const node of nodes) {
-    if (!node) continue;
     wavelengthToBeamRgb(node.nm, scratch);
 
     // ONE full-width strip per wavelength, not one per slice.
     //
-    // Inside the glass every slice still overlaps every other — the beam has been refracted but
-    // not yet dispersed apart — so subdividing across the width adds no visible detail. What it
+    // Inside the glass every slice still overlaps every other, the beam has been refracted but
+    // not yet dispersed apart, so subdividing across the width adds no visible detail. What it
     // does add is 24× the geometry at roughly a PIXEL of width each: at any sane camera distance a
     // slice strip is 0.025 world units across, which lands under one pixel, and a few thousand
     // sub-pixel quads at slightly different angles alias into a hatched comb across the entry
@@ -1340,7 +1441,7 @@ export function buildLightSheet(o: BeamOptions): LightSheet {
     const outerHi = node.boundaries[slices];
     const usable = outerLo && outerHi && matchingTopology(outerLo, outerHi);
 
-    // Fall back to per-slice strips when the beam's two outer edges took different routes — it
+    // Fall back to per-slice strips when the beam's two outer edges took different routes, it
     // straddles a vertex, or one edge escaped where the other did not. Narrow quads are the lesser
     // problem when the alternative is a quad spanning a path no light took.
     // [lower path, upper path, share of the beam's flux, profile at each edge]
@@ -1404,12 +1505,11 @@ export function buildLightSheet(o: BeamOptions): LightSheet {
   for (let i = 0; i < nodes.length - 1; i++) {
     const low = nodes[i];
     const high = nodes[i + 1];
-    if (!low || !high) continue;
     wavelengthToBeamRgb(low.nm, lowRgb);
     wavelengthToBeamRgb(high.nm, highRgb);
 
-    // Per slice. Collapsing this to one full-width quad per wavelength pair is tempting — the rays
-    // of one wavelength do leave parallel — but the quad then has to span the beam's width AND the
+    // Per slice. Collapsing this to one full-width quad per wavelength pair is tempting, the rays
+    // of one wavelength do leave parallel, but the quad then has to span the beam's width AND the
     // step in wavelength at once, and those are different directions: the result is a stack of
     // full-width sheets that sum to white and lose the spectrum entirely. The slices stay.
     for (let slice = 0; slice < slices; slice++) {
@@ -1423,7 +1523,7 @@ export function buildLightSheet(o: BeamOptions): LightSheet {
 
       // From the first exit to the wall, segment by segment. With one solid that is a single run
       // to the wall and identical to what this always drew; with several it also covers the air
-      // gaps between them and the interiors of the later ones, which is the whole point — by then
+      // gaps between them and the interiors of the later ones, which is the whole point, by then
       // the wavelengths have separated, and a fan spanning adjacent ones is the only topology that
       // interpolates the spectrum instead of banding it.
       //
@@ -1450,8 +1550,8 @@ export function buildLightSheet(o: BeamOptions): LightSheet {
       quad(
         lp.origin,
         hp.origin,
-        rayToWall(lp.origin, lp.direction, o.wallHalfExtent),
-        rayToWall(hp.origin, hp.direction, o.wallHalfExtent),
+        rayToWall(lp.origin, lp.direction, o.wallHalfExtent, meshEndLo),
+        rayToWall(hp.origin, hp.direction, o.wallHalfExtent, meshEndHi),
         lc,
         hc,
         profiles[slice],
@@ -1465,12 +1565,13 @@ export function buildLightSheet(o: BeamOptions): LightSheet {
   }
 
   const geometry = new THREE.BufferGeometry();
-  const wide = vertexCount * 3;
-  geometry.setAttribute("position", new THREE.BufferAttribute(positions.slice(0, wide), 3));
-  geometry.setAttribute("aColor", new THREE.BufferAttribute(colors.slice(0, wide), 3));
-  geometry.setAttribute("aProfile", new THREE.BufferAttribute(profiles2.slice(0, vertexCount), 1));
-  geometry.setAttribute("aTravel", new THREE.BufferAttribute(travels.slice(0, vertexCount), 1));
-  geometry.setAttribute("aWavelength", new THREE.BufferAttribute(waves.slice(0, vertexCount), 1));
+  const attribute = (array: Float32Array, size: number) =>
+    new THREE.BufferAttribute(array.slice(0, vertexCount * size), size);
+  geometry.setAttribute("position", attribute(buffers.positions, 3));
+  geometry.setAttribute("aColor", attribute(buffers.colors, 3));
+  geometry.setAttribute("aProfile", attribute(buffers.profiles, 1));
+  geometry.setAttribute("aTravel", attribute(buffers.travels, 1));
+  geometry.setAttribute("aWavelength", attribute(buffers.waves, 1));
 
   return {
     geometry,
@@ -1483,7 +1584,7 @@ export function buildLightSheet(o: BeamOptions): LightSheet {
  *
  * `prism()` builds a {@link THREE.LatheGeometry}, so its cross-section is a regular polygon of
  * `sides` vertices at radius `r`. An item rotated -90° about X brings that into the XY plane with
- * a vertex pointing up — the orientation the effect is named after. Deriving the polygon from the
+ * a vertex pointing up, the orientation the effect is named after. Deriving the polygon from the
  * same `r`/`sides` the mesh was built from keeps the traced path and the visible glass in
  * agreement; reading it back off the geometry would also have to undo the fillet, which rounds the
  * silhouette but not the optics.

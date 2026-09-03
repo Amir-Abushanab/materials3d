@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useRef } from "react";
-import type { CSSProperties, ReactElement, ReactNode } from "react";
-import { createDefaultConfig, createMaterials } from "@materials3d/core";
+import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef } from "react";
+import type { CSSProperties, ForwardedRef, ReactElement, ReactNode, Ref } from "react";
+import { createDefaultConfig, createMaterials, mergeSceneConfig } from "@materials3d/core";
 import type {
   FallbackReason,
   SceneConfig,
@@ -28,7 +28,7 @@ interface FlatProps {
   clearGlass?: string;
   post?: Partial<PostConfig>;
   /** Motion for the shapes a `scatter` generates. Per-shape motion on hand-authored `items` goes
-   *  through the `config` prop — a flat prop can only mean "all of them". */
+   *  through the `config` prop, a flat prop can only mean "all of them". */
   motion?: Partial<MotionConfig>;
   scatter?: Partial<ScatterConfig>;
   orbit?: boolean;
@@ -40,8 +40,11 @@ interface FlatProps {
 export interface Materials3DProps<R extends RendererKind = "webgl"> extends FlatProps {
   /** A preset: a function (tree-shakeable) or a name string (lazy-imports the presets chunk). */
   preset?: string | (() => Partial<SceneConfig>);
-  /** Escape hatch: a full/partial config, applied last.
-   *  Precedence: default ← preset ← flat props ← config. */
+  /**
+   * Escape hatch: a full/partial config, applied last and merged one level deep, so
+   * `config={{ post: { bloom: 1 } }}` keeps the rest of the post block.
+   * Precedence: default ← preset ← flat props ← config.
+   */
   config?: Partial<SceneConfig>;
   poster?: string;
   /** Poster `object-fit`. Default `"fill"` (matches the canvas → seamless handoff). */
@@ -51,7 +54,7 @@ export interface Materials3DProps<R extends RendererKind = "webgl"> extends Flat
   /**
    * Which engine build to fetch. Default `"webgl"`.
    *
-   * `"webgpu"` fetches a separate, larger bundle — three's node renderer and TSL — and is the only
+   * `"webgpu"` fetches a separate, larger bundle, three's node renderer and TSL, and is the only
    * way to reach a WebGPU backend. It selects the ENGINE, not the backend: it still runs on WebGL
    * where the browser has no WebGPU. See `MaterialOptions.renderer`.
    */
@@ -62,7 +65,7 @@ export interface Materials3DProps<R extends RendererKind = "webgl"> extends Flat
   minSizeForWebGL?: number;
   className?: string;
   style?: CSSProperties;
-  /** Custom SSR poster markup, e.g. `<img data-materials3d-poster src="…" />` — the shell adopts it. */
+  /** Custom SSR poster markup, e.g. `<img data-materials3d-poster src="…" />`, the shell adopts it. */
   children?: ReactNode;
   onReady?: (renderer: EngineFor<R>) => void;
   onFallback?: (reason: FallbackReason) => void;
@@ -72,9 +75,8 @@ export interface Materials3DProps<R extends RendererKind = "webgl"> extends Flat
 async function resolveBase(preset: Materials3DProps["preset"]): Promise<SceneConfig> {
   if (typeof preset === "function") return { ...createDefaultConfig(), ...preset() };
   if (typeof preset === "string") {
-    const { PRESETS } = await import("@materials3d/core/presets");
-    const make = PRESETS[preset];
-    if (make) return make();
+    const { PRESETS, isPresetName } = await import("@materials3d/core/presets");
+    if (isPresetName(preset)) return PRESETS[preset]();
   }
   return createDefaultConfig();
 }
@@ -91,35 +93,38 @@ function buildConfig(
   base: SceneConfig,
   props: Materials3DProps<RendererKind>,
 ): Partial<SceneConfig> {
-  if (props.lamps !== undefined) base.lamps = props.lamps;
-  if (props.lampGain !== undefined) base.lampGain = props.lampGain;
-  if (props.background !== undefined) base.background = props.background;
+  // A function preset may hand back the same object on every call (a module-level constant, say),
+  // and the base is spread only one level deep from it, so copy before writing into any block.
+  const out = structuredClone(base);
+  if (props.lamps !== undefined) out.lamps = props.lamps;
+  if (props.lampGain !== undefined) out.lampGain = props.lampGain;
+  if (props.background !== undefined) out.background = props.background;
   if (props.transparentBackground !== undefined) {
-    base.transparentBackground = props.transparentBackground;
+    out.transparentBackground = props.transparentBackground;
   }
-  if (props.clearGlass !== undefined) base.clearGlass = props.clearGlass;
-  if (props.post !== undefined) base.post = { ...base.post, ...props.post };
+  if (props.clearGlass !== undefined) out.clearGlass = props.clearGlass;
+  if (props.post !== undefined) out.post = { ...out.post, ...props.post };
   if (props.motion !== undefined) {
     const motion = props.motion;
-    if (base.scatter) base.scatter.motion = { ...base.scatter.motion, ...motion };
-    for (const item of base.items) item.motion = { ...item.motion, ...motion };
+    if (out.scatter) out.scatter.motion = { ...out.scatter.motion, ...motion };
+    for (const item of out.items) item.motion = { ...item.motion, ...motion };
   }
   // A partial scatter merges onto whatever the preset authored, so `scatter={{ count: 24 }}` is
   // enough to re-scatter the reference scene.
-  if (props.scatter !== undefined && base.scatter) {
-    base.scatter = { ...base.scatter, ...props.scatter };
+  if (props.scatter !== undefined && out.scatter) {
+    out.scatter = { ...out.scatter, ...props.scatter };
   }
-  if (props.orbit !== undefined) base.orbit = props.orbit;
-  if (props.quality !== undefined) base.quality = props.quality;
-  if (props.dprMax !== undefined) base.dprMax = props.dprMax;
-  if (props.paused !== undefined) base.paused = props.paused;
-  return { ...base, ...props.config };
+  if (props.orbit !== undefined) out.orbit = props.orbit;
+  if (props.quality !== undefined) out.quality = props.quality;
+  if (props.dprMax !== undefined) out.dprMax = props.dprMax;
+  if (props.paused !== undefined) out.paused = props.paused;
+  return props.config ? mergeSceneConfig(out, props.config) : out;
 }
 
 /**
  * Function presets are keyed by identity: swapping one function for another must re-run the update
  * effect, and a single string cannot say which function it saw. An inline (per-render) function
- * gets a fresh id each render, which re-runs the effect — `setConfig`'s structural diff makes that
+ * gets a fresh id each render, which re-runs the effect, `setConfig`'s structural diff makes that
  * a no-op, but memoize the preset if you want the effect to skip entirely.
  */
 const presetIds = new WeakMap<object, number>();
@@ -131,7 +136,7 @@ function presetKey(preset: Materials3DProps["preset"]): string | undefined {
   return `fn#${id}`;
 }
 
-/** A stable string that changes whenever the resolved config would — keys the update effect. */
+/** A stable string that changes whenever the resolved config would, keys the update effect. */
 function configKey(props: Materials3DProps<RendererKind>): string {
   const flat: Record<string, unknown> = {};
   const keys = [
@@ -156,21 +161,64 @@ function configKey(props: Materials3DProps<RendererKind>): string {
   });
 }
 
-/**
- * A drop-in, self-optimizing refractive-glass scene. Renders a `<div>` (SSR-safe; pass an
- * `<img data-materials3d-poster>` child for a server-rendered poster) and, on the client, mounts the
- * shell — poster-first, lazy, WebGL/reduced-motion/save-data aware, with the engine code-split out.
- */
-export function Materials3D<R extends RendererKind = "webgl">(
-  props: Materials3DProps<R>,
+/** The state the handle reports before the shell exists: what the server-rendered div shows. */
+const IDLE_STATE = "poster";
+
+function Materials3DInner(
+  props: Materials3DProps<RendererKind>,
+  ref: ForwardedRef<MaterialHandle<RendererKind>>,
 ): ReactElement {
   const { className, style, children } = props;
   const containerRef = useRef<HTMLDivElement>(null);
-  const handleRef = useRef<MaterialHandle<R> | null>(null);
+  const handleRef = useRef<MaterialHandle<RendererKind> | null>(null);
   // Keep the latest callbacks in a ref so they never force a remount.
-  const cbRef = useRef<Pick<Materials3DProps<R>, "onReady" | "onFallback">>({});
+  const cbRef = useRef<Pick<Materials3DProps<RendererKind>, "onReady" | "onFallback">>({});
   cbRef.current.onReady = props.onReady;
   cbRef.current.onFallback = props.onFallback;
+
+  // Serialising is not free (lamps, items, post), so it runs only when a flat prop changed.
+  const key = useMemo(
+    () => configKey(props),
+    [
+      props.preset,
+      props.lamps,
+      props.lampGain,
+      props.background,
+      props.transparentBackground,
+      props.clearGlass,
+      props.post,
+      props.motion,
+      props.scatter,
+      props.orbit,
+      props.quality,
+      props.dprMax,
+      props.paused,
+      props.config,
+    ],
+  );
+  // The key the live handle was last given, so the update effect can tell a real change from its
+  // own first run (and from StrictMode's replay), both of which the mount effect already covered.
+  const appliedKeyRef = useRef<string | null>(null);
+
+  // A stable object that delegates to whichever handle is live, so a ref taken before the shell
+  // mounted, or across a StrictMode remount, keeps working.
+  useImperativeHandle(
+    ref,
+    () => ({
+      get state() {
+        return handleRef.current?.state ?? IDLE_STATE;
+      },
+      get renderer() {
+        return handleRef.current?.renderer ?? null;
+      },
+      snapshot: (opts) => handleRef.current?.snapshot(opts) ?? Promise.resolve(null),
+      set: (config) => handleRef.current?.set(config),
+      play: () => handleRef.current?.play(),
+      pause: () => handleRef.current?.pause(),
+      destroy: () => handleRef.current?.destroy(),
+    }),
+    [],
+  );
 
   // Mount once. StrictMode double-mount is safe: destroy() aborts a pending upgrade, and the
   // pre-upgrade create/destroy is DOM-only (poster + IntersectionObserver).
@@ -178,7 +226,7 @@ export function Materials3D<R extends RendererKind = "webgl">(
     const container = containerRef.current;
     if (!container) return;
     let cancelled = false;
-    const options: MaterialOptions<R> = {
+    const options: MaterialOptions<RendererKind> = {
       poster: props.poster,
       posterFit: props.posterFit,
       lazy: props.lazy,
@@ -189,13 +237,15 @@ export function Materials3D<R extends RendererKind = "webgl">(
       onReady: (r) => cbRef.current.onReady?.(r),
       onFallback: (reason) => cbRef.current.onFallback?.(reason),
     };
-    const handle = createMaterials<R>(
+    const handle = createMaterials<RendererKind>(
       container,
       buildConfig(syncBase(props.preset), props),
       options,
     );
     handleRef.current = handle;
-    // A string preset resolves asynchronously; stage the real config once it loads.
+    appliedKeyRef.current = key;
+    // A string preset resolves asynchronously; stage the real config once it loads. This is the
+    // one set a mount makes: the update effect below sees the key it already applied and skips.
     if (typeof props.preset === "string") {
       void resolveBase(props.preset).then((base) => {
         if (!cancelled && handleRef.current === handle) handle.set(buildConfig(base, props));
@@ -205,15 +255,16 @@ export function Materials3D<R extends RendererKind = "webgl">(
       cancelled = true;
       handle.destroy();
       handleRef.current = null;
+      appliedKeyRef.current = null;
     };
     // Mount-time only (options are captured once; config changes flow through the effect below).
   }, []);
 
   // Push config changes (flat props / config / preset) to the live handle.
-  const key = configKey(props);
   useEffect(() => {
     const handle = handleRef.current;
-    if (!handle) return;
+    if (!handle || appliedKeyRef.current === key) return;
+    appliedKeyRef.current = key;
     const apply = (base: SceneConfig): void => {
       if (handleRef.current === handle) handle.set(buildConfig(base, props));
     };
@@ -228,6 +279,22 @@ export function Materials3D<R extends RendererKind = "webgl">(
     </div>
   );
 }
+
+const Materials3DWithRef = forwardRef(Materials3DInner);
+Materials3DWithRef.displayName = "Materials3D";
+
+/**
+ * A drop-in, self-optimizing refractive-glass scene. Renders a `<div>` (SSR-safe; pass an
+ * `<img data-materials3d-poster>` child for a server-rendered poster) and, on the client, mounts the
+ * shell: poster-first, lazy, WebGL/reduced-motion/save-data aware, with the engine code-split out.
+ *
+ * A `ref` receives the {@link MaterialHandle} (`state`, `renderer`, `snapshot()`, `set()`,
+ * `play()`, `pause()`), on React 18 and 19 alike. `forwardRef` keeps the generic engine parameter
+ * only through this cast, which is why the component is declared this way.
+ */
+export const Materials3D = Materials3DWithRef as unknown as <R extends RendererKind = "webgl">(
+  props: Materials3DProps<R> & { ref?: Ref<MaterialHandle<R>> },
+) => ReactElement;
 
 export default Materials3D;
 export type {

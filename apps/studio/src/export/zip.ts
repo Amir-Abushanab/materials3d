@@ -1,5 +1,5 @@
 /**
- * A tiny store-only (uncompressed) ZIP writer — enough to bundle a wallpaper folder (a handful of
+ * A tiny store-only (uncompressed) ZIP writer, enough to bundle a wallpaper folder (a handful of
  * small HTML/JSON files + a preview image) without a dependency. Files are stored as-is (method 0).
  */
 

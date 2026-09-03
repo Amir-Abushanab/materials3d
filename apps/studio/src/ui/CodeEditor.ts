@@ -24,7 +24,7 @@ import { tags } from "@lezer/highlight";
 
 export type EditorLanguage = "json" | "tsx" | "js" | "html";
 
-/** Light, low-contrast highlighting to match the studio chrome — the panel sits next to a
+/** Light, low-contrast highlighting to match the studio chrome: the panel sits next to a
  *  near-white render, and a dark editor beside it reads as a different application. */
 const HIGHLIGHT = HighlightStyle.define([
   { tag: [tags.keyword, tags.moduleKeyword], color: "#a24bc8" },
@@ -66,7 +66,7 @@ const THEME = EditorView.theme({
  *
  * `JSON.parse` messages are engine-specific but every current engine states the offset, either as
  * "at position N" (V8, JavaScriptCore) or "line L column C" (SpiderMonkey). Parse whichever we get
- * and fall back to marking the whole document rather than dropping the diagnostic — a marker in
+ * and fall back to marking the whole document rather than dropping the diagnostic; a marker in
  * roughly the right place beats none at all.
  */
 function jsonDiagnostics(view: EditorView): Diagnostic[] {
@@ -108,7 +108,7 @@ function languageExtension(language: EditorLanguage): Extension {
 }
 
 export interface CodeEditorOptions {
-  /** Called on every edit — used to clear a stale error note as soon as you start typing. */
+  /** Called on every edit, used to clear a stale error note as soon as you start typing. */
   onChange?(): void;
 }
 
@@ -118,7 +118,7 @@ export class CodeEditor {
   private readOnly = false;
 
   constructor(
-    private readonly parent: HTMLElement,
+    parent: HTMLElement,
     private readonly options: CodeEditorOptions = {},
   ) {
     this.view = new EditorView({ parent, state: this.makeState("") });
@@ -175,7 +175,7 @@ export class CodeEditor {
     this.view.focus();
   }
 
-  /** Move the cursor to a document offset and scroll it into view — used to jump to a parse error. */
+  /** Move the cursor to a document offset and scroll it into view, to jump to a parse error. */
   revealOffset(offset: number): void {
     const position = Math.max(0, Math.min(offset, this.view.state.doc.length));
     this.view.dispatch({
@@ -183,10 +183,5 @@ export class CodeEditor {
       scrollIntoView: true,
     });
     this.view.focus();
-  }
-
-  dispose(): void {
-    this.view.destroy();
-    this.parent.replaceChildren();
   }
 }

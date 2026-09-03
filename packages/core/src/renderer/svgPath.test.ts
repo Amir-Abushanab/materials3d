@@ -56,6 +56,32 @@ describe("parseSvgPath", () => {
     expect(contour[2]).toMatchObject({ x: 0.5, y: 0.5 });
   });
 
+  it("reads scientific notation, which optimizers emit for tiny coordinates", () => {
+    const [contour] = parseSvgPath("M0 0 L1e3 0 L1E3 5e2 L-2.5E-1 0 Z");
+    expect(contour[1]).toMatchObject({ x: 1000, y: 0 });
+    expect(contour[2]).toMatchObject({ x: 1000, y: 500 });
+    expect(contour[3]).toMatchObject({ x: -0.25, y: 0 });
+  });
+
+  it("repeats a curve command implicitly, as it does a lineto", () => {
+    // One `C` followed by twelve numbers is two cubics, per the spec; reading the second six as
+    // stray coordinates would draw one curve and drop the rest of the shape.
+    const [contour] = parseSvgPath("M0 0 C0 10 10 10 10 0 10 -10 20 -10 20 0 Z");
+    expect(contour).toHaveLength(49);
+    expect(contour[24].x).toBeCloseTo(10, 9);
+    expect(contour[24].y).toBeCloseTo(0, 9);
+    expect(contour[48].x).toBeCloseTo(20, 9);
+    expect(contour[48].y).toBeCloseTo(0, 9);
+  });
+
+  it("closes a subpath that ends without Z, as a fill would", () => {
+    // An open subpath has no inside for a solid to have, so it is closed the way a fill closes
+    // it: the tool that omitted the `Z` meant the same shape.
+    const open = parseSvgPath("M0 0 L10 0 L10 10 L0 10")[0];
+    const closed = parseSvgPath("M0 0 L10 0 L10 10 L0 10 Z")[0];
+    expect(open.map((p) => [p.x, p.y])).toEqual(closed.map((p) => [p.x, p.y]));
+  });
+
   it("reflects a smooth cubic's control point off the previous curve", () => {
     // S after C mirrors the previous control point; S opening a subpath has nothing to mirror and
     // takes the current point instead. The two must not draw the same curve.
@@ -77,7 +103,7 @@ describe("parseSvgPath", () => {
     // A half-circle of radius 5 from (0,0) to (10,0), and the bulge is what distinguishes a real
     // arc from the chord a lazy parser draws. It goes to y = -5, not +5: a positive sweep is the
     // direction of increasing angle in SVG's y-DOWN frame, so it leaves the axis on the side that
-    // is up on screen — and `pathShape`'s flip is what puts it back up in the scene.
+    // is up on screen, and `pathShape`'s flip is what puts it back up in the scene.
     const [contour] = parseSvgPath("M0 0 A5 5 0 0 1 10 0 Z");
     expect(Math.min(...contour.map((p) => p.y))).toBeCloseTo(-5, 1);
     expect(Math.max(...contour.map((p) => p.y))).toBeCloseTo(0, 1);
@@ -91,12 +117,41 @@ describe("parseSvgPath", () => {
 
   it("reads arc flags packed against the coordinates that follow", () => {
     // `0 1 1 10 0` written as `0110 0`, which is what an optimizer emits. A generic number scanner
-    // reads the flags as one hundred and ten and the arc lands somewhere else entirely — the whole
+    // reads the flags as one hundred and ten and the arc lands somewhere else entirely, the whole
     // reason the cursor has a single-character flag reader. Equality with the spaced form is the
     // assertion; anything weaker passes on a parser that quietly draws a chord.
     const packed = parseSvgPath("M0 0A5 5 0 0110 0Z")[0];
     const spaced = parseSvgPath("M0 0 A5 5 0 0 1 10 0 Z")[0];
     expect(packed.map((p) => [p.x, p.y])).toEqual(spaced.map((p) => [p.x, p.y]));
+  });
+
+  it("takes the long way round when the large-arc flag is set", () => {
+    // Radius 10 across a chord of 10: the small arc bulges 1.34 and the large one 18.66, on the
+    // same side of the chord because the sweep flag has not changed.
+    const small = parseSvgPath("M0 0 A10 10 0 0 1 10 0 Z")[0];
+    const large = parseSvgPath("M0 0 A10 10 0 1 1 10 0 Z")[0];
+    expect(Math.min(...small.map((p) => p.y))).toBeCloseTo(-(10 - Math.sqrt(75)), 1);
+    expect(Math.min(...large.map((p) => p.y))).toBeCloseTo(-(10 + Math.sqrt(75)), 1);
+  });
+
+  it("rotates an ellipse's axes by the x-axis-rotation", () => {
+    // A 20 by 10 ellipse turned a quarter turn is a 10 by 20 ellipse, so the two arcs must draw
+    // the same points.
+    const rotated = parseSvgPath("M0 0 A20 10 90 0 1 10 0 Z")[0];
+    const swapped = parseSvgPath("M0 0 A10 20 0 0 1 10 0 Z")[0];
+    expect(rotated).toHaveLength(swapped.length);
+    for (const [i, p] of rotated.entries()) {
+      expect(p.x).toBeCloseTo(swapped[i].x, 6);
+      expect(p.y).toBeCloseTo(swapped[i].y, 6);
+    }
+  });
+
+  it("omits an arc whose endpoints coincide", () => {
+    // The spec's rule, and the one that keeps a repeated point out of the contour: a zero-length
+    // edge has no normal, the same defect `Z` avoids by not repeating the start.
+    const [contour] = parseSvgPath("M0 0 L10 0 A5 5 0 0 1 10 0 L10 10 Z");
+    expect(contour).toHaveLength(3);
+    expect(contour[2]).toMatchObject({ x: 10, y: 10 });
   });
 
   it("straightens an arc whose radius collapsed", () => {
@@ -125,7 +180,7 @@ describe("parseSvgPath", () => {
 
   it("drops a contour poisoned by malformed data instead of hanging", () => {
     // `L-x` looks like an argument and is not one. The guarantee under test is that this returns
-    // at all — one non-number that never advanced the cursor would spin forever.
+    // at all, one non-number that never advanced the cursor would spin forever.
     expect(parseSvgPath("M0 0 L-x 4 L9 9 Z")).toHaveLength(0);
   });
 
@@ -160,7 +215,7 @@ describe("parseSvgPath", () => {
 describe("fitOutline", () => {
   it("flips y and sizes the longer axis to the radius", () => {
     // A triangle whose apex is DOWN in SVG has to stay down once y is flipped, or every paste
-    // arrives mirrored — which reads as a bug in the shape rather than in the convention.
+    // arrives mirrored, which reads as a bug in the shape rather than in the convention.
     const [contour] = fitOutline("M0 0 L10 0 L5 10 Z", 2);
     expect(Math.max(...contour.map((p) => p.x))).toBeCloseTo(2, 4);
     expect(Math.min(...contour.map((p) => p.y))).toBeCloseTo(-2, 4);
@@ -217,7 +272,7 @@ describe("outlines the tracer can follow", () => {
     "M50 0 L61.8 33.8 L97.6 34.5 L69 56.2 L79.4 90.5 L50 70 L20.6 90.5 L31 56.2 L2.4 34.5 L38.2 33.8 Z";
 
   it("knows a convex drawing from a re-entrant one", () => {
-    // Not a gate any more — it decides which CLIPPER the outline gets. Cyrus-Beck answers a convex
+    // Not a gate any more, it decides which CLIPPER the outline gets. Cyrus-Beck answers a convex
     // polygon in one pass; a re-entrant one has to be scanned edge by edge.
     expect(isConvex(fitOutline("M0 0 H10 V10 H0 Z", 1)[0])).toBe(true);
     expect(isConvex(fitOutline(STAR, 1)[0])).toBe(false);

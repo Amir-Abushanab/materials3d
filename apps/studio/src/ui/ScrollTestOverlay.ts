@@ -1,13 +1,14 @@
 import type { MaterialRenderer } from "@materials3d/core/renderer";
+import { injectStyle } from "../util/dom";
 
 // A scroll-driven test surface laid over the scene preview (#scene), so you can author a `scroll`
-// / `scrollVelocity` reaction and then actually SCROLL to feel it — a more natural companion to
+// / `scrollVelocity` reaction and then actually SCROLL to feel it, a more natural companion to
 // the exact-position slider in the Interaction panel. The overlay is transparent (the live scene
 // shows through) and only covers the preview, so the control panel stays fully usable while you
-// test. Ported from wave3d.
+// test.
 //
 // It drives renderer.setScrollTestProgress(0..1), which (while the loop runs) lets the renderer
-// derive real scroll velocity from the delta — so velocity reactions react here, unlike the slider.
+// derive real scroll velocity from the delta, so velocity reactions react here, unlike the slider.
 
 const STYLE_ID = "m3d-scrolltest-style";
 const RUNWAY = 4; // scroll runway height as a multiple of the preview (→ 3× preview of travel)
@@ -76,16 +77,7 @@ export class ScrollTestOverlay {
     private readonly stage: HTMLElement,
     private readonly renderer: MaterialRenderer,
   ) {
-    if (!document.getElementById(STYLE_ID)) {
-      const style = document.createElement("style");
-      style.id = STYLE_ID;
-      style.textContent = CSS;
-      document.head.appendChild(style);
-    }
-  }
-
-  isOpen(): boolean {
-    return !!this.root;
+    injectStyle(STYLE_ID, CSS);
   }
 
   toggle(): void {

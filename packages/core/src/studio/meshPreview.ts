@@ -1,8 +1,8 @@
 /**
  * A 2D-canvas twin of the mesh-gradient branch in `BACKDROP_FRAG`, for authoring previews.
  *
- * ⚠ This mirrors GLSL that cannot be shared with it. The formula below — an inverse-distance blend
- * with NORMALIZED weights, `w = exp(-d²/softness²)` — must stay in step with the mesh branch of the
+ * ⚠ This mirrors GLSL that cannot be shared with it. The formula below, an inverse-distance blend
+ * with NORMALIZED weights, `w = exp(-d²/softness²)`, must stay in step with the mesh branch of the
  * backdrop shader. A preview that disagrees with the render is worse than no preview, because it
  * quietly teaches the wrong thing about where a blob lands.
  *

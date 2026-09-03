@@ -68,7 +68,7 @@ export const IMAGE_FORMATS: Record<ImageFormat, ImageFormatDefinition> = {
     lossy: true,
     supportsTransparency: true,
   },
-  // Lossless, and the only format `pnpm calibrate` reads — a lossy still would move the
+  // Lossless, and the only format `pnpm calibrate` reads: a lossy still would move the
   // clear-glass ratio it measures.
   png: {
     label: "PNG",
@@ -86,14 +86,23 @@ export const IMAGE_FORMATS: Record<ImageFormat, ImageFormatDefinition> = {
   },
 };
 
+/** Probe results, kept for the session: the answer cannot change, and the panel asks on every
+ *  rebuild, where three canvas encodes were a measurable part of the cost. */
+const imageProbes = new Map<ImageFormat, boolean>();
+
 /** Canvas encoders silently fall back to PNG for unsupported MIME types. Check the data-URL
  *  prefix so the UI only advertises formats this browser can actually produce. */
 export function canExportImageFormat(format: ImageFormat): boolean {
-  const { mime } = IMAGE_FORMATS[format];
-  const canvas = document.createElement("canvas");
-  canvas.width = 1;
-  canvas.height = 1;
-  return canvas.toDataURL(mime).startsWith(`data:${mime}`);
+  let can = imageProbes.get(format);
+  if (can === undefined) {
+    const { mime } = IMAGE_FORMATS[format];
+    const canvas = document.createElement("canvas");
+    canvas.width = 1;
+    canvas.height = 1;
+    can = canvas.toDataURL(mime).startsWith(`data:${mime}`);
+    imageProbes.set(format, can);
+  }
+  return can;
 }
 
 // -------------------------------------------------------------- recording ---
@@ -101,12 +110,12 @@ export function canExportImageFormat(format: ImageFormat): boolean {
 export type VideoFormat = "webm" | "mp4";
 
 /** Everything the record button can produce. `webp` and `gif` are built from frame-walked stills
- *  rather than recorded through MediaRecorder, so they are deterministic — see export/record.ts. */
+ *  rather than recorded through MediaRecorder, so they are deterministic; see export/record.ts. */
 export type RecordFormat = VideoFormat | "webp" | "gif";
 
 // MediaRecorder mime candidates per container, best-quality first. MP4/H.264 recording works in
 // Chromium and Safari but not Firefox, so pickVideoMime falls back to WebM when the requested
-// container isn't supported — recording never silently fails.
+// container isn't supported, so recording never silently fails.
 const VIDEO_MIME_CANDIDATES: Record<VideoFormat, string[]> = {
   mp4: ["video/mp4;codecs=avc1.640028", "video/mp4;codecs=avc1", "video/mp4"],
   webm: ["video/webm;codecs=vp9", "video/webm;codecs=vp8", "video/webm"],
@@ -133,10 +142,25 @@ export function isFrameWalked(format: RecordFormat): format is "webp" | "gif" {
 
 /**
  * GIF's long edge is capped hard. Every frame carries its own 256-colour palette, so the file
- * grows with area *and* frame count far faster than a video container does — a Full HD GIF of a
+ * grows with area *and* frame count far faster than a video container does: a Full HD GIF of a
  * six-second loop is tens of megabytes and nobody wants it.
  */
 export const MAX_GIF_EDGE = 640;
+
+/**
+ * The frame delay a GIF can actually store for this rate, in milliseconds.
+ *
+ * GIF keeps delays in whole centiseconds, so most rates cannot be honoured exactly: 24 fps is
+ * written as 25, 30 as 33. The encoder rounds the same way, so the panel can say what the file
+ * will really play at instead of the number on the slider.
+ */
+export function gifFrameDelayMs(fps: number): number {
+  return Math.max(1, Math.round(100 / fps)) * 10;
+}
+
+export function gifEffectiveFps(fps: number): number {
+  return 1000 / gifFrameDelayMs(fps);
+}
 
 /** Pick a MediaRecorder mime type + file extension, falling back to WebM. */
 export function pickVideoMime(format: VideoFormat): { mime: string; ext: VideoFormat } {
@@ -216,8 +240,8 @@ export interface ExportGpuWarning {
  * Warn before an export that will hurt.
  *
  * Four passes per frame means Materials3D pays roughly four times the fill rate of a single-pass
- * renderer at the same size — a 4K export here costs about what an 8K one would elsewhere, which
- * is exactly the intuition people arrive with and why the warning is worth showing at all.
+ * renderer at the same size, so a 4K export here costs about what an 8K one would elsewhere,
+ * which is exactly the intuition people arrive with and why the warning is worth showing at all.
  */
 export function exportGpuWarning(width: number, height: number): ExportGpuWarning | null {
   const pixels = width * height;

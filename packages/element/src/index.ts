@@ -1,4 +1,4 @@
-import { createMaterials } from "@materials3d/core";
+import { createMaterials, mergeSceneConfig } from "@materials3d/core";
 import type {
   EngineFor,
   RendererKind,
@@ -8,21 +8,11 @@ import type {
   MaterialOptions,
 } from "@materials3d/core";
 
-const OBSERVED = [
-  "config",
-  "src",
-  "preset",
-  "poster",
-  "poster-fit",
-  "paused",
-  "lazy",
-  "webgl",
-  "min-size",
-  "transparent",
-] as const;
+/** The attributes a live element answers to. The shell options are read once at mount instead. */
+const LIVE_ATTRIBUTES = ["config", "src", "preset", "transparent", "paused"] as const;
 
 // SSR-safe base: `class extends HTMLElement` evaluates HTMLElement at import time, which throws
-// under Node. Fall back to a dummy base there — the element is never instantiated server-side
+// under Node. Fall back to a dummy base there, the element is never instantiated server-side
 // (register() is guarded), so the missing DOM methods are never called.
 const ElementBase: typeof HTMLElement =
   typeof HTMLElement !== "undefined"
@@ -30,20 +20,26 @@ const ElementBase: typeof HTMLElement =
     : (function Materials3DElementBase() {} as unknown as typeof HTMLElement);
 
 /**
- * `<materials-3d>` — the framework-agnostic drop-in (Vue/Svelte/plain HTML). Light DOM, `display:block`.
+ * `<materials-3d>`: the framework-agnostic drop-in (Vue/Svelte/plain HTML). Light DOM, `display:block`.
  *
- * Attributes: `config` (JSON), `src` (URL to a config JSON), `preset` (name), `poster`,
- * `poster-fit` (`fill` | `cover` | `contain`), `paused`, `lazy`, `webgl`, `min-size`,
- * `transparent`. Also a `config` property and a read-only `handle` getter. Emits `materials3d-ready` (detail = renderer)
- * and `materials3d-fallback` (detail = reason).
+ * Config attributes: `config` (JSON), `src` (URL to a config JSON), `preset` (name) and
+ * `transparent` (drop the backdrop; `"false"` or `"0"` keeps it), merged in that order, each one
+ * level deep (see `mergeSceneConfig`), then the `config` property last. `paused` starts and stops
+ * playback. These are LIVE: a change after mount is pushed to the running scene. A `src` is
+ * fetched once per URL and a `preset` resolved once per name, so an update re-reads neither.
  *
- * `poster`, `poster-fit`, `lazy`, `webgl` and `min-size` are shell OPTIONS, read once at mount —
- * changing them on a live element does nothing until it is re-connected (same contract as the
- * React wrapper's mount-time props). The config-shaped attributes and `paused` are live.
+ * Shell options: `poster`, `poster-fit` (`fill` | `cover` | `contain`), `lazy`, `webgl`
+ * (`auto` | `force` | `off`), `min-size` (CSS px) and `renderer` (`webgl`, the default, or
+ * `webgpu` for the experimental node engine, a separate bundle). Read once at mount; changing one
+ * on a live element does nothing until it is re-connected (the same contract as the React
+ * wrapper's mount-time props).
+ *
+ * Also a `config` property and a read-only `handle` getter. Emits `materials3d-ready` (detail =
+ * renderer) and `materials3d-fallback` (detail = reason).
  */
 export class Materials3DElement extends ElementBase {
   static get observedAttributes(): string[] {
-    return [...OBSERVED];
+    return [...LIVE_ATTRIBUTES];
   }
 
   #handle: MaterialHandle | null = null;
@@ -51,10 +47,14 @@ export class Materials3DElement extends ElementBase {
   #debounce?: ReturnType<typeof setTimeout>;
   /**
    * Which connect the in-flight `#mount` belongs to. `#mount` awaits the config, and a
-   * disconnect + reconnect during that await queues a SECOND mount — without this check both
+   * disconnect + reconnect during that await queues a SECOND mount, without this check both
    * would finish and the first handle would be overwritten undestroyed (a leaked renderer).
    */
   #mountId = 0;
+  /** The preset the last build resolved, so an update to another attribute skips the import. */
+  #preset: { name: string; make: () => Partial<SceneConfig> } | null = null;
+  /** The last `src` fetched successfully; a failed fetch is not cached, so the next update retries. */
+  #src: { url: string; config: Partial<SceneConfig> } | null = null;
 
   /** The live shell handle (null before connect / after disconnect). */
   get handle(): MaterialHandle | null {
@@ -104,7 +104,7 @@ export class Materials3DElement extends ElementBase {
       minSizeForWebGL: Number.isFinite(minSize) && minSize > 0 ? minSize : undefined,
       paused: this.#boolAttr("paused"),
       // `renderer="webgpu"` fetches the node-renderer build. Anything else, including absent, is
-      // the default WebGL engine — the option is opt-in precisely because it is a second bundle.
+      // the default WebGL engine, the option is opt-in precisely because it is a second bundle.
       renderer: this.getAttribute("renderer") === "webgpu" ? "webgpu" : undefined,
       onReady: (renderer: EngineFor<RendererKind>) =>
         this.dispatchEvent(new CustomEvent("materials3d-ready", { detail: renderer })),
@@ -114,25 +114,41 @@ export class Materials3DElement extends ElementBase {
     this.#handle = createMaterials<RendererKind>(this, config, options);
   }
 
-  /** default ← preset ← src JSON ← config attribute ← config property. */
+  /** default ← preset ← src JSON ← config attribute ← config property, one level deep each. */
   async #buildConfig(): Promise<Partial<SceneConfig>> {
     let base: Partial<SceneConfig> = {};
     const presetName = this.getAttribute("preset");
     if (presetName) {
-      const { PRESETS } = await import("@materials3d/core/presets");
-      base = PRESETS[presetName]?.() ?? {};
+      if (this.#preset?.name !== presetName) {
+        const { PRESETS, isPresetName } = await import("@materials3d/core/presets");
+        const make = isPresetName(presetName)
+          ? PRESETS[presetName]
+          : (): Partial<SceneConfig> => ({});
+        this.#preset = { name: presetName, make };
+      }
+      base = this.#preset.make();
     }
     const src = this.getAttribute("src");
     if (src) {
-      try {
-        base = { ...base, ...(await fetch(src).then((r) => r.json())) };
-      } catch {
-        // ignore a failed/invalid config fetch — fall through to whatever we have
+      if (this.#src?.url !== src) {
+        try {
+          const json: unknown = await fetch(src).then((r) => r.json());
+          if (json && typeof json === "object" && !Array.isArray(json)) {
+            this.#src = { url: src, config: json as Partial<SceneConfig> };
+          }
+        } catch {
+          // ignore a failed/invalid config fetch; fall through to whatever we have
+        }
       }
+      // Cloned so the cache never shares an object with a config the shell may go on to hold.
+      if (this.#src?.url === src) base = mergeSceneConfig(base, structuredClone(this.#src.config));
     }
     const transparent = this.#boolAttr("transparent");
-    if (transparent !== undefined) base.transparentBackground = transparent;
-    return { ...base, ...parseJson(this.getAttribute("config")), ...this.#config };
+    if (transparent !== undefined) base = { ...base, transparentBackground: transparent };
+    return mergeSceneConfig(
+      mergeSceneConfig(base, parseJson(this.getAttribute("config"))),
+      this.#config,
+    );
   }
 
   #scheduleUpdate(): void {
@@ -176,6 +192,13 @@ export function register(tag = "materials-3d"): void {
 // Self-register on import so a bare `import "@materials3d/element"` makes <materials-3d> work. Guarded so
 // importing under Node (SSR) is a no-op rather than a ReferenceError.
 register();
+
+declare global {
+  interface HTMLElementTagNameMap {
+    /** So `document.querySelector("materials-3d")` types as the element. */
+    "materials-3d": Materials3DElement;
+  }
+}
 
 export type {
   SceneConfig,

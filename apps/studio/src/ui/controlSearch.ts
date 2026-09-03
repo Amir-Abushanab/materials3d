@@ -7,7 +7,7 @@
  * exactly the sort of thing nobody notices until they need it.
  *
  * It only ever decides what SHOWS. Tweakpane owns this DOM and rebuilds it wholesale whenever the
- * shape list changes, so anything that restructured it would be undone without warning — and worse,
+ * shape list changes, so anything that restructured it would be undone without warning, and worse,
  * would be undone silently.
  */
 
@@ -36,7 +36,7 @@ const text = (el: Element | null | undefined): string => (el?.textContent ?? "")
  * than an empty folder with a matching name.
  *
  * Returns the folders worth revealing rather than revealing them, because opening one is a
- * Tweakpane concern — the caller drives it through the same toggle a person would click.
+ * Tweakpane concern: the caller drives it through the same toggle a person would click.
  */
 export function applySearch(host: Element, query: string): HTMLElement[] {
   const needle = query.trim().toLowerCase();
@@ -61,7 +61,7 @@ export function applySearch(host: Element, query: string): HTMLElement[] {
         }
         continue;
       }
-      // The label, or a button's own text — buttons carry no label. Deliberately NOT the row's
+      // The label, or a button's own text (buttons carry no label). Deliberately NOT the row's
       // whole text: that would match VALUES too, so searching "0.5" would surface every slider
       // that happens to sit there, and a renamed Tweakpane class would degrade to that silently
       // instead of failing.

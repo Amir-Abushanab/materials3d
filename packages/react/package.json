@@ -30,6 +30,8 @@
     ".": "./src/index.tsx"
   },
   "publishConfig": {
+    "main": "./dist/index.js",
+    "types": "./dist/index.d.ts",
     "exports": {
       ".": {
         "types": "./dist/index.d.ts",
@@ -50,13 +52,20 @@
     "react": "^19.0.0"
   },
   "peerDependencies": {
+    "@types/react": ">=18",
     "@types/three": ">=0.180",
     "react": ">=18",
     "three": ">=0.180 <1"
   },
   "peerDependenciesMeta": {
+    "@types/react": {
+      "optional": true
+    },
     "@types/three": {
       "optional": true
     }
+  },
+  "engines": {
+    "node": ">=20.19"
   }
 }

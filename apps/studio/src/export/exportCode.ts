@@ -1,5 +1,5 @@
 /**
- * Code export. One config, one snippet per way of consuming it — the point of the config being
+ * Code export. One config, one snippet per way of consuming it: the point of the config being
  * plain JSON is that every one of these is the *same* object, just wrapped differently.
  */
 
@@ -35,7 +35,7 @@ function minify(value: unknown, base: unknown): unknown {
   return value === base ? undefined : value;
 }
 
-/** The config with defaults removed — what a user would actually type. */
+/** The config with defaults removed: what a user would actually type. */
 export function minimalConfig(config: SceneConfig): Record<string, unknown> {
   return (minify(config, createDefaultConfig()) as Record<string, unknown>) ?? {};
 }
@@ -97,7 +97,7 @@ export function Hero() {
 const handle = createMaterials(document.querySelector("#hero"), ${indent(minimal, 0)}, {
   poster: "/glass-poster.webp",
   lazy: true,
-  // Four passes at phone DPR is a real cost — a still frame of glass loses very little.
+  // Four passes at phone DPR is a real cost; a still frame of glass loses very little.
   minSizeForWebGL: 520,
 });
 

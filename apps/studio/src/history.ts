@@ -3,7 +3,7 @@
  *
  * The whole document is one plain-JSON `SceneConfig`, so a committed version is just a deep clone
  * and restoring reuses main.ts's existing apply path. This class owns only the timeline, the
- * cursor, and the commit/coalescing bookkeeping — it holds no reference to the renderer or panel.
+ * cursor, and the commit/coalescing bookkeeping; it holds no reference to the renderer or panel.
  *
  * Model: a linear list of `entries` with a `cursor` marking the current version. Editing while the
  * cursor is behind the tip truncates the forward (redo) branch. The floating history panel renders
@@ -19,7 +19,8 @@ import type { SceneConfig } from "@materials3d/core";
 /** One committed version in the timeline. */
 interface Entry {
   id: number;
-  /** History-owned clone. Nothing hands this out without cloning again. */
+  /** History-owned clone, with any large media swapped for a reference (see MediaStore). Nothing
+   *  hands this out without cloning and resolving it again. */
   config: SceneConfig;
   /** Cached fingerprint, so the no-op guard never re-serializes a stored entry. */
   fingerprint: string;
@@ -44,12 +45,81 @@ export interface HistoryState {
 }
 
 export interface HistoryDeps {
-  /** Reads the live config. It is replaced on every scene swap — never capture it. */
+  /** Reads the live config. It is replaced on every scene swap; never capture it. */
   getLive: () => SceneConfig;
   /** The current preset name, tagged onto a manual-edit commit. */
   getPresetName: () => string;
   /** Fired whenever the timeline or cursor changes, so the UI can re-render. */
   onChange: () => void;
+}
+
+/** How long a cleared timeline can be brought back, in ms. The toast offering it lives as long. */
+export const CLEAR_UNDO_MS = 4000;
+
+/** The config fields that can hold a data URI the size of a file. */
+const MEDIA_KEYS = ["backgroundImageUrl", "backgroundVideoUrl"] as const;
+/** Strings shorter than this travel inside the clone; longer ones are held once, out of line. A
+ *  hosted URL is well under it and the data URI of any real image or video is megabytes over. */
+const INLINE_LIMIT = 2048;
+const REF_PREFIX = "m3d-media#";
+
+/**
+ * Out-of-line storage for a backdrop picked from disk.
+ *
+ * A 20 MB video as a data URI would otherwise be deep-cloned into every entry, serialized for
+ * every fingerprint and diff label, and retained eighty times over. Held once here and keyed by a
+ * short reference that the entries carry instead; strings are immutable, so handing the same
+ * payload back out on a restore copies nothing.
+ */
+class MediaStore {
+  private readonly payloads = new Map<string, string>();
+  private readonly refs = new Map<string, string>();
+  private next = 1;
+
+  /** A shallow copy of `config` with any large media swapped for a reference. Shallow on purpose:
+   *  the payload itself must never be copied on the way in. */
+  intern(config: SceneConfig): SceneConfig {
+    const out = { ...config };
+    for (const key of MEDIA_KEYS) {
+      const value = out[key];
+      if (typeof value !== "string" || value.length < INLINE_LIMIT) continue;
+      let ref = this.refs.get(value);
+      if (!ref) {
+        ref = `${REF_PREFIX}${this.next++}`;
+        this.refs.set(value, ref);
+        this.payloads.set(ref, value);
+      }
+      out[key] = ref;
+    }
+    return out;
+  }
+
+  /** Put the payloads back, in place. */
+  resolve(config: SceneConfig): SceneConfig {
+    for (const key of MEDIA_KEYS) {
+      const value = config[key];
+      if (typeof value === "string" && value.startsWith(REF_PREFIX)) {
+        config[key] = this.payloads.get(value);
+      }
+    }
+    return config;
+  }
+
+  /** Drop every payload that no entry references any more. */
+  prune(held: Iterable<SceneConfig>): void {
+    const used = new Set<string>();
+    for (const config of held) {
+      for (const key of MEDIA_KEYS) {
+        const value = config[key];
+        if (value?.startsWith(REF_PREFIX)) used.add(value);
+      }
+    }
+    for (const [ref, payload] of this.payloads) {
+      if (used.has(ref)) continue;
+      this.payloads.delete(ref);
+      this.refs.delete(payload);
+    }
+  }
 }
 
 function fingerprint(c: SceneConfig): string {
@@ -98,8 +168,10 @@ export class History {
   private nextId = 1;
   private dirty = false;
   private timer: number | undefined;
+  private readonly media = new MediaStore();
   /** The timeline captured by the last clear(), so it can be restored once via undoClear(). */
   private clearedSnapshot?: { entries: Entry[]; cursor: number };
+  private clearTimer: number | undefined;
 
   constructor(
     private readonly deps: HistoryDeps,
@@ -107,27 +179,27 @@ export class History {
     private readonly delay = 350,
   ) {}
 
-  /** Seed (or re-seed) the timeline with a single baseline entry — startup, or a shared link. */
+  /** Seed (or re-seed) the timeline with a single baseline entry: startup, or a shared link. */
   reset(config: SceneConfig, presetName: string, label = presetName): void {
-    this.cancelTimer();
-    this.dirty = false;
-    this.entries = [this.makeEntry(config, label, presetName)];
-    this.cursor = 0;
-    this.deps.onChange();
+    this.dropClearedSnapshot();
+    this.seed(config, presetName, label);
   }
 
   /** Wipe back to a single baseline (keeping the live scene), remembering the old timeline so
-   *  undoClear() can put it back once. Like reset(), but reversible. */
+   *  undoClear() can put it back within {@link CLEAR_UNDO_MS}. Like reset(), but reversible. */
   clear(config: SceneConfig, presetName: string): void {
     this.clearedSnapshot = { entries: this.entries.slice(), cursor: this.cursor };
-    this.reset(config, presetName);
+    window.clearTimeout(this.clearTimer);
+    this.clearTimer = window.setTimeout(() => this.dropClearedSnapshot(), CLEAR_UNDO_MS);
+    this.seed(config, presetName, presetName);
   }
 
-  /** Restore the timeline captured by the most recent clear(). No-op if there is nothing to. */
+  /** Restore the timeline captured by the most recent clear(). No-op once that offer has lapsed. */
   undoClear(): boolean {
     const snapshot = this.clearedSnapshot;
     if (!snapshot) return false;
     this.clearedSnapshot = undefined;
+    window.clearTimeout(this.clearTimer);
     this.cancelTimer();
     this.dirty = false;
     this.entries = snapshot.entries.slice();
@@ -161,16 +233,22 @@ export class History {
   commit(live: SceneConfig, presetName: string, label?: string): boolean {
     this.cancelTimer();
     this.dirty = false;
+    // Interned first, so the fingerprint and the diff never serialize a media payload.
+    const interned = this.media.intern(live);
+    const print = fingerprint(interned);
     const current = this.entries[this.cursor] as Entry | undefined;
-    if (current && fingerprint(live) === current.fingerprint) return false;
-    const finalLabel = label ?? (current ? diffLabel(current.config, live) : "edit");
+    if (current && print === current.fingerprint) return false;
+    const finalLabel = label ?? (current ? diffLabel(current.config, interned) : "edit");
     this.entries.length = this.cursor + 1; // drop the redo branch
-    this.entries.push(this.makeEntry(live, finalLabel, presetName));
+    this.entries.push(this.makeEntry(interned, print, finalLabel, presetName));
     this.cursor = this.entries.length - 1;
+    let evicted = false;
     while (this.entries.length > this.cap) {
       this.entries.shift();
       this.cursor--;
+      evicted = true;
     }
+    if (evicted) this.media.prune(this.heldConfigs());
     this.deps.onChange();
     return true;
   }
@@ -202,13 +280,34 @@ export class History {
     };
   }
 
-  /** The stored config for an entry id (for rendering its thumbnail); null if unknown. */
+  /** A fresh, resolved clone of an entry's config (for rendering its thumbnail), safe to mutate;
+   *  null if the id is unknown. */
   getConfigById(id: number): SceneConfig | null {
-    return this.entries.find((e) => e.id === id)?.config ?? null;
+    const entry = this.entries.find((e) => e.id === id);
+    return entry ? this.media.resolve(structuredClone(entry.config)) : null;
   }
 
-  dispose(): void {
+  private seed(config: SceneConfig, presetName: string, label: string): void {
     this.cancelTimer();
+    this.dirty = false;
+    const interned = this.media.intern(config);
+    this.entries = [this.makeEntry(interned, fingerprint(interned), label, presetName)];
+    this.cursor = 0;
+    this.media.prune(this.heldConfigs());
+    this.deps.onChange();
+  }
+
+  private dropClearedSnapshot(): void {
+    window.clearTimeout(this.clearTimer);
+    if (!this.clearedSnapshot) return;
+    this.clearedSnapshot = undefined;
+    this.media.prune(this.heldConfigs());
+  }
+
+  /** Every config still holding a media reference: the timeline plus a pending clear snapshot. */
+  private *heldConfigs(): Iterable<SceneConfig> {
+    for (const entry of this.entries) yield entry.config;
+    for (const entry of this.clearedSnapshot?.entries ?? []) yield entry.config;
   }
 
   private goTo(index: number): Restored {
@@ -219,15 +318,24 @@ export class History {
     const entry = this.entries[index];
     // A FRESH clone: the renderer normalizes and mutates whatever it is handed, so a restore must
     // never alias the entry we keep in the timeline.
-    return { config: structuredClone(entry.config), presetName: entry.presetName };
+    return {
+      config: this.media.resolve(structuredClone(entry.config)),
+      presetName: entry.presetName,
+    };
   }
 
-  private makeEntry(config: SceneConfig, label: string, presetName: string): Entry {
-    const clone = structuredClone(config);
+  /** `interned` is a shallow copy already free of media payloads; the deep clone here is what
+   *  isolates the entry from the live config. */
+  private makeEntry(
+    interned: SceneConfig,
+    print: string,
+    label: string,
+    presetName: string,
+  ): Entry {
     return {
       id: this.nextId++,
-      config: clone,
-      fingerprint: fingerprint(clone),
+      config: structuredClone(interned),
+      fingerprint: print,
       label,
       presetName,
       time: Date.now(),

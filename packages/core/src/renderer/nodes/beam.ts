@@ -1,18 +1,14 @@
 /**
- * The light-sheet materials — beam, caustic and dust — as node graphs.
+ * The light-sheet materials, beam, caustic and dust, as node graphs.
  *
  * These are the passes whose GEOMETRY carries most of the meaning: the beam mesh is traced on the
  * CPU and arrives with per-vertex colour, profile and travel, so the fragment stage only has to
  * shape what the tracer already decided. That is why so little of the optics appears here.
  */
 import { TSL } from "three/webgpu";
-import { valueNoise } from "./common";
-
-type Vec = any;
+import { mix, select, valueNoise, type Vec } from "./common";
 
 const { Fn, float, vec3, vec4 } = TSL;
-const select = (cond: Vec, ifTrue: Vec, ifFalse: Vec): Vec => TSL.select(cond, ifTrue, ifFalse);
-const mix = (a: Vec, b: Vec, t: Vec): Vec => TSL.mix(a, b, t);
 
 /**
  * Open the bundle from its CENTRE LINE outward.
@@ -49,7 +45,7 @@ export interface BeamUniforms {
  * The beam, shaped across its width and along its travel.
  *
  * The longitudinal term is most of what makes a fan read as light spreading out rather than as a
- * painted stripe — around a 280-fold dilution across the frame at the shipped constants. Alpha is
+ * painted stripe, around a 280-fold dilution across the frame at the shipped constants. Alpha is
  * ZERO: an additive layer must not add coverage, or a premultiplied compositor darkens exactly the
  * pixels it was meant to brighten.
  */
@@ -83,20 +79,7 @@ export interface DustUniforms {
   tonemapAces: (c: Vec) => Vec;
 }
 
-/**
- * One grain of dust.
- *
- * Hue comes from the bloom and brightness from the light field, and they are two different textures
- * on purpose: the field is a heavy sixteenth-resolution blur, broad enough to say whether light
- * reaches a grain and far too broad to say what colour it is.
- *
- * The response SATURATES — `1 - exp(-b·response)` — rather than clamping, so weak samples fade off
- * continuously instead of drawing a hard particle halo at the edge of the light volume. And the
- * grain is tone mapped IN ISOLATION because it draws over the finished frame: a mote is a point of
- * light in its own right, and mapping the sum instead crushes every grain sitting on the beam,
- * which is exactly where they are brightest.
- */
-/** Signed area of the triangle (a, b, p) — positive on one side of the edge, negative on the other. */
+/** Signed area of the triangle (a, b, p), positive on one side of the edge, negative on the other. */
 const edgeSide = Fn(([a, b, p]: [Vec, Vec, Vec]) =>
   b.x
     .sub(a.x)
@@ -112,7 +95,7 @@ const edgeSide = Fn(([a, b, p]: [Vec, Vec, Vec]) =>
  * whole on where its centre happens to land.
  *
  * A multiplier rather than a discard. The pass is additive, so scaling to zero is the same result
- * and costs no branch — and unlike `discard` it stays a pure function, which is what lets the
+ * and costs no branch, and unlike `discard` it stays a pure function, which is what lets the
  * parity harness compare it against the reference at all.
  */
 export const outsideSection = Fn(([p, a, b, c]: [Vec, Vec, Vec, Vec]) => {
@@ -124,6 +107,19 @@ export const outsideSection = Fn(([p, a, b, c]: [Vec, Vec, Vec, Vec]) => {
   return select(anyNegative.and(anyPositive), float(1), float(0));
 });
 
+/**
+ * One grain of dust.
+ *
+ * Hue comes from the bloom and brightness from the light field, and they are two different textures
+ * on purpose: the field is a heavy sixteenth-resolution blur, broad enough to say whether light
+ * reaches a grain and far too broad to say what colour it is.
+ *
+ * The response SATURATES, as `1 - exp(-b·response)` rather than a clamp, so weak samples fade off
+ * continuously instead of drawing a hard particle halo at the edge of the light volume. And the
+ * grain is tone mapped IN ISOLATION because it draws over the finished frame: a mote is a point of
+ * light in its own right, and mapping the sum instead crushes every grain sitting on the beam,
+ * which is exactly where they are brightest.
+ */
 export const dustPass = (u: DustUniforms) =>
   Fn(([corner, lightUv, softness, sparkle, opacity]: [Vec, Vec, Vec, Vec, Vec]) => {
     const r2 = corner.dot(corner);
@@ -164,7 +160,7 @@ const hash11 = Fn(([v]: [Vec]) => v.mul(127.1).sin().mul(43758.5453).fract());
  *
  * Five classes on a heavily skewed distribution: almost every grain is the smallest kind, and the
  * rare large soft ones are what stop the field reading as uniform noise. The thresholds are the
- * distribution — 0.82 of grains tiny, 0.004 of them the largest.
+ * distribution, 0.82 of grains tiny, 0.004 of them the largest.
  */
 const appearance = Fn(([cls, size]: [Vec, Vec]) =>
   select(
@@ -197,7 +193,7 @@ export interface DustVertexUniforms {
 }
 
 /**
- * The dust field's vertex stage — the twin of DUST_VERT.
+ * The dust field's vertex stage, the twin of DUST_VERT.
  *
  * NOTHING about a grain is uploaded except its index. Position, size, class, shape, energy and
  * lifetime are all hashed from it, exactly as the reference derives everything from an instance
@@ -328,7 +324,7 @@ export interface CausticUniforms {
 }
 
 /**
- * The CAUSTIC — the twin of CAUSTIC_FRAG.
+ * The CAUSTIC, the twin of CAUSTIC_FRAG.
  *
  * The same traced geometry as the beam, drawn a second time and lying on the wall rather than
  * hanging in the air: what the sheet deposits where it lands. It reads the wall's own relief, so
@@ -368,7 +364,7 @@ export const causticPass = (u: CausticUniforms) =>
       TSL.vec3(TSL.normalize(u.beamDir).mul(elev.cos()) as Vec, elev.sin() as Vec),
     );
     // Normalized against the response a FLAT wall would give, so the influence knob scales a
-    // deviation from one rather than the absolute dot product — which would darken everything.
+    // deviation from one rather than the absolute dot product, which would darken everything.
     const flat0 = incident.z.max(0.05);
     const relative = N.dot(incident).max(0).div(flat0).clamp(0, 2.5);
     const surface = mix(float(1), relative, u.normalInfluence.clamp(0, 1));

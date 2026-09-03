@@ -1,5 +1,5 @@
 /**
- * The opaque materials — metal, ceramic and plastic — as a node graph, twinning `shadeOpaque`.
+ * The opaque materials, metal, ceramic and plastic, as a node graph, twinning `shadeOpaque`.
  *
  * The whole model turns on one distinction: for a conductor the normal-incidence reflectance IS
  * its colour and there is no diffuse lobe at all, while a dielectric reflects about four per cent
@@ -7,15 +7,16 @@
  * red-gold does not.
  */
 import { TSL } from "three/webgpu";
+import { MATERIAL_KINDS } from "../../config/model";
 import { distributionGGX, fresnelF82, fresnelSchlick, visibilitySmith } from "./brdf";
-
-type Vec = any;
+import { mix, normalize, reflect, select, type Vec } from "./common";
 
 const { Fn, float, vec3 } = TSL;
-const select = (cond: Vec, ifTrue: Vec, ifFalse: Vec): Vec => TSL.select(cond, ifTrue, ifFalse);
-const mix = (a: Vec, b: Vec, t: Vec): Vec => TSL.mix(a, b, t);
-const normalize = (v: Vec): Vec => TSL.normalize(v);
-const reflect = (i: Vec, n: Vec): Vec => TSL.reflect(i, n);
+
+/** The kind indices the graph branches on, looked up by name so reordering the table cannot move a
+ *  threshold. `kind` arrives as a float, so each test sits half a step off the index. */
+const METAL = MATERIAL_KINDS.indexOf("metal");
+const PLASTIC = MATERIAL_KINDS.indexOf("plastic");
 
 /**
  * The key for opaque surfaces, from the upper front-left.
@@ -43,8 +44,8 @@ export interface OpaqueUniforms {
 /**
  * Built as a FACTORY over its uniforms rather than taking them as arguments.
  *
- * `Fn` proxies whatever it is handed into node space, and a plain JavaScript object — let alone one
- * carrying callbacks for the room and the plate — is not something it can proxy. Passing one
+ * `Fn` proxies whatever it is handed into node space, and a plain JavaScript object, let alone one
+ * carrying callbacks for the room and the plate, is not something it can proxy. Passing one
  * compiles and then renders nothing at all, which is how this was first written.
  */
 export const shadeOpaque = (u: OpaqueUniforms) =>
@@ -57,17 +58,17 @@ export const shadeOpaque = (u: OpaqueUniforms) =>
     const LoH = L.dot(H).max(0);
     const a = u.roughness.mul(u.roughness);
 
-    const metal = u.kind.lessThan(4.5);
+    const metal = u.kind.lessThan(METAL + 0.5);
     const f0 = select(metal, u.albedo, vec3(0.04));
     // Only conductors get the F82 treatment: it corrects Schlick's conductor error, and a
     // dielectric's four per cent is already well inside Schlick's accurate range.
     const edged = metal.and(u.useEdge.greaterThan(0.5));
 
-    // D_GGX is a normalized distribution, so its peak goes as 1/alpha² — into the hundreds for a
+    // D_GGX is a normalized distribution, so its peak goes as 1/alpha², into the hundreds for a
     // polished surface. A physical renderer balances that against the light's radiance and then
     // tone-maps; this pipeline is display-referred end to end and does neither, so an untouched
-    // highlight simply clips to a white blob. Compressing it keeps the LOBE — the shape and
-    // falloff the whole microfacet model exists for — while bounding the peak.
+    // highlight simply clips to a white blob. Compressing it keeps the LOBE, the shape and
+    // falloff the whole microfacet model exists for, while bounding the peak.
     const D = distributionGGX(NoH, a);
     const Vis = visibilitySmith(NoV, NoL, a);
     const F = select(edged, fresnelF82(f0, u.edgeTint, LoH), fresnelSchlick(f0, LoH));
@@ -78,18 +79,18 @@ export const shadeOpaque = (u: OpaqueUniforms) =>
     const env = u.plate(R);
     const behind = u.plate(normal.negate());
     const fill = mix(vec3(0.92), behind.rgb, behind.a.mul(0.6));
-    // Roughness used to fade the whole reflection toward a flat fill — a rough metal reflected
+    // Roughness used to fade the whole reflection toward a flat fill, a rough metal reflected
     // LESS room rather than a blurred one, which reads as chalk. Where a prefiltered chain exists
     // the blur is real, so the fade drops to a token amount.
     const coneFade = select(u.envOn.greaterThan(0.5), u.roughness.mul(0.18), u.roughness.mul(0.75));
     const envCol = mix(mix(u.room(R, u.roughness), env.rgb, env.a), fill, coneFade);
     const Fenv = select(edged, fresnelF82(f0, u.edgeTint, NoV), fresnelSchlick(f0, NoV));
 
-    // CERAMIC keeps a wrapped diffuse term. Not Lambert and not physical — it stands in for
+    // CERAMIC keeps a wrapped diffuse term. Not Lambert and not physical, it stands in for
     // subsurface scattering, which is most of why unglazed clay reads as clay: light bleeds past
     // the terminator instead of stopping dead at it. PLASTIC gets plain Lambert, so the two differ
     // by their light transport rather than only by a gloss number.
-    const wrapped = select(u.kind.greaterThan(5.5), NoL, NoL.mul(0.5).add(0.5).pow(1.7));
+    const wrapped = select(u.kind.greaterThan(PLASTIC - 0.5), NoL, NoL.mul(0.5).add(0.5).pow(1.7));
     // Energy conservation: whatever the surface reflects specularly cannot also be diffused.
     const kd = vec3(1).sub(Fenv).mul(u.albedo);
     const dielectric = kd

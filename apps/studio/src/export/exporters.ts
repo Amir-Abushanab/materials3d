@@ -3,14 +3,16 @@
 
 import type { SceneConfig } from "@materials3d/core";
 import type { MaterialRenderer } from "@materials3d/core/renderer";
-import { IMAGE_FORMATS, type ExportSize, type ImageFormat } from "../output/formats";
+import { IMAGE_FORMATS, type ImageFormat } from "../output/formats";
+import { escapeHtml } from "../util/dom";
 import { download, downloadText } from "../util/download";
 import { createZip } from "./zip";
 
 /**
- * Capture a still at an exact pixel size, independent of the on-screen preview.
+ * Capture a still at the renderer's current output size. The studio pins that to the export size
+ * around the call (see `withExportSize` in main.ts), so the file is independent of the preview.
  *
- * Always rendered at `time = 0` — the frame the scene opens on — so a poster regenerated later
+ * Always rendered at `time = 0`, the frame the scene opens on, so a poster regenerated later
  * matches the first frame a visitor sees and doesn't churn in git on every re-export.
  */
 export async function saveStill(
@@ -18,20 +20,14 @@ export async function saveStill(
   name: string,
   format: ImageFormat,
   quality: number,
-  size?: ExportSize,
 ): Promise<void> {
   const definition = IMAGE_FORMATS[format];
-  if (size) renderer.setOutputSize({ width: size.width, height: size.height });
-  try {
-    const blob = await renderer.captureImage(
-      definition.mime,
-      definition.lossy ? quality : undefined,
-      0,
-    );
-    download(blob, `${name}.${definition.extension}`);
-  } finally {
-    if (size) renderer.setOutputSize(undefined);
-  }
+  const blob = await renderer.captureImage(
+    definition.mime,
+    definition.lossy ? quality : undefined,
+    0,
+  );
+  download(blob, `${name}.${definition.extension}`);
 }
 
 export function saveConfig(config: SceneConfig, name: string): void {
@@ -40,7 +36,7 @@ export function saveConfig(config: SceneConfig, name: string): void {
 
 /**
  * A single self-contained HTML file: the standalone runtime (three bundled) inlined as a module,
- * plus this config. No network at runtime, nothing to install — drop it on any host.
+ * plus this config. No network at runtime, nothing to install: drop it on any host.
  *
  * The runtime is fetched from the studio's own origin, where vite serves the core package's
  * `build:standalone` output.
@@ -52,16 +48,12 @@ export async function exportEmbedHtml(config: SceneConfig, name: string): Promis
 
 /**
  * JSON destined for the inside of a `<script>` block. `JSON.stringify` alone is not enough: the
- * HTML parser ends the script at the first `</script`, wherever it appears — a shape or group
+ * HTML parser ends the script at the first `</script`, wherever it appears: a shape or group
  * named "</script>" would truncate the module and leave the rest as markup. `<` parses
  * back to `<` inside the JS string literal, so the payload is unchanged.
  */
 function jsonForScript(value: unknown): string {
   return JSON.stringify(value).replaceAll("<", "\\u003C");
-}
-
-function escapeHtml(text: string): string {
-  return text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 }
 
 /** The embed document itself. Shared by the .html export and the wallpaper folder. */
@@ -104,7 +96,7 @@ async function buildEmbedHtml(config: SceneConfig, name: string): Promise<string
 
 /**
  * A wallpaper folder (.zip): the embed HTML plus a Wallpaper Engine `project.json`, a Lively
- * `LivelyInfo.json` and a preview frame — so the one zip imports as a live web wallpaper into
+ * `LivelyInfo.json` and a preview frame, so the one zip imports as a live web wallpaper into
  * either app without any repackaging.
  */
 export async function exportWallpaperFolder(

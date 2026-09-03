@@ -1,10 +1,10 @@
 /**
  * Type-level proof that `onReady` hands back the engine that was actually asked for.
  *
- * Nothing imports this, by design — it is listed in `knip.json`'s ignore for exactly that
+ * Nothing imports this, by design, it is listed in `knip.json`'s ignore for exactly that
  * reason. It is a compile-time test, so it has no runtime form and no test runner: if the conditional in
  * `EngineFor` regresses, `pnpm typecheck` fails here. That matters because the failure it guards
- * against is silent — the WebGPU path really does construct a `NodeMaterialRenderer`, and typing
+ * against is silent, the WebGPU path really does construct a `NodeMaterialRenderer`, and typing
  * it as the WebGL class was true of neither engine's members.
  */
 import { createMaterials, type EngineFor } from "../createMaterials";

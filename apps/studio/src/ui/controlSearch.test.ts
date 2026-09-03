@@ -2,8 +2,8 @@
 /**
  * The control search, against a REAL Tweakpane DOM rather than a hand-written fixture.
  *
- * The filter is entirely a set of assumptions about Tweakpane's class names — `tp-fldv`, its title
- * and body, `tp-lblv_l` — and a fixture would encode those assumptions twice and then agree with
+ * The filter is entirely a set of assumptions about Tweakpane's class names (`tp-fldv`, its title
+ * and body, `tp-lblv_l`), and a fixture would encode those assumptions twice and then agree with
  * itself forever. Building an actual pane means a Tweakpane upgrade that renames a class fails
  * here, which is the only failure mode this code really has.
  */
@@ -54,7 +54,7 @@ describe("control search", () => {
   it("keeps a folder's whole contents when the FOLDER's title matches", () => {
     const host = buildPane();
     applySearch(host, "camera");
-    // Not just rows containing "camera" — of which there are none — but the section itself.
+    // Not just rows containing "camera", of which there are none, but the section itself.
     expect(visibleLabels(host)).toEqual(["focus"]);
   });
 

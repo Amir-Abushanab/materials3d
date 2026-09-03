@@ -1,8 +1,8 @@
 /**
  * The contract the shell needs from an engine, and the reason it is written down.
  *
- * There are two engines — the WebGL/GLSL {@link MaterialRenderer} and the WebGPU/TSL
- * {@link NodeMaterialRenderer} — reached through sibling dynamic imports so a bundler can ship
+ * There are two engines, the WebGL/GLSL {@link MaterialRenderer} and the WebGPU/TSL
+ * {@link NodeMaterialRenderer}, reached through sibling dynamic imports so a bundler can ship
  * only the one a consumer asked for. Typing the shell against one of them directly would make the
  * other's loader unassignable, and widening to a union would leak engine choice into every call
  * site. Naming the surface instead keeps the two interchangeable and states exactly what a new
@@ -16,18 +16,21 @@ import type { ItemConfig, LampConfig, MotionConfig, PostConfig, SceneConfig } fr
  *
  * Deliberately WITHOUT the material: the two engines hold different material classes from
  * different three builds, and naming either here would pull that build into the other's bundle and
- * defeat the code split. Everything the shell and the studio actually reach for — the mesh, the
- * config it came from, its motion and its authored pose — is renderer-agnostic anyway.
+ * defeat the code split. Everything the shell and the studio actually reach for, the mesh, the
+ * config it came from, its motion and its authored pose, is renderer-agnostic anyway.
  */
 export interface EngineItem {
   readonly mesh: THREE.Mesh;
-  readonly config: ItemConfig | null | undefined;
+  readonly config: ItemConfig | null;
   motion: MotionConfig;
   phase: number;
   readonly home: THREE.Vector3;
   readonly homeRotation: THREE.Euler;
   readonly homeScale: THREE.Vector3;
 }
+
+/** Called once per rendered frame with the scene time, the frame delta and the live items. */
+export type FrameCallback = (time: number, delta: number, items: readonly EngineItem[]) => void;
 
 /**
  * The full engine surface.
@@ -38,6 +41,8 @@ export interface EngineItem {
  */
 export interface Engine {
   readonly canvas: HTMLCanvasElement;
+  /** Whether the animation loop is on (a paused scene may still be running its loop). */
+  readonly isRunning: boolean;
   start(): unknown;
   stop(): unknown;
   dispose(): void;
@@ -56,14 +61,14 @@ export interface Engine {
   refresh(): void;
   rebuild(): void;
   resetCamera(): void;
-  onFrame(callback: ((time: number) => void) | null): unknown;
+  onFrame(callback: FrameCallback | null): unknown;
 
   getItems(): readonly EngineItem[];
-  remove(item: never): void;
+  remove(item: EngineItem): void;
   clear(): void;
 
   pick(clientX: number, clientY: number): EngineItem | null;
-  projectBounds(item: never): { x: number; y: number; width: number; height: number } | null;
+  projectBounds(item: EngineItem): { x: number; y: number; width: number; height: number } | null;
   pointOnDragPlane(
     clientX: number,
     clientY: number,

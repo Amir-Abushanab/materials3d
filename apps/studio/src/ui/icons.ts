@@ -3,11 +3,13 @@
  *
  * Tweakpane has no icon API, so the panel labels its folders and buttons with a leading emoji and
  * this module swaps them for stroke icons after the pane is built. Emoji would work, but they
- * render at whatever weight and colour the platform font decides — next to a near-white studio
+ * render at whatever weight and colour the platform font decides; next to a near-white studio
  * render that reads as noise, and the same panel looks different on every OS.
  *
  * Icons are drawn on a 16×16 grid at 13px, so anything with more than a few strokes turns to mush.
  */
+
+import { escapeHtml, injectStyle } from "../util/dom";
 
 const STROKE = 1.5;
 
@@ -16,7 +18,7 @@ function svg(inner: string): string {
 }
 
 /** Buttons: keyed by the emoji that prefixes their title. */
-export const BUTTON_ICONS: Record<string, string> = {
+const BUTTON_ICONS: Record<string, string> = {
   "🎲": svg(
     '<path d="M1.6 4.6 8 1.2l6.4 3.4L8 8 1.6 4.6Z"/><path d="M1.6 4.6v6.8L8 14.8V8"/><path d="M14.4 4.6v6.8L8 14.8"/>',
   ),
@@ -48,7 +50,7 @@ export const BUTTON_ICONS: Record<string, string> = {
   "🌍": svg(
     '<circle cx="8" cy="8" r="6"/><path d="M2 8h12"/><ellipse cx="8" cy="8" rx="2.7" ry="6"/>',
   ),
-  // A frame with a play mark — picking a video source, not recording one (that is the dot above).
+  // A frame with a play mark: picking a video source, not recording one (that is the dot above).
   "🎞": svg(
     '<rect x="1.9" y="3.6" width="12.2" height="8.8" rx="1.2"/><path d="M6.7 6.3 10.6 8l-3.9 1.7z" fill="currentColor" stroke="none"/>',
   ),
@@ -74,17 +76,17 @@ export const BUTTON_ICONS: Record<string, string> = {
 };
 
 /** Folder headers: keyed by the folder title, so titles must stay in sync with these keys. */
-export const FOLDER_ICONS: Record<string, string> = {
+const FOLDER_ICONS: Record<string, string> = {
   // A dot with rays: the lamp field behind the glass.
   Lamps: svg(
     '<circle cx="8" cy="8" r="2.6"/><path d="M8 1.7v1.6M8 12.7v1.6M1.7 8h1.6M12.7 8h1.6M3.6 3.6l1.1 1.1M11.3 11.3l1.1 1.1M3.6 12.4l1.1-1.1M11.3 4.7l1.1-1.1"/>',
   ),
-  // A plane behind a shape, seen in section — the backplate the refracted ray is cast at.
+  // A plane behind a shape, seen in section: the backplate the refracted ray is cast at.
   Backplate: svg('<path d="M2 3.4h12v8.2H2z"/><path d="M5.6 6.2h4.8v6.4H5.6z" fill="#0000"/>'),
   Camera: svg(
     '<rect x="1.9" y="4.9" width="12.2" height="8.2" rx="1.2"/><circle cx="8" cy="9" r="2.2"/><path d="M5.7 4.9 6.7 3.1h2.6l1 1.8"/>',
   ),
-  // An aperture blade ring — the post stack is mostly depth of field.
+  // An aperture blade ring: the post stack is mostly depth of field.
   Post: svg(
     '<circle cx="8" cy="8" r="5.6"/><path d="M8 2.4 5.2 12.6M8 2.4l5.2 7.4M2.8 9.8h10.4"/>',
   ),
@@ -92,7 +94,7 @@ export const FOLDER_ICONS: Record<string, string> = {
   Shapes: svg(
     '<rect x="1.8" y="3.4" width="2.6" height="9.2" rx="1.3"/><ellipse cx="8.4" cy="8" rx="2.3" ry="4.6"/><path d="M13 4.6l1.4.9v3l-1.4.9-1.4-.9v-3z"/>',
   ),
-  // A leaning barrel and its arc — a shape rolling on a shared axis.
+  // A leaning barrel and its arc: a shape rolling on a shared axis.
   Motion: svg(
     '<path d="M2.2 11.4c3.4-4.6 8.2-4.6 11.6 0"/><path d="M3 13.2h10"/><path d="M8 4.2v3"/>',
   ),
@@ -102,7 +104,7 @@ export const FOLDER_ICONS: Record<string, string> = {
   Material: svg('<path d="m8 1.9 1.4 4.1 4.1 1-4.1 1L8 12.1 6.6 8l-4.1-1 4.1-1z"/>'),
   Output: svg('<path d="M2 3.2h12v9.6H2z"/><path d="M5.2 12.8v1.5M10.8 12.8v1.5M4 14.3h8"/>'),
   Actions: svg('<path d="M8.5 1.6 3 9h3.4L7 14.4 13 7H9.6z"/>'),
-  // A framed grid — the preview aids, not the scene.
+  // A framed grid: the preview aids, not the scene.
   View: svg(
     '<rect x="2" y="2.6" width="12" height="10.8" rx="1.3"/><path d="M6 2.6v10.8M10 2.6v10.8M2 6.2h12M2 9.8h12"/>',
   ),
@@ -122,7 +124,7 @@ function mouse(inner: string): string {
   return `<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="1.5" width="9" height="13" rx="4.5"/>${inner}</svg>`;
 }
 
-/** A filled QUARTER of the mouse body — centre line out to the edge, down to where the buttons
+/** A filled QUARTER of the mouse body, centre line out to the edge, down to where the buttons
  *  end. A smaller mark reads as a smudge at this size rather than as "this button". */
 const LEFT_BUTTON =
   '<path d="M8 1.55v5.4H3.55V6A4.45 4.45 0 0 1 8 1.55Z" fill="currentColor" stroke="none"/>';
@@ -139,7 +141,7 @@ export const GESTURE_ICONS = {
   wheel: mouse(
     `${DIVIDER}<path d="M8 1.6v5.3"/><rect x="7.1" y="2.6" width="1.8" height="3.2" rx=".9" fill="currentColor" stroke="none"/>`,
   ),
-  /** A selection box with its corner handles — the scale affordance. */
+  /** A selection box with its corner handles: the scale affordance. */
   handles: svg(
     '<rect x="3.6" y="3.6" width="8.8" height="8.8" rx="1"/><rect x="1.7" y="1.7" width="3.2" height="3.2" rx=".6" fill="currentColor" stroke="none"/><rect x="11.1" y="11.1" width="3.2" height="3.2" rx=".6" fill="currentColor" stroke="none"/>',
   ),
@@ -147,41 +149,25 @@ export const GESTURE_ICONS = {
   key: svg('<rect x="1.6" y="4.2" width="12.8" height="7.6" rx="1.8"/><path d="M4.9 8h6.2"/>'),
 };
 
-/**
- * Folder titles and button labels can carry user-authored text (a group's name reaches its folder
- * title verbatim, and configs arrive from share URLs and pasted JSON), so anything read back off
- * the pane must be escaped before it is re-inserted through `innerHTML`.
- */
-function escapeHtml(text: string): string {
-  return text
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;");
-}
-
 const STYLE_ID = "g3-icon-style";
+const CSS =
+  ".g3-ic{display:inline-flex;align-items:center;vertical-align:-2px;margin-right:6px;opacity:.8}";
 
-function injectStyleOnce(): void {
-  if (document.getElementById(STYLE_ID)) return;
-  const style = document.createElement("style");
-  style.id = STYLE_ID;
-  style.textContent =
-    ".g3-ic{display:inline-flex;align-items:center;vertical-align:-2px;margin-right:6px;opacity:.8}";
-  document.head.appendChild(style);
-}
-
-/** A group's folder header, keyed by CLASS rather than by title — a group's title is whatever the
+/** A group's folder header, keyed by CLASS rather than by title: a group's title is whatever the
  *  author called it, so there is no fixed name to look up. Same mark as the group button. */
 const GROUP_ICON = BUTTON_ICONS["⛓"];
 
 /**
  * Swap leading emoji on buttons, and add an icon to each folder header, inside `container`.
- * Idempotent — safe to re-run after a label changes (the export button retitles itself when the
+ * Idempotent: safe to re-run after a label changes (the export button retitles itself when the
  * image format changes).
+ *
+ * Folder titles and button labels can carry user-authored text (a group's name reaches its folder
+ * title verbatim, and configs arrive from share URLs and pasted JSON), so anything read back off
+ * the pane is escaped before it is re-inserted through `innerHTML`.
  */
 export function applyIcons(container: HTMLElement): void {
-  injectStyleOnce();
+  injectStyle(STYLE_ID, CSS);
 
   for (const el of container.querySelectorAll<HTMLElement>(".tp-btnv_t")) {
     const text = el.textContent ?? "";

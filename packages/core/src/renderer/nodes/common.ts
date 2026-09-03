@@ -1,23 +1,23 @@
 /**
- * Shared TSL node helpers — the node-graph counterpart of `shaders.ts`'s GLASS_CHUNK and its
+ * Shared TSL node helpers, the node-graph counterpart of `shaders.ts`'s GLASS_CHUNK and its
  * colour utilities.
  *
  * Three conventions here are load-bearing rather than stylistic, and all three cost real time:
  *
  * A NODE'S ASSIGNMENT IS EMITTED WHERE IT IS FIRST BUILT, and building follows a walk of the
  * returned graph rather than the order the JavaScript reads. So a value first reached through the
- * argument of something containing a `Loop` — or an `If` — has its assignment written INSIDE that
+ * argument of something containing a `Loop`, or an `If`, has its assignment written INSIDE that
  * body, and every later use reads whatever the last iteration left, or nothing at all when the
  * loop's bound is zero. In this engine that put `view` inside the prism's plane walk: on any shape
  * with no planes the loop never ran, `view` stayed the zero vector, and every Fresnel term in the
- * material collapsed to grazing incidence — a white shell where the glass should be. Nothing about
+ * material collapsed to grazing incidence, a white shell where the glass should be. Nothing about
  * it is visible in the TypeScript; it shows only in the generated GLSL. `.toVar()` at the point of
  * definition pins the assignment to the enclosing scope, which is why anything shared across a
  * loop boundary carries one.
  *
  * TSL is imported from `three/webgpu`, never from `three/tsl`. The two entry points are separate
  * module instances with separate node registries, so a node built by one and handed to a renderer
- * created by the other fails its weak-map lookup with "Invalid value used as weak map key" — an
+ * created by the other fails its weak-map lookup with "Invalid value used as weak map key", an
  * error that names nothing useful and only appears once something actually draws.
  *
  * Every `Fn` argument carries a precise node type (`Vec`, not `Node`). three's TSL types
@@ -26,7 +26,7 @@
  *
  * `Vec` is a deliberate, narrow relaxation. three's TSL `.d.ts` types combinators like `select`
  * and `mix` as returning a component-erased node, so a perfectly valid `cross(select(...), f)`
- * fails to typecheck with "Node<'float'> is not assignable to Vec3" — the annotation is wrong, not
+ * fails to typecheck with "Node<'float'> is not assignable to Vec3", the annotation is wrong, not
  * the shader. Rather than contort every such expression, the graph is written against a relaxed
  * alias and its correctness is established by RENDERING it: node code is duck-typed at runtime, so
  * a type error here would surface as a shader that does not compile, which the pass tests catch
@@ -34,9 +34,12 @@
  */
 import { TSL } from "three/webgpu";
 
-/** See the note above: a node whose component type three's `.d.ts` cannot track through `select`
- *  and `mix`. Used only for `Fn` parameters and locals, never on an exported boundary. */
-type Vec = any;
+/**
+ * The relaxed node type: a node whose component type three's `.d.ts` cannot track through `select`
+ * and `mix`. Declared ONCE, here, for every nodes module and the renderer, so the relaxation the
+ * note above justifies has a single place to be narrowed from.
+ */
+export type Vec = any;
 
 const { Fn, float, vec2, vec3 } = TSL;
 
@@ -50,39 +53,41 @@ const { Fn, float, vec2, vec3 } = TSL;
  * carried by the graph at runtime either way.
  */
 // CONDITION FIRST. three's signature is `select(cond, ifTrue, ifFalse)`, and writing it the other
-// way round passes a colour as the predicate — which compiles, renders, and is wrong everywhere.
-const select = (cond: Vec, ifTrue: Vec, ifFalse: Vec): Vec => TSL.select(cond, ifTrue, ifFalse);
-const mix = (a: Vec, b: Vec, t: Vec): Vec => TSL.mix(a, b, t);
-const cross = (a: Vec, b: Vec): Vec => TSL.cross(a, b);
-const normalize = (v: Vec): Vec => TSL.normalize(v);
-const length = (v: Vec): Vec => TSL.length(v);
-const cos = (v: Vec): Vec => TSL.cos(v);
-const sin = (v: Vec): Vec => TSL.sin(v);
+// way round passes a colour as the predicate, which compiles, renders, and is wrong everywhere.
+export const select = (cond: Vec, ifTrue: Vec, ifFalse: Vec): Vec =>
+  TSL.select(cond, ifTrue, ifFalse);
+export const mix = (a: Vec, b: Vec, t: Vec): Vec => TSL.mix(a, b, t);
+export const cross = (a: Vec, b: Vec): Vec => TSL.cross(a, b);
+export const normalize = (v: Vec): Vec => TSL.normalize(v);
+export const length = (v: Vec): Vec => TSL.length(v);
+export const cos = (v: Vec): Vec => TSL.cos(v);
+export const sin = (v: Vec): Vec => TSL.sin(v);
+export const max = (a: Vec, b: Vec): Vec => TSL.max(a, b);
+export const reflect = (i: Vec, n: Vec): Vec => TSL.reflect(i, n);
+export const refract = (i: Vec, n: Vec, eta: Vec): Vec => TSL.refract(i, n, eta);
+
+/** The golden angle in radians, spacing every spiral gather here exactly as the GLSL twins do. */
+export const GOLDEN_ANGLE = 2.39996323;
+
+/** The two-channel linear depth the depth passes write, read back as `x + y / 255`. */
+export const decodeDepth = (rg: Vec): Vec => rg.x.add(rg.y.div(255));
 
 // ---------------------------------------------------------------------------
 // Colour transfer
 // ---------------------------------------------------------------------------
 
 /**
- * Display to linear, ON THE DISPLAY RANGE ONLY.
- *
- * The curve is defined on [0,1] and several of this renderer's targets are HDR, where the beam
- * sits in the hundreds. Feeding that to the transfer function is not an approximation but a
- * different function — 500 comes back as 2.6 million — and anything that then blurs it spreads a
- * number that size across the frame. Above one the value is already radiance and passes through.
- */
-/**
  * Square a value. `x.mul(x)`, never `x.pow(2)`.
  *
  * WGSL leaves `pow(e1, e2)` undefined for a negative `e1`, and Tint does not merely return NaN for
- * it: when both operands fold to constants — which they do whenever the expression sits in an
- * UNROLLED loop over literal indices — it rejects the whole shader module at parse time with
+ * it: when both operands fold to constants, which they do whenever the expression sits in an
+ * UNROLLED loop over literal indices, it rejects the whole shader module at parse time with
  * "cannot be represented as 'abstract-float'". One such expression takes down every pipeline built
  * from that material, so the scene renders as nothing at all.
  *
  * It is invisible in testing on a software adapter: SwiftShader's WGSL front end accepts the same
  * expression that a Metal- or Vulkan-backed Chrome refuses, so this only ever fails on a real GPU.
- * That is the whole reason it is a named helper rather than a note — grep for `.pow(2)` before
+ * That is the whole reason it is a named helper rather than a note, grep for `.pow(2)` before
  * believing a shader is fine.
  *
  * No `.toVar()`: this is called from inside `Fn` bodies AND from graph-building helpers that run
@@ -91,6 +96,14 @@ const sin = (v: Vec): Vec => TSL.sin(v);
  */
 export const sq = (x: Vec): Vec => x.mul(x);
 
+/**
+ * Display to linear, ON THE DISPLAY RANGE ONLY.
+ *
+ * The curve is defined on [0,1] and several of this renderer's targets are HDR, where the beam
+ * sits in the hundreds. Feeding that to the transfer function is not an approximation but a
+ * different function: 500 comes back as 2.6 million, and anything that then blurs it spreads a
+ * number that size across the frame. Above one the value is already radiance and passes through.
+ */
 export const srgbToLinear = Fn(([c]: [Vec]) => {
   const v = c.max(vec3(0));
   const clamped = v.min(vec3(1));
@@ -114,7 +127,7 @@ export const linearToSrgb = Fn(([c]: [Vec]) => {
   );
 });
 
-/** Narkowicz's ACES fit — more contrast than the neutral curve, at the cost of a hue shift. */
+/** Narkowicz's ACES fit, more contrast than the neutral curve, at the cost of a hue shift. */
 export const tonemapAces = Fn(([v]: [Vec]) => {
   const c = v.max(vec3(0));
   return c
@@ -157,7 +170,7 @@ export const tonemapNeutral = Fn(([value]: [Vec]) => {
 // ---------------------------------------------------------------------------
 
 /**
- * Bright ceiling, dimmer floor — the ramp a surface falls back on when no room is configured.
+ * Bright ceiling, dimmer floor, the ramp a surface falls back on when no room is configured.
  *
  * NEUTRAL and narrow: 0.55 to 1.02 over the middle of the sweep, not a tinted ramp from near-black.
  * It stands in for a room whose walls are all lit, so a metal reflecting it reads as being indoors
@@ -172,7 +185,7 @@ export const studioGradient = Fn(([rd]: [Vec]) =>
  * How much of one rectangular panel a ray sees: the panel projected onto the sphere, feathered at
  * its border.
  *
- * The feather is not decoration — an unfeathered edge aliases badly in a mirror-smooth reflection,
+ * The feather is not decoration, an unfeathered edge aliases badly in a mirror-smooth reflection,
  * where one pixel can straddle the whole transition.
  */
 const panelMask = Fn(([direction, forward, size, feather]: [Vec, Vec, Vec, Vec]) => {
@@ -203,7 +216,7 @@ export const studioSoftbox = Fn(([rd]: [Vec]) => {
   const back = panelMask(d, vec3(-0.82, 0.08, 0.57), vec2(1.35, 1.1), float(0.22))
     .mul(vec3(0.82, 0.84, 0.88))
     .mul(0.011);
-  // The 0.707s are the GLSL's own literals, not an approximation of `Math.SQRT1_2` — see the note
+  // The 0.707s are the GLSL's own literals, not an approximation of `Math.SQRT1_2`, see the note
   // on PI in `nodes/brdf`. Rounding them differently moves the softbox and fails parity.
   // oxlint-disable-next-line approx-constant
   const fill = panelMask(d, vec3(0, -0.707, 0.707), vec2(0.38, 0.62), float(0.18))
@@ -215,7 +228,7 @@ export const studioSoftbox = Fn(([rd]: [Vec]) => {
     .mul(20.0);
   const total = room.add(back).add(fill).add(key);
   // The reference replays a gamma-2.2 encode followed by an sRGB decode. The two curves very
-  // nearly cancel, and the small mismatch between them is deliberate — dropping either is not a
+  // nearly cancel, and the small mismatch between them is deliberate, dropping either is not a
   // simplification but a different room. Without both, the interior reads black and every wedge of
   // the traced fan glows.
   return srgbToLinear(
@@ -266,7 +279,7 @@ export const envLod = Fn(([cone, ddxR, ddyR, texelAngle, levels]: [Vec, Vec, Vec
 // ---------------------------------------------------------------------------
 
 /**
- * The room, either analytic or baked — the twin of GLASS_CHUNK's `studio()`.
+ * The room, either analytic or baked, the twin of GLASS_CHUNK's `studio()`.
  *
  * A function of the mode UNIFORM rather than a JavaScript branch, because the bake pass and every
  * material that falls back to the analytic room have to agree about what the room contains. Two
@@ -284,7 +297,7 @@ export const studioRoom = Fn(([rd, softbox, gain]: [Vec, Vec, Vec]) =>
  * 3f²-2f³ makes the interpolation C1 across texel boundaries at no extra fetch.
  *
  * The level is EXPLICIT, never a bias. A bias is applied on top of whatever the hardware derives
- * from the fragment's own footprint, which for a reflection is meaningless — the footprint of the
+ * from the fragment's own footprint, which for a reflection is meaningless, the footprint of the
  * DIRECTION is exactly what `envLod` already accounted for.
  */
 export const sampleEnv = (map: Vec, size: Vec) =>
@@ -316,7 +329,7 @@ export interface RoomUniforms {
 /**
  * The room as a surface actually sees it: sharp for a mirror, a wider cone as it roughens.
  *
- * `select` is a ternary, not a branch, so both sides are evaluated — which is what makes the
+ * `select` is a ternary, not a branch, so both sides are evaluated, which is what makes the
  * derivatives here safe. Taking `dFdx` inside a real conditional is undefined where the quad
  * diverges, and a reflection off a curved surface diverges constantly.
  */
@@ -331,10 +344,11 @@ export const studioCone = (u: RoomUniforms) => {
   );
 };
 
+/** The sine hash the finish pass's paper grain reads. Not the wall's hash; see `hash12`. */
 export const hash21 = Fn(([p]: [Vec]) => p.dot(vec2(127.1, 311.7)).sin().mul(43758.5453).fract());
 
 /**
- * The value-noise hash — Hoskins' sine-free one, and the twin of NOISE_CHUNK's `hash12`.
+ * The value-noise hash. Hoskins' sine-free one, and the twin of NOISE_CHUNK's `hash12`.
  *
  * NOT `hash21`. That one is `fract(sin(...) * 43758)`, and while the two are interchangeable as
  * noise they are not the same numbers: this graph used `hash21` where the GLSL engine has always

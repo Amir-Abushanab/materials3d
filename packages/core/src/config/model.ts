@@ -1,7 +1,7 @@
 /**
  * The Materials3D configuration schema: plain JSON that drives the renderer, the studio panel and
  * every export. A scene is a set of glass shapes, a bounded field of lamps *behind* them, a
- * camera, and a post stack — see the technique notes for why each of those is shaped this way.
+ * camera, and a post stack, see the technique notes for why each of those is shaped this way.
  */
 
 import { clamp, clamp01 } from "../util/math";
@@ -11,12 +11,12 @@ import { outlineFromSvg } from "../util/svg";
  *  breaks at `lamps.length`, so unused slots cost nothing at runtime. */
 export const MAX_LAMPS = 12;
 
+/** Bounding planes a traced solid may carry: a square prism's four sides plus two caps. */
+export const PRISM_PLANES = 6;
+
 /** Grounded-footprint slots the wall's contact shadow walks, and the most sides one may have.
  *  Shared: the GLSL engine injects them as `#define`s, the node graph unrolls to them, and the
  *  parity harness needs the same numbers to compile the chunk on its own. */
-/** Bounding planes a traced solid may carry — a square prism's four sides plus two caps. */
-export const PRISM_PLANES = 6;
-
 export const GROUND_SLOTS = 4;
 export const GROUND_MAX_SIDES = 8;
 
@@ -36,17 +36,18 @@ export interface Vec3 {
 }
 
 /** How the backdrop is painted behind the glass. */
-export type BackgroundMode = "color" | "gradient" | "image" | "wall";
+export type BackgroundMode = (typeof BACKGROUND_MODES)[number];
 
 /** How the palette is mapped across the backdrop. */
-export type GradientType = "linear" | "radial" | "conic" | "mesh";
+export type GradientType = (typeof GRADIENT_TYPES)[number];
 
 /** How a background image is fitted to the frame. */
-export type BackgroundImageFit = "cover" | "contain" | "stretch";
+export type BackgroundImageFit = (typeof BACKGROUND_IMAGE_FITS)[number];
 
-export const BACKGROUND_MODES: readonly BackgroundMode[] = ["color", "gradient", "image", "wall"];
-export const GRADIENT_TYPES: readonly GradientType[] = ["linear", "radial", "conic", "mesh"];
-export const BACKGROUND_IMAGE_FITS: readonly BackgroundImageFit[] = ["cover", "contain", "stretch"];
+// Every kind/mode union in this file is derived from its runtime list, so the two cannot drift.
+export const BACKGROUND_MODES = ["color", "gradient", "image", "wall"] as const;
+export const GRADIENT_TYPES = ["linear", "radial", "conic", "mesh"] as const;
+export const BACKGROUND_IMAGE_FITS = ["cover", "contain", "stretch"] as const;
 
 export const MAX_STOPS = 8;
 export const MAX_MESH_POINTS = 8;
@@ -67,7 +68,7 @@ export interface MeshGradientPoint {
 }
 
 /**
- * One soft Gaussian lamp in plate space — the coordinate system of the backplate that hangs
+ * One soft Gaussian lamp in plate space, the coordinate system of the backplate that hangs
  * behind the scene, where (0,0) is one corner and (1,1) the other after `plate.scale`/`offset`.
  *
  * Lamps are *bounded*: `r` is a Gaussian radius, and the coverage gate (`lampGate`) crushes the
@@ -82,7 +83,7 @@ export interface LampConfig {
   color: string;
   /** Weight multiplier for this lamp (1 = full). */
   intensity: number;
-  /** Input→param bindings driving THIS lamp (x/y/radius/intensity) — the "lamp follows the
+  /** Input→param bindings driving THIS lamp (x/y/radius/intensity), the "lamp follows the
    *  cursor" hook. ABSENT ⇒ inert. Declared as a forward reference; see the interaction section. */
   bindings?: LampInteractionBinding[];
 }
@@ -102,14 +103,14 @@ export interface BeamConfig {
    * Names of the items the beam refracts THROUGH, so their cross-sections are derived from those
    * items' shapes and {@link radius}, {@link sides} and {@link rotation} are ignored.
    *
-   * More than one and the beam crosses them all, in whatever ORDER it happens to reach them — the
+   * More than one and the beam crosses them all, in whatever ORDER it happens to reach them, the
    * order is found by the tracer, not given here, so moving a shape reroutes the light without
    * anything being re-authored. Between solids the ray travels in air carrying the direction it
    * left with, which is where the spectrum does most of its visible separating: a fan leaving one
    * prism arrives at the next already spread, and every wavelength then refracts on its own terms.
    *
-   * A named item whose shape has no convex cross-section — a `ring` is an annulus, `slab` and
-   * `arrow` are extrusions rather than lathes — is skipped rather than approximated by a circle.
+   * A named item whose shape has no convex cross-section, a `ring` is an annulus, `slab` and
+   * `arrow` are extrusions rather than lathes, is skipped rather than approximated by a circle.
    *
    * Those three describe the same solid as the item does, and keeping the two in step by hand is
    * the single easiest way to get a scene that is subtly wrong: change the item's kind and the
@@ -132,7 +133,7 @@ export interface BeamConfig {
   z: number;
   /**
    * Which polygon edge the beam enters through, as an index. Ignored when {@link entryAngle} is
-   * set, and unusable on a round cross-section — see there.
+   * set, and unusable on a round cross-section, see there.
    *
    * With `sides: 3` and the default rotation, 0 is the upper-left face.
    */
@@ -142,7 +143,7 @@ export interface BeamConfig {
    *
    * The alternative to {@link face} plus {@link entry}, and the only one that works on anything
    * round: a circle is traced as ninety-six facets under four degrees each, so a face index picks
-   * one of them and `entry` then slides the impact point within it — a handle with nothing to
+   * one of them and `entry` then slides the impact point within it, a handle with nothing to
    * drive. An angle is continuous, means the same thing on a triangle and on a circle, and does
    * not change what it points at when the subdivision does.
    *
@@ -165,7 +166,7 @@ export interface BeamConfig {
    * Measured from the normal rather than from world X, and that is what makes the beam drivable:
    * an angle in world space couples how steeply the beam strikes to where it strikes, so sweeping
    * it slides the entry point off the face within a degree or two. From the normal the two are
-   * independent — {@link entry} moves the point of impact and this moves the angle, and the pointer
+   * independent, {@link entry} moves the point of impact and this moves the angle, and the pointer
    * can drive them on separate axes.
    *
    * Past the critical angle the beam totally internally reflects and bounces inside the glass
@@ -174,17 +175,17 @@ export interface BeamConfig {
    */
   incidence: number;
   /** Where along that face the beam lands, 0–1. Inset automatically so the beam's full width
-   *  stays on the face — the footprint grows as 1/cos(incidence), so the inset does too. */
+   *  stays on the face, the footprint grows as 1/cos(incidence), so the inset does too. */
   entry: number;
   /** How far back along the beam the source sits, in world units. Only has to clear the frame. */
   distance: number;
   /** Ribbon half-width, in world units. */
   width: number;
-  /** Cauchy base index — the index at infinite wavelength, NOT at 550nm. Across the visible band
+  /** Cauchy base index, the index at infinite wavelength, NOT at 550nm. Across the visible band
    *  the real index sits well above this; `BEAM_DISPERSION` in `presets.ts` carries matched
    *  base/strength pairs for stylised, crown and flint glass. */
   ior: number;
-  /** Cauchy strength term — how wide the rainbow fans. 0 still bends the beam but leaves it
+  /** Cauchy strength term, how wide the rainbow fans. 0 still bends the beam but leaves it
    *  white. */
   dispersion: number;
   /** Wavelength vertices. The fan is a connected sheet spanning adjacent wavelengths, so this
@@ -210,7 +211,7 @@ export interface BeamConfig {
    * glass to 1 at the wall.
    *
    * This is most of what makes a fan read as light spreading out rather than as a painted stripe.
-   * At the reference's 3.8 / 3.7 it is roughly a 280× falloff across the frame — the spectrum is
+   * At the reference's 3.8 / 3.7 it is roughly a 280× falloff across the frame, the spectrum is
    * brilliant leaving the prism and nearly gone by the far edge. A plain exponential was tried in
    * the reference and rejected for putting a second abrupt fade near the wall.
    */
@@ -220,7 +221,7 @@ export interface BeamConfig {
    * The caustic: the beam drawn a second time as light landing on the wall.
    *
    * 0 strength turns it off. Its own falloff scales are deliberately far gentler than the beam's,
-   * so it is still going where the beam's glow has died — which is the relationship between a
+   * so it is still going where the beam's glow has died, which is the relationship between a
    * light and the surface it lights.
    */
   causticStrength: number;
@@ -287,23 +288,23 @@ export interface PlateConfig {
 /**
  * How the authored framing is reconciled with a canvas whose aspect differs from {@link FRAME_ASPECT}.
  *
- * - `cover`   — fill both axes and crop the overflow. The default and the hero look: a square or
+ * - `cover`, fill both axes and crop the overflow. The default and the hero look: a square or
  *               portrait export keeps the shapes at their authored size and loses the ends of a
  *               wide row.
- * - `contain` — show the whole authored frame, revealing world beyond it on the long axis. What
+ * - `contain`, show the whole authored frame, revealing world beyond it on the long axis. What
  *               you want when a wide arrangement has to survive a square crop intact. Reveals more
  *               of the backplate, so check `plate.scale` still covers the frame.
- * - `width`   — hold the horizontal composition identical at every aspect.
- * - `height`  — hold the vertical composition identical. Three's own behaviour for a perspective
+ * - `width`, hold the horizontal composition identical at every aspect.
+ * - `height`, hold the vertical composition identical. Three's own behaviour for a perspective
  *               camera, and what Materials3D did before `fit` existed.
  */
-export type CameraFit = "cover" | "contain" | "width" | "height";
+export type CameraFit = (typeof CAMERA_FITS)[number];
 
 /** Runtime whitelist for {@link CameraFit} (validating imported/serialized configs). */
-export const CAMERA_FITS: readonly CameraFit[] = ["cover", "contain", "width", "height"];
+export const CAMERA_FITS = ["cover", "contain", "width", "height"] as const;
 
 /**
- * The aspect the presets are composed against — every `fit` is a policy for reconciling a canvas
+ * The aspect the presets are composed against, every `fit` is a policy for reconciling a canvas
  * against THIS rectangle, and at this aspect all four fits are identical.
  */
 export const FRAME_ASPECT = 16 / 9;
@@ -322,7 +323,7 @@ export interface CameraConfig {
   lookAt: Vec3;
   height: number;
   /**
-   * Camera roll in DEGREES — tilting the camera body, so the whole composition rotates in frame.
+   * Camera roll in DEGREES, tilting the camera body, so the whole composition rotates in frame.
    *
    * Degrees rather than radians to match `fov` in this same object; the rest of the config uses
    * radians, but a camera's numbers are conventionally degrees and mixing units inside one object
@@ -334,7 +335,7 @@ export interface CameraConfig {
   /**
    * Floor on how much of the authored frame WIDTH must stay visible, as a fraction. A pure zoom
    * ceiling layered on the fit: it can only widen the view, never tighten it, so it is inert for
-   * `contain`/`width` and bites exactly where the crop hurts — `cover`/`height` on a canvas
+   * `contain`/`width` and bites exactly where the crop hurts, `cover`/`height` on a canvas
    * narrower than {@link FRAME_ASPECT}. 0 disables it.
    */
   minVisibleWidth?: number;
@@ -348,7 +349,7 @@ export interface PostConfig {
   /** Maximum circle of confusion, in pixels. */
   aperture: number;
   /** Saturation-weighted bloom. A brightness-weighted bright-pass does nothing against a
-   *  near-white backdrop — the background is the brightest thing in frame. */
+   *  near-white backdrop, the background is the brightest thing in frame. */
   bloom: number;
   /** Downward saturation-weighted gather. A screen-space approximation, not light transport. */
   caustics: number;
@@ -365,7 +366,7 @@ export interface PostConfig {
    * How over-range colour is brought back into gamut.
    *
    * `"none"` clamps each channel independently, which is what every preset predating the beam
-   * tracer was calibrated against — hence the default. It is also the wrong answer the moment a
+   * tracer was calibrated against, hence the default. It is also the wrong answer the moment a
    * scene carries additive light above 1: clamping per channel drives bright colour to a primary
    * or secondary, so a spectrum clips into magenta / cyan / yellow bars. `"neutral"` compresses
    * the peak and desaturates toward it, keeping hue; `"aces"` is punchier with more hue shift.
@@ -377,7 +378,7 @@ export interface PostConfig {
    * `"gather"` is the original: a golden-angle gather at one radius, taken in the same loop as the
    * depth of field, weighted by SATURATION so it works against a near-white backdrop. Cheap, and
    * the right answer for a pale studio. `"pyramid"` thresholds highlights and blurs a four-level
-   * half-resolution pyramid instead — several octaves of halo at once, which is what a light
+   * half-resolution pyramid instead, several octaves of halo at once, which is what a light
    * SOURCE looks like as opposed to a bright object. Costs eight render targets.
    */
   bloomMode: BloomMode;
@@ -387,7 +388,7 @@ export interface PostConfig {
   // -- Light shafts ---------------------------------------------------------
   /**
    * Volumetric light streaks radiating from ({@link innerLightX}, {@link innerLightY}). A
-   * screen-space ray march over the composited frame — glass is what emits, so the shafts pick up
+   * screen-space ray march over the composited frame, glass is what emits, so the shafts pick up
    * the tint the light picked up passing through it.
    */
   innerLight: number;
@@ -413,7 +414,7 @@ export interface PostConfig {
   halftoneCell: number;
   /** Screen rotation in radians. */
   halftoneAngle: number;
-  /** Four-colour process halftone — cyan/magenta/yellow/black screens at print angles. */
+  /** Four-colour process halftone, cyan/magenta/yellow/black screens at print angles. */
   halftoneCmyk: number;
   halftoneCmykCell: number;
   /** Fibrous paper substrate shading, multiplied over the frame. */
@@ -424,7 +425,7 @@ export interface PostConfig {
 /**
  * What shading model a shape uses.
  *
- * The first four are TRANSMISSIVE and share the whole four-pass path — they refract the plate,
+ * The first four are TRANSMISSIVE and share the whole four-pass path, they refract the plate,
  * absorb along a chord, and differ only in what happens at the surface. `liquid` is glass whose
  * surface carries travelling waves: the same optics, with the normal perturbed by an animated
  * ripple field before the ray is bent. The last three are OPAQUE and take a separate branch that
@@ -434,40 +435,19 @@ export interface PostConfig {
  * turned down would just be `plastic`, and two controls that can contradict each other is worse UI
  * than one that cannot.
  */
-export type MaterialKind =
-  | "glass"
-  | "frosted"
-  | "glitter"
-  | "liquid"
-  | "metal"
-  | "ceramic"
-  | "plastic";
+export type MaterialKind = (typeof MATERIAL_KINDS)[number];
 
 /**
  * What a reflective surface sees where the lamp plate does not reach.
  *
- * `"gradient"` is the original bright-ceiling/dark-floor ramp — enough to draw a horizon across a
+ * `"gradient"` is the original bright-ceiling/dark-floor ramp, enough to draw a horizon across a
  * metal cylinder in a pale studio, and what every preset predating this was built against.
  * `"softbox"` is a sparse three-panel room (back wall, centre fill, cool key) that also feeds
  * GLASS reflections. On a dark backdrop that is the difference between a block of glass and a flat
  * silhouette, because the plate covers almost none of the hemisphere there.
  */
-export type StudioKind = "gradient" | "softbox";
-/**
- * How the room a surface reflects is evaluated.
- *
- * `"analytic"` answers "what is in this direction" exactly, per fragment, which is right for a
- * mirror and wrong for everything else — a rough surface reflects a cone, and roughness therefore
- * had to fake the difference by fading the reflection toward flat grey. That reads as chalk rather
- * than as a blurred room.
- *
- * `"baked"` rasterizes the same room once into an equirectangular texture and blurs it into a mip
- * chain, so roughness becomes a mip level and a rough metal reflects a genuinely soft version of
- * what a polished one reflects. Costs one texture and a handful of passes at startup, and is
- * CHEAPER per fragment than the analytic room it replaces.
- *
- * Default `"analytic"`, because every preset predating this was calibrated against it.
- */
+export type StudioKind = (typeof STUDIO_KINDS)[number];
+
 /**
  * How a transmissive material gathers what is behind it.
  *
@@ -475,25 +455,40 @@ export type StudioKind = "gradient" | "softbox";
  * is what every preset predating this was tuned against.
  *
  * `"cone"` casts a spread of rays instead, each with its own index and a smooth spectral weight.
- * Dispersion stops being three bins — which fringe wherever refraction moves faster than a bin is
- * wide — and roughness finally SCATTERS, gathering light from an area behind the surface rather
+ * Dispersion stops being three bins, which fringe wherever refraction moves faster than a bin is
+ * wide, and roughness finally SCATTERS, gathering light from an area behind the surface rather
  * than blurring whatever one ray happened to land on.
  */
 export const TRANSMISSION_MODES = ["simple", "cone"] as const;
 export type TransmissionMode = (typeof TRANSMISSION_MODES)[number];
 
+/**
+ * How the room a surface reflects is evaluated.
+ *
+ * `"analytic"` answers "what is in this direction" exactly, per fragment, which is right for a
+ * mirror and wrong for everything else: a rough surface reflects a cone, so roughness had to fake
+ * the difference by fading the reflection toward flat grey, which reads as chalk rather than as a
+ * blurred room.
+ *
+ * `"baked"` rasterizes the same room once into an equirectangular texture and blurs it into a mip
+ * chain, so roughness becomes a mip level and a rough metal reflects a genuinely soft version of
+ * what a polished one reflects. Costs one texture and a handful of passes at startup, and is
+ * cheaper per fragment than the analytic room it replaces.
+ *
+ * Default `"analytic"`, because every preset predating this was calibrated against it.
+ */
 export const ENVIRONMENT_MODES = ["analytic", "baked"] as const;
 export type EnvironmentMode = (typeof ENVIRONMENT_MODES)[number];
 
-export const STUDIO_KINDS: readonly StudioKind[] = ["gradient", "softbox"];
+export const STUDIO_KINDS = ["gradient", "softbox"] as const;
 
-export type BloomMode = "gather" | "pyramid";
-export const BLOOM_MODES: readonly BloomMode[] = ["gather", "pyramid"];
+export type BloomMode = (typeof BLOOM_MODES)[number];
+export const BLOOM_MODES = ["gather", "pyramid"] as const;
 
-export type ToneMap = "none" | "neutral" | "aces";
-export const TONE_MAPS: readonly ToneMap[] = ["none", "neutral", "aces"];
+export type ToneMap = (typeof TONE_MAPS)[number];
+export const TONE_MAPS = ["none", "neutral", "aces"] as const;
 
-export const MATERIAL_KINDS: readonly MaterialKind[] = [
+export const MATERIAL_KINDS = [
   "glass",
   "frosted",
   "glitter",
@@ -501,7 +496,7 @@ export const MATERIAL_KINDS: readonly MaterialKind[] = [
   "metal",
   "ceramic",
   "plastic",
-];
+] as const;
 
 /** Whether a kind refracts. The opaque kinds ignore path/density/ior/dispersion/lens/tint. */
 export function isTransmissive(kind: MaterialKind): boolean {
@@ -513,7 +508,7 @@ export function isTransmissive(kind: MaterialKind): boolean {
  *
  * From Adobe's Substance metal reference tables, which publish the same measured values the
  * Lagarde / MERL data sets do. They are quoted here in 8-bit sRGB rather than linear because
- * Materials3D authors every colour in display space on purpose — see the colour note in the renderer.
+ * Materials3D authors every colour in display space on purpose, see the colour note in the renderer.
  *
  * For a conductor this is not a "tint" applied to a grey highlight: F0 IS the surface's colour,
  * and it is why gold reflects gold at every angle instead of reflecting white with a yellow wash
@@ -542,7 +537,7 @@ export const METAL_F0: Record<string, string> = {
  * the way round. Plain Schlick cannot do that, and "gold that is uniformly gold" is one of the
  * things that reads as CG.
  *
- * These are ABSOLUTE reflectances, not multiplicative tints — OpenPBR reparameterizes the same
+ * These are ABSOLUTE reflectances, not multiplicative tints, OpenPBR reparameterizes the same
  * model multiplicatively, but Adobe publishes the direct values, and transforming published data
  * to fit a different parameterization is a good way to introduce an error nobody can later find.
  */
@@ -564,7 +559,7 @@ export const METAL_F82: Record<string, string> = {
  *
  * Applied when the kind is switched, so picking "ceramic" gives you a ceramic rather than a
  * ceramic wearing the last material's roughness. Only the fields that BELONG to the surface are
- * touched — the transmissive optics (ior, density, dispersion…) are left alone, so glass → metal →
+ * touched, the transmissive optics (ior, density, dispersion…) are left alone, so glass → metal →
  * glass still comes back to the glass you had.
  */
 export const MATERIAL_PRESETS: Record<
@@ -573,7 +568,7 @@ export const MATERIAL_PRESETS: Record<
 > = {
   // Inert for glass: it has no microfacet term.
   glass: { roughness: 0 },
-  // Ground glass — enough spread to lose the image behind, not so much it turns to fog.
+  // Ground glass, enough spread to lose the image behind, not so much it turns to fog.
   frosted: { roughness: 0.42 },
   glitter: { roughness: 0.12 },
   // The ripple field is what makes it liquid; roughness stays inert as on glass.
@@ -587,7 +582,7 @@ export const MATERIAL_PRESETS: Record<
 /** Per-shape optical properties. */
 export interface MaterialConfig {
   /**
-   * Half the optical path at normal incidence, in world units — the tube radius for a rod, half
+   * Half the optical path at normal incidence, in world units, the tube radius for a rod, half
    * the *thickness* for a disc. It feeds the Beer–Lambert chord, so passing a disc's radius
    * instead of its half-thickness saturates absorption completely and the shape turns to opaque
    * plastic. (It was called `radius` once; the name invited exactly that mistake.)
@@ -601,7 +596,7 @@ export interface MaterialConfig {
    * The default model gives glass no colour of its own: it takes chroma from whatever lamps sit
    * behind it, keeping the brightness of what is there. That is right for a pale studio full of
    * coloured light, and it has two limits. It cannot express the most recognisable property of
-   * coloured glass — thick parts more saturated than thin ones — because the tint does not depend
+   * coloured glass, thick parts more saturated than thin ones, because the tint does not depend
    * on the optical path. And a shape in a dark scene has nothing to take colour from, so the scene
    * has to invent lamps purely to give the glass something to borrow.
    *
@@ -615,21 +610,19 @@ export interface MaterialConfig {
   tint: string;
   ior: number;
   /** Per-channel IOR split. Hand-rolled rather than three's `dispersion` property, because the
-   *  whole point is the plate field — see the notes on `MeshPhysicalMaterial`. */
+   *  whole point is the plate field, see the notes on `MeshPhysicalMaterial`. */
   dispersion: number;
-  /** Rim-weighted screen-space displacement. Uniform displacement reads as frosted; edge-loaded
-   *  displacement — a near-flat window in the middle, hard bending at the rim — reads as cut. */
   /**
    * How much of the refraction is the REAL path through the glass rather than the normal offset.
    *
    * `lens` displaces by the view-space normal, weighted toward the rim. At the centre of any
-   * convex shape the normal points at the camera, so that displacement is zero there — which is
+   * convex shape the normal points at the camera, so that displacement is zero there, which is
    * right for a plate, whose middle should be a window, and wrong for a ball, whose middle is the
    * thickest part and therefore bends the most. A sphere on `lens` alone shows a flat disc where
    * it should show an inverted, magnified image of what is behind it.
    *
    * At 1 the ray is refracted at the surface, walked the MEASURED thickness, and its exit point
-   * projected — the same construction the prism tracer uses, with the back-depth pass standing in
+   * projected, the same construction the prism tracer uses, with the back-depth pass standing in
    * for an analytic exit, so it is available to any shape rather than to plane-bounded solids.
    * Needs `measuredThickness` on, since that is where the thickness comes from.
    *
@@ -641,7 +634,7 @@ export interface MaterialConfig {
    *
    * `bend` fixes a convex solid's flat middle but cannot magnify: it moves a sample around the
    * FRAME, so the furthest it can travel is bounded by the shape's own size on screen. A lens
-   * magnifies because the ray keeps going — refract at the surface, follow it to the plate, and
+   * magnifies because the ray keeps going, refract at the surface, follow it to the plate, and
    * the further back the plate hangs the more of it a given deviation sweeps across.
    *
    * Reads the analytic lamp field rather than the rendered plate, so it sees no other glass and
@@ -651,16 +644,18 @@ export interface MaterialConfig {
    * 0 is every scene authored before it existed.
    */
   magnify: number;
+  /** Rim-weighted screen-space displacement. Uniform displacement reads as frosted; edge-loaded
+   *  displacement (a near-flat window in the middle, hard bending at the rim) reads as cut. */
   lens: number;
   /**
-   * Rim highlight strength — the bright edge that sells "glass" at the silhouette.
+   * Rim highlight strength, the bright edge that sells "glass" at the silhouette.
    *
    * MEANS TWO DIFFERENT THINGS by kind, which is worth knowing before you reach for it. On the
    * opaque kinds it is a wide `pow(1 - N·V, 3)` falloff over most of the shape; on the
    * transmissive ones it mixes toward the thin-film colour inside a band near the silhouette. It
    * therefore reads strongest on a shape with real grazing area (a prism's flat facets, a ring's
    * two silhouettes) and softest on a smooth convex one, and with `iridescence` at 0 it is mixing
-   * toward near-white — so it shows on a saturated shape and barely at all on a pale one.
+   * toward near-white, so it shows on a saturated shape and barely at all on a pale one.
    */
   rim: number;
   /**
@@ -668,15 +663,15 @@ export interface MaterialConfig {
    *
    * Two of them: one nearly overhead and one low, near the lens axis. The second exists because a
    * highlight is a mirror image of the light and one light overhead is unreachable for any shape
-   * whose normals are all horizontal — an upright rod or prism could never show one at all.
+   * whose normals are all horizontal, an upright rod or prism could never show one at all.
    */
   specular: number;
   /** Chroma boost applied to the refracted colour (1 = as sampled). */
   saturation: number;
   /**
    * Rotation of the refracted colour around the hue wheel, in turns (0.5 = the opposite hue,
-   * ±1 = all the way around). It moves what the glass TRANSMITS — the borrowed lamp light or the
-   * tint — and leaves reflection, rim and film alone, so the surface still reads as the same
+   * ±1 = all the way around). It moves what the glass TRANSMITS, the borrowed lamp light or the
+   * tint, and leaves reflection, rim and film alone, so the surface still reads as the same
    * glass. 0 (the default) is a true no-op. Mostly a binding target: hover-shifts a shape's
    * refracted colour without touching the lamps every other shape shares.
    */
@@ -687,7 +682,7 @@ export interface MaterialConfig {
   /** Which shading model. See {@link MaterialKind}. */
   kind: MaterialKind;
   /**
-   * Wave amplitude on the surface of a `liquid` — how far the ripple field tilts the normal
+   * Wave amplitude on the surface of a `liquid`, how far the ripple field tilts the normal
    * before the ray is bent. 0 is dead calm (indistinguishable from `glass`). Inert elsewhere.
    */
   ripple: number;
@@ -701,7 +696,7 @@ export interface MaterialConfig {
    */
   flow: number;
   /**
-   * Thin-film interference strength on the Fresnel reflection — the soap-bubble / oil-slick
+   * Thin-film interference strength on the Fresnel reflection, the soap-bubble / oil-slick
    * rainbow. 0 disables it. Transmissive kinds only.
    */
   iridescence: number;
@@ -713,12 +708,12 @@ export interface MaterialConfig {
    * diffuse glow; on the opaque kinds it broadens the specular highlight. Inert for `glass`.
    */
   roughness: number;
-  /** Micro-facet sparkle density — `glitter` only. */
+  /** Micro-facet sparkle density, `glitter` only. */
   sparkle: number;
   /** Sparkle grain frequency. Higher is finer. */
   sparkleScale: number;
   /** Base colour for the opaque kinds. Unlike `tint`, which is an absorption colour, this is
-   *  what the surface actually reflects. For a metal this is F0 — see {@link METAL_F0}. */
+   *  what the surface actually reflects. For a metal this is F0, see {@link METAL_F0}. */
   albedo: string;
   /**
    * A conductor's measured reflectance at ~82°, applying the Hoffman F82 correction to Schlick.
@@ -737,21 +732,9 @@ export interface MaterialConfig {
  * `path` is the escape hatch: an arbitrary outline given as SVG path data and extruded, for the
  * silhouettes none of the above can reach. See {@link ShapeConfig.outline}.
  */
-export type ShapeKind =
-  | "rod"
-  | "disc"
-  | "prism"
-  | "hex"
-  | "cone"
-  | "sphere"
-  | "ring"
-  | "arrow"
-  | "droplet"
-  | "blob"
-  | "slab"
-  | "path";
+export type ShapeKind = (typeof SHAPE_KINDS)[number];
 
-export const SHAPE_KINDS: readonly ShapeKind[] = [
+export const SHAPE_KINDS = [
   "rod",
   "disc",
   "prism",
@@ -764,24 +747,24 @@ export const SHAPE_KINDS: readonly ShapeKind[] = [
   "blob",
   "slab",
   "path",
-];
+] as const;
 
 /**
  * One carve-out, subtracted from a shape's profile before it is extruded.
  *
  * There is no `slot` kind because a slot is a `rect` whose corner radius has reached half its
- * short side — the same economy that makes a hexagon a lathe with `sides: 6`. Two primitives cover
+ * short side, the same economy that makes a hexagon a lathe with `sides: 6`. Two primitives cover
  * round holes, square windows, stadium slots and everything between.
  *
  * Cuts go ALL THE WAY THROUGH, and that is a constraint on the renderer, not a missing feature.
  * Glass thickness is measured as (back-face depth − front-face depth), so a hole that opens on
- * both sides simply draws no fragment — exactly like `ring`, and exactly as correct. A blind
+ * both sides simply draws no fragment, exactly like `ring`, and exactly as correct. A blind
  * pocket would leave the front and back faces intact and report the empty cavity as solid glass,
  * so the shape would light as though the pocket were not there.
  */
-export type CutKind = "rect" | "circle";
+export type CutKind = (typeof CUT_KINDS)[number];
 
-export const CUT_KINDS: readonly CutKind[] = ["rect", "circle"];
+export const CUT_KINDS = ["rect", "circle"] as const;
 
 export interface CutConfig {
   kind: CutKind;
@@ -806,7 +789,7 @@ export const MAX_CUTS = 8;
  * A cap rather than trust, because this string is the one field in the whole model whose size is
  * unbounded by its meaning: a scene travels as base64 in a URL hash, and one traced photograph
  * pasted in would take the share link past what a browser will follow. Four thousand characters
- * is a few hundred curve commands — far more detail than survives being extruded and rendered at
+ * is a few hundred curve commands, far more detail than survives being extruded and rendered at
  * the size these shapes appear.
  */
 export const MAX_OUTLINE = 4000;
@@ -814,7 +797,7 @@ export const MAX_OUTLINE = 4000;
 /**
  * What a `path` shape draws before anything has been authored into it.
  *
- * A five-pointed star: recognizably arbitrary — no other kind here can make one — and non-convex,
+ * A five-pointed star: recognizably arbitrary, no other kind here can make one, and non-convex,
  * so the triangulator and the bevel clamp are both exercised by the default rather than only by
  * whatever a user happens to paste in first.
  */
@@ -829,19 +812,19 @@ export function createCut(kind: CutKind = "rect"): CutConfig {
  *  editable object while you flip between kinds. */
 export interface ShapeConfig {
   kind: ShapeKind;
-  /** Outer radius (rod, disc, prism, hex, cone, sphere, ring) — and the CORNER radius of a slab. */
+  /** Outer radius (rod, disc, prism, hex, cone, sphere, ring), and the CORNER radius of a slab. */
   r: number;
-  /** Length along the sweep axis (rod, prism, hex, cone) — the shaft length of an arrow, and the
+  /** Length along the sweep axis (rod, prism, hex, cone), the shaft length of an arrow, and the
    *  WIDTH of a slab. */
   len: number;
-  /** Thickness (disc, ring) — and the HEIGHT of a slab. */
+  /** Thickness (disc, ring), and the HEIGHT of a slab. */
   thickness: number;
   /**
    * Corner fillet. Flat ends with a small fillet, not hemispheres: the fillet catches the rim
    * highlight and the flat face reads as an ellipse when tilted, which a capsule loses.
    *
    * Positive is a literal radius in world units and `0` asks for a proportional one. A NEGATIVE
-   * value means no fillet at all, and only `path` honours it — see the note in `normalizeShape`
+   * value means no fillet at all, and only `path` honours it, see the note in `normalizeShape`
    * for why a lathe cannot. It is there because a drawn silhouette is the one shape here whose
    * fine detail a bevel can visibly fatten.
    */
@@ -849,7 +832,7 @@ export interface ShapeConfig {
   /**
    * Radius of a fillet on ALL of a prism's edges, in world units. 0 keeps the lathe.
    *
-   * `fillet` above rounds only where the side faces meet the caps — a lathe cannot round the
+   * `fillet` above rounds only where the side faces meet the caps, a lathe cannot round the
    * vertical corners between them. This swaps in a purpose-built mesh that rounds every edge, so a
    * narrow bevel strip runs right around the solid. It sits at an angle to both surfaces it joins,
    * catches the environment differently from either, and is what makes a block of glass read as
@@ -871,18 +854,18 @@ export interface ShapeConfig {
   /** Lumpiness, 0–1 (blob): how far the surface departs from the underlying sphere. */
   bump: number;
   /**
-   * The silhouette of a `path` shape, as SVG path data — the `d` attribute of a `<path>`.
+   * The silhouette of a `path` shape, as SVG path data, the `d` attribute of a `<path>`.
    *
    * This is the one shape that is not described by numbers, because the shapes it is for cannot
    * be: a pair of spectacles has no radius. `d` is chosen over a point list for three reasons that
-   * all point the same way — it is what a vector tool puts on the clipboard, it carries curves
+   * all point the same way, it is what a vector tool puts on the clipboard, it carries curves
    * without the author pre-tessellating them, and it is several times more compact, which matters
    * because a scene travels as base64 JSON in a share link.
    *
    * Accepts a whole `<svg>` document or fragment as well as a bare `d`: every `<path>` in it is
    * read, in document order, which lands on the outline-then-holes rule below because that is the
    * order a vector tool writes a shape and its counters. Nothing but `<path>` is read, and
-   * `transform` attributes are ignored — a translate or scale is absorbed by the refit, a rotate
+   * `transform` attributes are ignored, a translate or scale is absorbed by the refit, a rotate
    * is not.
    *
    * Read in SVG's own conventions and then normalized, which is what makes a pasted path simply
@@ -902,29 +885,29 @@ export interface ShapeConfig {
    * Through-cuts in the profile plane. ABSENT ⇒ solid (the common case), which is also why this
    * is optional rather than an empty array: every scene ever exported stays byte-identical.
    *
-   * Honoured by the shapes with a flat profile to carve — `slab` and `arrow`, plus the plates
+   * Honoured by the shapes with a flat profile to carve, `slab` and `arrow`, plus the plates
    * (`disc`, `prism`, `hex`), which swap their lathe for the equivalent extrusion when they carry
    * cuts. Ignored by `rod`, `sphere`, `cone`, `ring`, `droplet` and `blob`, whose profiles sweep.
    */
   cuts?: CutConfig[];
 }
 
-/**
- * A set of shapes that select and transform as one — the studio's grouping.
- *
- * Membership lives on the SHAPES ({@link ItemConfig.group}), not as a nested tree, and a group has
- * no transform of its own: turning a group writes the result into each member's own pose. That is
- * a deliberate choice, and it is what keeps every other contract in this file intact —
- * `resolveItems(config)[i] === config.items[i]` still holds, a motion still owns the components it
- * drives, and an exported scene still renders identically in a consumer that has never heard of a
- * group. Grouping is an AUTHORING convenience; nothing reads it at render time.
- *
- * Groups are flat. Nesting would need an "active group" context in the UI — which level a click
- * selects at — and a scene of a few dozen shapes does not earn that.
- */
 /** A group of one is not a group: {@link ensureSceneConfig} dissolves anything smaller. */
 export const MIN_GROUP_SIZE = 2;
 
+/**
+ * A set of shapes that select and transform as one: the studio's grouping.
+ *
+ * Membership lives on the SHAPES ({@link ItemConfig.group}), not as a nested tree, and a group has
+ * no transform of its own: turning a group writes the result into each member's own pose. That
+ * keeps every other contract in this file intact. `resolveItems(config)[i] === config.items[i]`
+ * still holds, a motion still owns the components it drives, and an exported scene renders
+ * identically in a consumer that has never heard of a group. Grouping is an AUTHORING
+ * convenience; nothing reads it at render time.
+ *
+ * Groups are flat. Nesting would need an "active group" context in the UI (which level a click
+ * selects at), and a scene of a few dozen shapes does not earn that.
+ */
 export interface GroupConfig {
   /** Stable identity, referenced by {@link ItemConfig.group}. Renaming never touches it. */
   id: string;
@@ -936,7 +919,7 @@ export interface ItemConfig {
   /**
    * An optional label for this shape, shown in the studio's config panel.
    *
-   * Purely for the author's benefit — nothing reads it at render time. A scene of sixteen rods is
+   * Purely for the author's benefit, nothing reads it at render time. A scene of sixteen rods is
    * far easier to navigate as "front left" and "the tall one" than as "rod 7".
    */
   name?: string;
@@ -966,9 +949,9 @@ export interface ItemConfig {
   phase: number;
 }
 
-export type MotionKind = "none" | "skewer" | "spin" | "drift" | "wobble";
+export type MotionKind = (typeof MOTION_KINDS)[number];
 
-export const MOTION_KINDS: readonly MotionKind[] = ["none", "skewer", "spin", "drift", "wobble"];
+export const MOTION_KINDS = ["none", "skewer", "spin", "drift", "wobble"] as const;
 
 export type Axis = "x" | "y" | "z";
 
@@ -978,7 +961,7 @@ export type Axis = "x" | "y" | "z";
  * the same". The studio's "apply to all shapes" covers the case where you did want them uniform.
  *
  * Note there is no `stagger` here. Offsetting successive shapes is a property of the *arrangement*,
- * not of a motion — it lives on {@link ItemConfig.phase} per shape, and {@link ScatterConfig.stagger}
+ * not of a motion, it lives on {@link ItemConfig.phase} per shape, and {@link ScatterConfig.stagger}
  * for generated ones.
  */
 export interface MotionConfig {
@@ -994,45 +977,48 @@ export function createMotion(kind: MotionKind = "none"): MotionConfig {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Interaction layer (optional, additive, default-off) — the trigger system ported from wave3d.
+// Interaction layer (optional, additive, default-off).
 // The SHARED inputs (one cursor + scroll + touch opt-in) and scene-param bindings live on
 // SceneConfig.interaction; a shape's response lives on ItemConfig.interaction, a lamp's directly
-// on LampConfig.bindings. What deliberately did NOT port is wave3d's pointer FIELD (hover
-// swell / drag-wake / click ripples) — those deform a membrane, and these shapes are rigid.
+// on LampConfig.bindings. There is no pointer FIELD (hover swell, drag-wake, click ripples):
+// those deform a membrane, and these shapes are rigid.
 // ABSENT blocks mean fully off: no listeners attach and the rendered pixels are byte-identical.
 // ---------------------------------------------------------------------------------------------
 
-/** The built-in interaction input names (the open-ended `custom:*` family is handled separately).
- *  Kept in sync by hand with the {@link InteractionSource} union below. */
+/**
+ * The built-in interaction input names: normalized signals a binding can drive config params
+ * with. Every source is exponentially smoothed before it is applied. The open-ended `custom:*`
+ * family is handled separately; see {@link InteractionSource}.
+ */
 export const INTERACTION_SOURCE_NAMES = [
+  /** Container progress through the viewport, 0 (entering) to 1 (scrolled past). */
   "scroll",
+  /** Smoothed pointer presence over the container, 0..1. */
   "hover",
+  /** Smoothed pointer-over-THIS-shape, 0..1. The renderer raycasts, so item bindings only; reads
+   *  0 on scene and lamp bindings. */
   "hoverSelf",
+  /** Smoothed pointer X across the container, 0..1; relaxes to 0.5 on leave. */
   "pointerX",
+  /** Smoothed pointer Y across the container, 0..1; relaxes to 0.5 on leave. */
   "pointerY",
+  /** Normalized smoothed pointer speed, 0..1. */
   "pointerSpeed",
+  /** Pointer button or touch held, smoothed 0..1. */
   "press",
+  /** A press that BEGAN on this shape, held 0..1 (raycast at pointerdown; item bindings only). */
   "pressSelf",
+  /** Normalized smoothed |d(scroll progress)/dt|, 0..1. */
   "scrollVelocity",
+  /** One-shot 0 to 1 latch on first visibility, for entrance choreography. */
   "appear",
 ] as const;
 
 /**
- * An interaction INPUT: a normalized signal that can smoothly drive config params through a
- * binding. Every source is exponentially smoothed before it is applied.
+ * An interaction INPUT: one of {@link INTERACTION_SOURCE_NAMES}, or `custom:<name>`, which the
+ * developer feeds each frame via `renderer.setInteractionInput(name, value)`.
  */
-export type InteractionSource =
-  | "scroll" // container progress through the viewport, 0 (entering) .. 1 (scrolled past)
-  | "hover" // smoothed pointer presence over the container, 0..1
-  | "hoverSelf" // smoothed pointer-over-THIS-shape, 0..1 (renderer raycasts; item bindings only — reads 0 on scene/lamp bindings)
-  | "pointerX" // smoothed pointer X across the container, 0..1; relaxes to 0.5 on leave
-  | "pointerY" // smoothed pointer Y across the container, 0..1; relaxes to 0.5 on leave
-  | "pointerSpeed" // normalized smoothed pointer speed, 0..1
-  | "press" // pointer button / touch held, smoothed 0..1
-  | "pressSelf" // press that BEGAN on this shape, held 0..1 (raycast at pointerdown; item bindings only)
-  | "scrollVelocity" // normalized smoothed |d(scroll progress)/dt|, 0..1
-  | "appear" // one-shot 0→1 latch on first visibility (entrance choreography)
-  | `custom:${string}`; // developer-fed each frame via renderer.setInteractionInput(name, value)
+export type InteractionSource = (typeof INTERACTION_SOURCE_NAMES)[number] | `custom:${string}`;
 
 /** Per-SHAPE params a binding may drive. Single source of truth for ITEM_APPLIERS in
  *  renderer/interaction.ts (checked via `satisfies`) and validated by the binding cleaner. */
@@ -1055,12 +1041,12 @@ export const ITEM_TARGET_NAMES = [
 /** A per-shape param an {@link ItemInteractionBinding} can drive. */
 export type ItemInteractionTarget = (typeof ITEM_TARGET_NAMES)[number];
 
-/** Per-LAMP params a binding may drive — `x`/`y` are plate-space 0..1, which is exactly what
+/** Per-LAMP params a binding may drive, `x`/`y` are plate-space 0..1, which is exactly what
  *  pointerX/pointerY produce, so a lamp that follows the cursor is a two-binding config. */
 export const LAMP_TARGET_NAMES = ["x", "y", "radius", "intensity"] as const;
 export type LampInteractionTarget = (typeof LAMP_TARGET_NAMES)[number];
 
-/** SCENE params a binding may drive (post / camera / time / lamp field — shared, not per shape). */
+/** SCENE params a binding may drive (post / camera / time / lamp field, shared, not per shape). */
 export const SCENE_TARGET_NAMES = [
   "timeOffset",
   "cameraZoom",
@@ -1086,7 +1072,7 @@ export const SCENE_TARGET_NAMES = [
 export type SceneInteractionTarget = (typeof SCENE_TARGET_NAMES)[number];
 
 /** Shared fields of an input→param binding: per frame `value = mix(from ?? authoredBase, to,
- *  smoothedSource)`, written straight to uniforms — never mutates config, so any refresh restores
+ *  smoothedSource)`, written straight to uniforms, never mutates config, so any refresh restores
  *  the authored base (removal needs no undo step). */
 export interface InteractionBindingBase {
   /** The input signal driving this binding. */
@@ -1122,7 +1108,7 @@ export interface ItemInteractionConfig {
 export interface SceneInteractionConfig {
   /** Master switch for the whole interaction layer. Default true (only `false` turns it all off). */
   enabled?: boolean;
-  /** Follow coarse (touch) pointers. Default false — touch is ignored unless this is true. */
+  /** Follow coarse (touch) pointers. Default false, touch is ignored unless this is true. */
   touch?: boolean;
   /** Input→param bindings driving SCENE params (time / camera / post / lamp gain). */
   bindings?: SceneInteractionBinding[];
@@ -1168,7 +1154,7 @@ export function cleanBindings<T extends string>(
 }
 
 /** Present-only normalizer for a shape's interaction block. NEVER called when the block is
- *  absent — absence is inert and stays absent, so a non-interactive scene is byte-identical. */
+ *  absent, absence is inert and stays absent, so a non-interactive scene is byte-identical. */
 export function normalizeItemInteraction(raw: ItemInteractionConfig): ItemInteractionConfig {
   const out: ItemInteractionConfig = {};
   if (raw.bindings !== undefined) {
@@ -1203,7 +1189,7 @@ export interface ScatterConfig {
   /** The motion every generated shape gets. */
   motion: MotionConfig;
   /**
-   * Phase step between successive generated shapes. It has to span a full turn — at
+   * Phase step between successive generated shapes. It has to span a full turn, at
    * `stagger ≈ 2π / count` the phases distribute evenly and the trough of the wave travels; well
    * below that they cluster and it sits still.
    */
@@ -1220,7 +1206,7 @@ export interface ScatterConfig {
   /** Random per-item phase, in radians. */
   phaseJitter: number;
   /**
-   * Reactions every generated shape gets — each shape receives its OWN copy of these bindings,
+   * Reactions every generated shape gets, each shape receives its OWN copy of these bindings,
    * so per-shape sources (`hoverSelf` / `pressSelf`) resolve and smooth per shape: the rod under
    * the cursor answers, its neighbours don't. Absent = the generated shapes are inert, exactly
    * as an item with no `interaction` block is.
@@ -1239,14 +1225,14 @@ export interface SceneConfig {
    *
    * Note what this does and does not mean. The gaps between shapes become transparent, and haze
    * fades the shapes out toward the page rather than toward a painted colour. The glass itself
-   * still refracts the **lamp field**, not the page — sampling the DOM is the one thing this
+   * still refracts the **lamp field**, not the page, sampling the DOM is the one thing this
    * renderer deliberately does not do (see the positioning notes). Where no lamp sits behind a
    * shape it falls back to {@link clearGlass}, so pick that to suit the surface you are over.
    *
    * Setting `background: "transparent"` is sugar for turning this on.
    */
   transparentBackground: boolean;
-  /** What glass looks like where no lamp sits behind it — a hair off white, never pure white. */
+  /** What glass looks like where no lamp sits behind it, a hair off white, never pure white. */
   clearGlass: string;
   lamps: LampConfig[];
   /** The room reflections fall back on. See {@link StudioKind}. */
@@ -1261,7 +1247,7 @@ export interface SceneConfig {
   lampGain: number;
   /** Coverage gate. Without it every lamp's Gaussian tail extends everywhere, so every shape
    *  carries *some* tint and nothing reads as transparent. Gating the tails to zero is what
-   *  produces genuinely clear regions — and, counterintuitively, what lets the tinted regions be
+   *  produces genuinely clear regions, and, counterintuitively, what lets the tinted regions be
    *  *more* saturated, since coverage no longer has to be dialled down globally. */
   lampGate: { lo: number; hi: number };
   /** How much of the lamp field shows on the backdrop itself. If colour appears *only* inside
@@ -1274,24 +1260,11 @@ export interface SceneConfig {
   /** Drag to orbit, wheel to dolly. Off for a pure background. */
   orbit: boolean;
   /**
-   * Measure each shape's optical path from a back-face depth pass instead of assuming a cylinder.
-   *
-   * Costs one extra full-scene render. Worth it for discs, spheres, cones, rings and arrows, whose
-   * thickness the analytic fallback can only approximate with a single per-shape constant.
-   *
-   * OFF by default, which is not laziness: for a rod seen across its axis the fallback is the
-   * EXACT chord, so on a rod scene this pass buys nothing and costs a pass — and because the
-   * measurement comes from a 16-bit packed depth buffer, its quantisation actually moves the
-   * result about 1% away from the analytic answer. Defaulting it on would make the calibrated
-   * reference scene very slightly worse in order to fix scenes that do not use rods. Presets built
-   * from other shapes turn it on themselves.
-   */
-  /**
    * Trace the refracted ray against a convex solid's own faces instead of displacing the sample in
    * screen space.
    *
    * The offset it replaces bends the sample by the surface normal, weighted toward the rim. For a
-   * rod that is very nearly exact — the surface curves smoothly and the exit is always roughly
+   * rod that is very nearly exact, the surface curves smoothly and the exit is always roughly
    * opposite the entry. For flat faces and hard edges it is not: a refracted ray can leave through
    * a different face entirely, and no rim weighting reproduces that. Tracing also yields the true
    * path length, so the Beer-Lambert term stops guessing a chord.
@@ -1302,6 +1275,17 @@ export interface SceneConfig {
   /** Brightness of the inner-interface pass. 0 turns it off; needs `tracedRefraction`. */
   backGlassStrength: number;
 
+  /**
+   * Measure each shape's optical path from a back-face depth pass instead of assuming a cylinder.
+   *
+   * Costs one extra full-scene render. Worth it for discs, spheres, cones, rings and arrows, whose
+   * thickness the analytic fallback can only approximate with a single per-shape constant.
+   *
+   * OFF by default, and not out of laziness: for a rod seen across its axis the fallback is the
+   * EXACT chord, so on a rod scene this pass buys nothing, and the 16-bit packed depth buffer it
+   * reads quantises the result about 1% away from the analytic answer. Presets built from other
+   * shapes turn it on themselves.
+   */
   measuredThickness: boolean;
 
   /**
@@ -1309,7 +1293,7 @@ export interface SceneConfig {
    *
    * Every motion's rate is snapped to a whole number of cycles over this window, so a clip
    * recorded at exactly this duration cuts back to its first frame without a jump. Without it a
-   * recording ends wherever the motion happened to be — which is what every export did before.
+   * recording ends wherever the motion happened to be, which is what every export did before.
    */
   loopSeconds: number;
   /**
@@ -1326,7 +1310,7 @@ export interface SceneConfig {
 
   // -- Backdrop -------------------------------------------------------------
   /**
-   * What the backdrop is painted with. `color` is the original behaviour — a gentle vertical ramp
+   * What the backdrop is painted with. `color` is the original behaviour, a gentle vertical ramp
    * derived from {@link SceneConfig.background}.
    *
    * Worth knowing: the backdrop is not merely composited behind the glass. It is rendered into the
@@ -1340,7 +1324,7 @@ export interface SceneConfig {
   /** Ramp direction in radians. Ignored by `radial` and `mesh`. */
   backgroundGradientAngle: number;
   backgroundMeshPoints: MeshGradientPoint[];
-  /** Blob falloff for the mesh gradient — larger is softer. */
+  /** Blob falloff for the mesh gradient, larger is softer. */
   backgroundMeshSoftness: number;
   /** A still image, as a URL or data URI. */
   backgroundImageUrl?: string;
@@ -1352,7 +1336,7 @@ export interface SceneConfig {
   backgroundImagePosition: Vec2;
   items: ItemConfig[];
   /** Shape groupings. Derived from the shapes' own `group` ids, so this is a name registry rather
-   *  than the source of truth — see {@link GroupConfig}. */
+   *  than the source of truth, see {@link GroupConfig}. */
   groups: GroupConfig[];
   scatter?: ScatterConfig;
   /** A traced, dispersing light beam. ABSENT ⇒ no beam. See {@link BeamConfig}. */
@@ -1366,19 +1350,18 @@ export interface SceneConfig {
   /** Render-target scale (0.5–1) for the depth/plate/main passes. The post pass always runs at
    *  full canvas resolution, so dropping this softens the glass without softening the grain. */
   quality: number;
-  /** Ceiling on devicePixelRatio. Four passes per frame is a real cost — this is the main knob. */
+  /** Ceiling on devicePixelRatio. Four passes per frame is a real cost, this is the main knob. */
   dprMax: number;
   paused: boolean;
   /** Animation-time offset, in seconds. Scrubs to a chosen still frame. */
   timeOffset: number;
 }
 
-/** The defaults every shape spec starts from; `kind` decides which fields are read. */
 /**
  * The natural `sides` for a kind, because the field means two different things.
  *
  * On `prism` and `hex` it counts FACES, and 3 and 6 are the whole point of those kinds. Everywhere
- * else it counts radial SEGMENTS and is a smoothness knob, where the same 3 is degenerate — a
+ * else it counts radial SEGMENTS and is a smoothness knob, where the same 3 is degenerate, a
  * three-segment sphere is a triangular bipyramid, not a low-poly sphere. Carrying a value across
  * that boundary is what makes a prism preset render every other kind as a triangle, so anything
  * switching a shape's kind should re-derive this rather than keep the old number.
@@ -1392,6 +1375,7 @@ export function defaultSides(kind: ShapeKind): number {
   return 72;
 }
 
+/** The defaults every shape spec starts from; `kind` decides which fields are read. */
 export function createShape(kind: ShapeKind = "rod"): ShapeConfig {
   return {
     kind,
@@ -1446,7 +1430,7 @@ export function createMaterial(): MaterialConfig {
 }
 
 /**
- * A new shape. Pass `from` to clone an existing one — everything it has (shape, material, motion,
+ * A new shape. Pass `from` to clone an existing one, everything it has (shape, material, motion,
  * phase, name, group; the `shape` argument is ignored) except its position, which is nudged along
  * X so the new shape lands beside its source rather than inside it. Adding a shape almost always
  * means "another one of those", so copying is the useful default and starting from scratch is the
@@ -1471,6 +1455,70 @@ export function createItem(shape: ShapeConfig = createShape(), from?: ItemConfig
 
 export function createLamp(x = 0.5, y = 0.3, color = "#f8c852"): LampConfig {
   return { x, y, r: 0.1, color, intensity: 1 };
+}
+
+/**
+ * Cauchy base/strength pairs for {@link BeamConfig.ior} and {@link BeamConfig.dispersion},
+ * matching the reference implementation.
+ *
+ * `stylized` is not a glass: its base index is far below anything real, which is what buys the
+ * violet end enough margin under the critical angle to leave through one face while still fanning
+ * over thirty degrees. `crown` and `flint` are the genuine article and fan by roughly a degree,
+ * which is a white beam with coloured edges. That is what a real prism does; it is not what the
+ * album cover does.
+ */
+export const BEAM_DISPERSION = {
+  /** What the reference actually ships on its homepage, stronger than its own `stylized` preset. */
+  hero: { ior: 1.2, dispersion: 0.1 },
+  stylized: { ior: 1.245, dispersion: 0.06 },
+  crown: { ior: 1.5046, dispersion: 0.0042 },
+  flint: { ior: 1.664, dispersion: 0.0105 },
+} as const;
+
+/** The beam every partial beam is filled out from: the reference's stylized prism on its own. */
+export function createBeam(): BeamConfig {
+  return {
+    radius: 2,
+    sides: 3,
+    rotation: Math.PI / 2,
+    z: 0,
+    face: 0,
+    incidence: 52,
+    entry: 0.5,
+    distance: 18,
+    width: 0.06,
+    ...BEAM_DISPERSION.stylized,
+    samples: 128,
+    slices: 24,
+    exposure: 88,
+    edgeFalloff: 16,
+    revealSeconds: 0,
+    falloffRate: 3.8,
+    falloffPower: 3.7,
+    causticStrength: 1.9,
+    causticCoverage: 0.86,
+    causticFarDesaturation: 0.04,
+    causticFarBrightness: 0.02,
+    causticRateScale: 0.12,
+    causticPowerScale: 0.5,
+    causticNormalInfluence: 1,
+    causticNormalElevation: 35,
+    intensity: 1,
+  };
+}
+
+/** The dust field every partial one is filled out from. */
+export function createDust(): DustConfig {
+  return {
+    count: 2400,
+    extent: { x: 26, y: 16, z: 12 },
+    size: 1,
+    intensity: 1,
+    drift: 0.25,
+    falloffPower: 5.5,
+    response: 82,
+    seed: 7,
+  };
 }
 
 export function createDefaultConfig(): SceneConfig {
@@ -1593,6 +1641,11 @@ function num(value: unknown, fallback: number): number {
   return typeof value === "number" && Number.isFinite(value) ? value : fallback;
 }
 
+/** Only a real boolean counts: untrusted JSON can carry `"false"`, which is truthy. */
+function bool(value: unknown, fallback: boolean): boolean {
+  return typeof value === "boolean" ? value : fallback;
+}
+
 function vec3(value: Partial<Vec3> | undefined, fallback: Vec3): Vec3 {
   return {
     x: num(value?.x, fallback.x),
@@ -1607,7 +1660,7 @@ function vec2(value: Partial<Vec2> | undefined, fallback: Vec2): Vec2 {
 
 /**
  * What {@link normalizeShape} accepts: a spec off disk, out of a URL or from a hand edit, where
- * any field may be missing or wrong — including any field of a cut. `Partial<ShapeConfig>` alone
+ * any field may be missing or wrong, including any field of a cut. `Partial<ShapeConfig>` alone
  * would make the `cuts` array optional but still demand six complete numbers from every entry it
  * did contain, which is precisely the input this function exists to not trust.
  */
@@ -1625,7 +1678,7 @@ export function normalizeShape(shape: ShapeInput | undefined): ShapeConfig {
     len: Math.max(0.001, num(shape?.len, base.len)),
     thickness: Math.max(0.001, num(shape?.thickness, base.thickness)),
     // Three states, not two. Positive is a literal radius; `0` means "pick a proportional one"
-    // (see resolveFillet); NEGATIVE means none at all, which only `path` can honour — every other
+    // (see resolveFillet); NEGATIVE means none at all, which only `path` can honour, every other
     // kind reads a negative exactly as it reads 0, because `resolveFillet` tests `> 0`. That
     // asymmetry is deliberate: a lathe with no fillet collapses its corner arc onto a single point
     // and hands the mesh a fan of degenerate triangles, the defect `cone` goes out of its way to
@@ -1661,7 +1714,7 @@ export function normalizeShape(shape: ShapeInput | undefined): ShapeConfig {
  * a zero-width rect collapses its walls into a crease that shows through the refraction as a
  * black seam, and a corner radius past half the short side inverts the fillet arcs.
  *
- * Empty in, empty out — the caller drops the field entirely rather than storing `[]`.
+ * Empty in, empty out, the caller drops the field entirely rather than storing `[]`.
  */
 function normalizeCuts(input: unknown): CutConfig[] {
   if (!Array.isArray(input)) return [];
@@ -1686,50 +1739,99 @@ function normalizeCuts(input: unknown): CutConfig[] {
   });
 }
 
-/** Fill in a partial material, clamping the values that can produce a broken frame rather than
- *  an ugly one (a negative σ inverts Beer–Lambert; an IOR below 1 flips the refraction). */
+/** The numeric fields of a material, which are the ones that need bounding. */
+type MaterialNumberKey = {
+  [K in keyof MaterialConfig]-?: MaterialConfig[K] extends number ? K : never;
+}[keyof MaterialConfig];
+
+/**
+ * How each numeric field is bounded, shared by {@link resolveMaterial} and
+ * {@link normalizeMaterial} so a value is clamped the same way whether it is filled in at build
+ * time or cleaned on import. The bounds guard against a BROKEN frame rather than an ugly one: a
+ * negative density inverts Beer-Lambert into emission, and an IOR below 1 flips the refraction.
+ */
+const MATERIAL_BOUNDS: Record<MaterialNumberKey, (value: number) => number> = {
+  path: (v) => Math.max(0.001, v),
+  density: (v) => Math.max(0, v),
+  ior: (v) => clamp(v, 1.0001, 4),
+  dispersion: (v) => clamp(v, 0, 0.4),
+  lens: (v) => Math.max(0, v),
+  bend: clamp01,
+  magnify: clamp01,
+  rim: clamp01,
+  specular: (v) => Math.max(0, v),
+  saturation: (v) => Math.max(0, v),
+  // Hue rotation is periodic; one turn either way covers every colour it can reach.
+  hueShift: (v) => clamp(v, -1, 1),
+  emission: (v) => Math.max(0, v),
+  ripple: clamp01,
+  rippleScale: (v) => clamp(v, 0.05, 20),
+  flow: (v) => clamp(v, 0, 6),
+  iridescence: clamp01,
+  filmNm: (v) => clamp(v, 50, 1500),
+  roughness: clamp01,
+  sparkle: clamp01,
+  sparkleScale: (v) => clamp(v, 2, 200),
+};
+const MATERIAL_NUMBER_KEYS = Object.keys(MATERIAL_BOUNDS) as MaterialNumberKey[];
+const MATERIAL_STRING_KEYS = ["tint", "albedo", "edgeTint"] as const;
+
+function isMaterialKind(value: unknown): value is MaterialKind {
+  return MATERIAL_KINDS.includes(value as MaterialKind);
+}
+
+/** A negative coefficient would amplify light through the glass. */
+function clampAbsorption(absorption: Partial<Vec3>): Vec3 {
+  return {
+    x: Math.max(0, num(absorption.x, 0)),
+    y: Math.max(0, num(absorption.y, 0)),
+    z: Math.max(0, num(absorption.z, 0)),
+  };
+}
+
+/** Fill in a partial material, bounding every value per {@link MATERIAL_BOUNDS}. */
 export function resolveMaterial(material: Partial<MaterialConfig> | undefined): MaterialConfig {
   const base = createMaterial();
-  return {
-    path: Math.max(0.001, num(material?.path, base.path)),
-    density: Math.max(0, num(material?.density, base.density)),
+  const kind = material?.kind;
+  const out: MaterialConfig = {
+    ...base,
     // Absent stays absent: an absorption of zero is a real, meaningful material (perfectly clear),
     // so it must not be confused with "not asked for".
-    ...(material?.absorption
-      ? {
-          absorption: {
-            x: Math.max(0, num(material.absorption.x, 0)),
-            y: Math.max(0, num(material.absorption.y, 0)),
-            z: Math.max(0, num(material.absorption.z, 0)),
-          },
-        }
-      : {}),
+    ...(material?.absorption ? { absorption: clampAbsorption(material.absorption) } : {}),
     tint: typeof material?.tint === "string" ? material.tint : base.tint,
-    kind: MATERIAL_KINDS.includes(material?.kind as MaterialKind)
-      ? (material?.kind as MaterialKind)
-      : base.kind,
-    ripple: clamp01(num(material?.ripple, base.ripple)),
-    rippleScale: clamp(num(material?.rippleScale, base.rippleScale), 0.05, 20),
-    flow: clamp(num(material?.flow, base.flow), 0, 6),
-    iridescence: clamp01(num(material?.iridescence, base.iridescence)),
-    filmNm: clamp(num(material?.filmNm, base.filmNm), 50, 1500),
-    roughness: clamp01(num(material?.roughness, base.roughness)),
-    sparkle: clamp01(num(material?.sparkle, base.sparkle)),
-    sparkleScale: clamp(num(material?.sparkleScale, base.sparkleScale), 2, 200),
+    kind: isMaterialKind(kind) ? kind : base.kind,
     albedo: typeof material?.albedo === "string" ? material.albedo : base.albedo,
     edgeTint: typeof material?.edgeTint === "string" ? material.edgeTint : base.edgeTint,
-    ior: clamp(num(material?.ior, base.ior), 1.0001, 4),
-    dispersion: clamp(num(material?.dispersion, base.dispersion), 0, 0.4),
-    lens: Math.max(0, num(material?.lens, base.lens)),
-    bend: clamp01(num(material?.bend, base.bend)),
-    magnify: clamp01(num(material?.magnify, base.magnify)),
-    rim: clamp01(num(material?.rim, base.rim)),
-    specular: Math.max(0, num(material?.specular, base.specular)),
-    saturation: Math.max(0, num(material?.saturation, base.saturation)),
-    // Hue rotation is periodic; one turn either way covers every colour it can reach.
-    hueShift: clamp(num(material?.hueShift, base.hueShift), -1, 1),
-    emission: Math.max(0, num(material?.emission, base.emission)),
   };
+  for (const key of MATERIAL_NUMBER_KEYS) {
+    out[key] = MATERIAL_BOUNDS[key](num(material?.[key], base[key]));
+  }
+  return out;
+}
+
+/**
+ * Clean an authored material WITHOUT filling it in. Every key present is bounded exactly as
+ * {@link resolveMaterial} bounds it, a value of the wrong type (or NaN) is dropped so the default
+ * applies at build time, and absent keys stay absent, which keeps a minimal config minimal.
+ */
+export function normalizeMaterial(
+  material: Partial<MaterialConfig> | undefined,
+): Partial<MaterialConfig> {
+  const out: Partial<MaterialConfig> = {};
+  if (!material || typeof material !== "object") return out;
+  for (const key of MATERIAL_NUMBER_KEYS) {
+    const value = material[key];
+    if (typeof value === "number" && Number.isFinite(value)) out[key] = MATERIAL_BOUNDS[key](value);
+  }
+  for (const key of MATERIAL_STRING_KEYS) {
+    const value = material[key];
+    if (typeof value === "string") out[key] = value;
+  }
+  if (isMaterialKind(material.kind)) out.kind = material.kind;
+  if (material.absorption && typeof material.absorption === "object") {
+    out.absorption = clampAbsorption(material.absorption);
+  }
+  return out;
 }
 
 export function normalizeMotion(motion: Partial<MotionConfig> | undefined): MotionConfig {
@@ -1744,16 +1846,17 @@ export function normalizeMotion(motion: Partial<MotionConfig> | undefined): Moti
 
 export function normalizeItem(item: Partial<ItemConfig> | undefined): ItemConfig {
   const shape = normalizeShape(item?.shape);
+  const base = createItem(shape);
   return {
     shape,
-    position: vec3(item?.position, { x: 0, y: 0, z: 0 }),
-    rotation: vec3(item?.rotation, { x: 0, y: 0, z: 0 }),
-    scale: vec3(item?.scale, { x: 1, y: 1, z: 1 }),
+    position: vec3(item?.position, base.position),
+    rotation: vec3(item?.rotation, base.rotation),
+    scale: vec3(item?.scale, base.scale),
     name: typeof item?.name === "string" && item.name.trim() ? item.name.trim() : undefined,
     group: typeof item?.group === "string" && item.group.trim() ? item.group.trim() : undefined,
-    material: item?.material ?? {},
+    material: normalizeMaterial(item?.material),
     motion: normalizeMotion(item?.motion),
-    phase: num(item?.phase, 0),
+    phase: num(item?.phase, base.phase),
     // Present-only: absence is inert and stays absent, so a non-interactive scene round-trips
     // byte-identical.
     ...(item?.interaction && typeof item.interaction === "object"
@@ -1763,12 +1866,13 @@ export function normalizeItem(item: Partial<ItemConfig> | undefined): ItemConfig
 }
 
 function normalizeLamp(lamp: Partial<LampConfig> | undefined): LampConfig {
+  const d = createLamp();
   return {
-    x: num(lamp?.x, 0.5),
-    y: num(lamp?.y, 0.3),
-    r: Math.max(0.001, num(lamp?.r, 0.1)),
-    color: typeof lamp?.color === "string" ? lamp.color : "#ffffff",
-    intensity: Math.max(0, num(lamp?.intensity, 1)),
+    x: num(lamp?.x, d.x),
+    y: num(lamp?.y, d.y),
+    r: Math.max(0.001, num(lamp?.r, d.r)),
+    color: typeof lamp?.color === "string" ? lamp.color : d.color,
+    intensity: Math.max(0, num(lamp?.intensity, d.intensity)),
     ...(lamp?.bindings !== undefined
       ? { bindings: cleanBindings<LampInteractionTarget>(lamp.bindings, LAMP_TARGET_NAMES) }
       : {}),
@@ -1776,37 +1880,42 @@ function normalizeLamp(lamp: Partial<LampConfig> | undefined): LampConfig {
 }
 
 function normalizeBeam(beam: Partial<BeamConfig>): BeamConfig {
+  const d = createBeam();
   const out: BeamConfig = {
-    radius: Math.max(0.01, num(beam.radius, 2)),
+    radius: Math.max(0.01, num(beam.radius, d.radius)),
     // Two sides is not a polygon and the tracer would find no interior to refract into.
-    sides: Math.max(3, Math.round(num(beam.sides, 3))),
-    rotation: num(beam.rotation, Math.PI / 2),
-    z: num(beam.z, 0),
-    face: Math.max(0, Math.round(num(beam.face, 0))),
-    incidence: num(beam.incidence, 52),
-    entry: clamp01(num(beam.entry, 0.5)),
-    distance: Math.max(0.01, num(beam.distance, 18)),
-    width: Math.max(1e-3, num(beam.width, 0.06)),
+    sides: Math.max(3, Math.round(num(beam.sides, d.sides))),
+    rotation: num(beam.rotation, d.rotation),
+    z: num(beam.z, d.z),
+    face: Math.max(0, Math.round(num(beam.face, d.face))),
+    incidence: num(beam.incidence, d.incidence),
+    entry: clamp01(num(beam.entry, d.entry)),
+    distance: Math.max(0.01, num(beam.distance, d.distance)),
+    width: Math.max(1e-3, num(beam.width, d.width)),
     // Below 1 the ray bends the wrong way at every surface and the beam turns inside out.
-    ior: Math.max(1, num(beam.ior, 1.245)),
-    dispersion: Math.max(0, num(beam.dispersion, 0.06)),
+    ior: Math.max(1, num(beam.ior, d.ior)),
+    dispersion: Math.max(0, num(beam.dispersion, d.dispersion)),
     // Capped: the mesh is retraced whenever the beam moves, and the cost is samples × slices.
-    samples: clamp(Math.round(num(beam.samples, 128)), 8, 256),
-    slices: clamp(Math.round(num(beam.slices, 24)), 1, 64),
-    exposure: Math.max(0, num(beam.exposure, 88)),
-    edgeFalloff: Math.max(0, num(beam.edgeFalloff, 16)),
-    revealSeconds: Math.max(0, num(beam.revealSeconds, 0)),
-    falloffRate: Math.max(0, num(beam.falloffRate, 3.8)),
-    falloffPower: Math.max(0.0001, num(beam.falloffPower, 3.7)),
-    causticStrength: Math.max(0, num(beam.causticStrength, 1.9)),
-    causticCoverage: clamp01(num(beam.causticCoverage, 0.86)),
-    causticFarDesaturation: Math.max(0, num(beam.causticFarDesaturation, 0.04)),
-    causticFarBrightness: Math.max(0, num(beam.causticFarBrightness, 0.02)),
-    causticRateScale: Math.max(0, num(beam.causticRateScale, 0.12)),
-    causticPowerScale: Math.max(0, num(beam.causticPowerScale, 0.5)),
-    causticNormalInfluence: clamp01(num(beam.causticNormalInfluence, 1)),
-    causticNormalElevation: clamp(num(beam.causticNormalElevation, 35), 5, 85),
-    intensity: Math.max(0, num(beam.intensity, 1)),
+    samples: clamp(Math.round(num(beam.samples, d.samples)), 8, 256),
+    slices: clamp(Math.round(num(beam.slices, d.slices)), 1, 64),
+    exposure: Math.max(0, num(beam.exposure, d.exposure)),
+    edgeFalloff: Math.max(0, num(beam.edgeFalloff, d.edgeFalloff)),
+    revealSeconds: Math.max(0, num(beam.revealSeconds, d.revealSeconds)),
+    falloffRate: Math.max(0, num(beam.falloffRate, d.falloffRate)),
+    falloffPower: Math.max(0.0001, num(beam.falloffPower, d.falloffPower)),
+    causticStrength: Math.max(0, num(beam.causticStrength, d.causticStrength)),
+    causticCoverage: clamp01(num(beam.causticCoverage, d.causticCoverage)),
+    causticFarDesaturation: Math.max(0, num(beam.causticFarDesaturation, d.causticFarDesaturation)),
+    causticFarBrightness: Math.max(0, num(beam.causticFarBrightness, d.causticFarBrightness)),
+    causticRateScale: Math.max(0, num(beam.causticRateScale, d.causticRateScale)),
+    causticPowerScale: Math.max(0, num(beam.causticPowerScale, d.causticPowerScale)),
+    causticNormalInfluence: clamp01(num(beam.causticNormalInfluence, d.causticNormalInfluence)),
+    causticNormalElevation: clamp(
+      num(beam.causticNormalElevation, d.causticNormalElevation),
+      5,
+      85,
+    ),
+    intensity: Math.max(0, num(beam.intensity, d.intensity)),
   };
   // Absent stays absent: an empty `target` means "no item", not "the item called nothing", and an
   // `entryAngle` of 0 is a real angle that must not be confused with not having asked for one.
@@ -1820,15 +1929,16 @@ function normalizeBeam(beam: Partial<BeamConfig>): BeamConfig {
 }
 
 function normalizeDust(dust: Partial<DustConfig>): DustConfig {
+  const d = createDust();
   return {
-    count: clamp(Math.round(num(dust.count, 2400)), 0, 40000),
-    extent: vec3(dust.extent, { x: 26, y: 16, z: 12 }),
-    size: Math.max(0, num(dust.size, 1)),
-    intensity: Math.max(0, num(dust.intensity, 1)),
-    drift: num(dust.drift, 0.25),
-    falloffPower: Math.max(0.01, num(dust.falloffPower, 5.5)),
-    response: Math.max(0, num(dust.response, 82)),
-    seed: Math.floor(num(dust.seed, 7)),
+    count: clamp(Math.round(num(dust.count, d.count)), 0, 40000),
+    extent: vec3(dust.extent, d.extent),
+    size: Math.max(0, num(dust.size, d.size)),
+    intensity: Math.max(0, num(dust.intensity, d.intensity)),
+    drift: num(dust.drift, d.drift),
+    falloffPower: Math.max(0.01, num(dust.falloffPower, d.falloffPower)),
+    response: Math.max(0, num(dust.response, d.response)),
+    seed: Math.floor(num(dust.seed, d.seed)),
   };
 }
 
@@ -1840,7 +1950,7 @@ function normalizeScatter(scatter: Partial<ScatterConfig>): ScatterConfig {
     count: Math.round(clamp(num(scatter.count, d.count), 0, 200)),
     seed: Math.round(num(scatter.seed, d.seed)),
     shape: normalizeShape(scatter.shape ?? d.shape),
-    material: scatter.material ?? d.material,
+    material: normalizeMaterial(scatter.material ?? d.material),
     motion: normalizeMotion(scatter.motion ?? d.motion),
     stagger: num(scatter.stagger, d.stagger),
     spanX: num(scatter.spanX, d.spanX),
@@ -1867,9 +1977,9 @@ function normalizeStops(input: unknown, fallback: ColorStop[]): ColorStop[] {
         color: typeof stop?.color === "string" ? stop.color : "#ffffff",
         position: clamp01(num(stop?.position, 0)),
       }))
-      // Not `.toSorted()`: that is ES2023 (Safari ≥ 16.4) and would quietly raise the package's
-      // stated es2022 floor. The `.map()` above already made a fresh array, so `.sort()` in place
-      // mutates nothing the caller owns.
+      // Not `.toSorted()`: that is ES2023, above the es2022 floor the package tsconfig's `lib`
+      // enforces. The `.map()` above already made a fresh array, so `.sort()` in place mutates
+      // nothing the caller owns.
       // oxlint-disable-next-line unicorn/no-array-sort
       .sort((a, b) => a.position - b.position)
   );
@@ -1892,7 +2002,7 @@ function normalizeMeshPoints(input: unknown, fallback: MeshGradientPoint[]): Mes
  * `groups` array optional in authored JSON, and it means the registry can never drift into
  * referencing shapes that a hand edit deleted.
  *
- * A group of fewer than two shapes is dissolved — its member simply loses the reference. A group
+ * A group of fewer than two shapes is dissolved, its member simply loses the reference. A group
  * of one is not a group, and leaving them behind would accumulate ghosts every time a scene was
  * pruned down.
  */
@@ -1923,7 +2033,7 @@ function normalizeGroups(
       name: typeof group.name === "string" && group.name.trim() ? group.name.trim() : undefined,
     });
   }
-  // Declared by a shape but not by the registry — keep the shapes' claim and give it a home.
+  // Declared by a shape but not by the registry, keep the shapes' claim and give it a home.
   for (const id of counts.keys()) {
     if (!seen.has(id)) out.push({ id });
   }
@@ -1931,16 +2041,11 @@ function normalizeGroups(
 }
 
 /**
- * Fill a partial/imported config out to a complete one, clamping anything that could produce a
- * broken frame. Idempotent — the renderer runs it on every `setConfig`, and the studio round-trips
- * user-edited JSON through it.
- */
-/**
  * What {@link ensureSceneConfig} accepts.
  *
  * `Partial<SceneConfig>` is not quite right: it makes the optional blocks optional but still
- * demands them COMPLETE, so `{ beam: { incidence: 41 } }` — the obvious thing to write, and what
- * the normalizer has always accepted at runtime — fails to typecheck. These are the blocks whose
+ * demands them COMPLETE, so `{ beam: { incidence: 41 } }`, the obvious thing to write, and what
+ * the normalizer has always accepted at runtime, fails to typecheck. These are the blocks whose
  * normalizers fill in every field, so the type should say so.
  */
 export type SceneConfigInput = Partial<Omit<SceneConfig, "beam" | "dust">> & {
@@ -1948,6 +2053,11 @@ export type SceneConfigInput = Partial<Omit<SceneConfig, "beam" | "dust">> & {
   dust?: Partial<DustConfig>;
 };
 
+/**
+ * Fill a partial/imported config out to a complete one, clamping anything that could produce a
+ * broken frame. Idempotent: the renderer runs it on every `setConfig`, and the studio round-trips
+ * user-edited JSON through it.
+ */
 export function ensureSceneConfig(input: SceneConfigInput): SceneConfig {
   const d = createDefaultConfig();
   const lamps = (Array.isArray(input.lamps) ? input.lamps : d.lamps)
@@ -1969,7 +2079,7 @@ export function ensureSceneConfig(input: SceneConfigInput): SceneConfig {
     input.transparentBackground === true ||
     (typeof input.background === "string" && TRANSPARENT_KEYWORDS.has(input.background));
 
-  // Hoisted, because the group registry is reconciled against these very objects — and MUTATES
+  // Hoisted, because the group registry is reconciled against these very objects, and MUTATES
   // them, dissolving a group that no longer has two members.
   const items = (Array.isArray(input.items) ? input.items : []).map(normalizeItem);
 
@@ -2049,14 +2159,14 @@ export function ensureSceneConfig(input: SceneConfigInput): SceneConfig {
       paperTexture: clamp01(num(post.paperTexture, d.post.paperTexture)),
       paperTextureScale: Math.max(0.5, num(post.paperTextureScale, d.post.paperTextureScale)),
     },
-    orbit: input.orbit ?? d.orbit,
-    tracedRefraction: input.tracedRefraction ?? d.tracedRefraction,
+    orbit: bool(input.orbit, d.orbit),
+    tracedRefraction: bool(input.tracedRefraction, d.tracedRefraction),
     backGlassStrength: Math.max(0, num(input.backGlassStrength, d.backGlassStrength)),
-    measuredThickness: input.measuredThickness ?? d.measuredThickness,
+    measuredThickness: bool(input.measuredThickness, d.measuredThickness),
     loopSeconds: Math.max(0, num(input.loopSeconds, d.loopSeconds)),
-    introRamp: input.introRamp ?? d.introRamp,
-    mirrorH: input.mirrorH ?? d.mirrorH,
-    mirrorV: input.mirrorV ?? d.mirrorV,
+    introRamp: bool(input.introRamp, d.introRamp),
+    mirrorH: bool(input.mirrorH, d.mirrorH),
+    mirrorV: bool(input.mirrorV, d.mirrorV),
     backgroundMode: BACKGROUND_MODES.includes(input.backgroundMode as BackgroundMode)
       ? (input.backgroundMode as BackgroundMode)
       : d.backgroundMode,
@@ -2084,7 +2194,7 @@ export function ensureSceneConfig(input: SceneConfigInput): SceneConfig {
     backgroundImagePosition: vec2(input.backgroundImagePosition, d.backgroundImagePosition),
     items,
     groups: normalizeGroups(input.groups, items),
-    // An input that mentions neither gets the default scene's scatter — `{}` should render
+    // An input that mentions neither gets the default scene's scatter, `{}` should render
     // something. Passing an `items` array (even an empty one) or an explicit `scatter: undefined`
     // is how you opt out, and both survive a JSON round trip.
     scatter: input.scatter
@@ -2101,7 +2211,35 @@ export function ensureSceneConfig(input: SceneConfigInput): SceneConfig {
       : {}),
     quality: clamp(num(input.quality, d.quality), 0.35, 1),
     dprMax: clamp(num(input.dprMax, d.dprMax), 0.5, 4),
-    paused: input.paused ?? d.paused,
+    paused: bool(input.paused, d.paused),
     timeOffset: num(input.timeOffset, d.timeOffset),
   };
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Merge a partial config onto another, one level deep. Neither argument is mutated.
+ *
+ * A top-level key replaces, except that an object-valued block (`post`, `camera`, `plate`,
+ * `lampGate`, `scatter`, `beam`, `dust`, `interaction`, `backgroundImagePosition`) is merged with
+ * the block it lands on, so `{ post: { bloom: 1 } }` turns one knob instead of resetting the rest
+ * of the post stack to defaults once the result is normalized. Arrays (`lamps`, `items`, `groups`,
+ * the palettes) replace wholesale: an array is a composition, and half of one is no use. Anything
+ * nested deeper than one level replaces too, so `{ plate: { scale: { x: 30 } } }` drops `y`. An
+ * explicit `undefined` still lands, which is how `scatter: undefined` opts out of the default
+ * scatter.
+ */
+export function mergeSceneConfig(
+  base: Partial<SceneConfig>,
+  patch: Partial<SceneConfig>,
+): Partial<SceneConfig> {
+  const out: Record<string, unknown> = { ...base };
+  for (const [key, next] of Object.entries(patch)) {
+    const prev = out[key];
+    out[key] = isPlainObject(prev) && isPlainObject(next) ? { ...prev, ...next } : next;
+  }
+  return out as Partial<SceneConfig>;
 }

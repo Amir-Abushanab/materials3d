@@ -1,4 +1,4 @@
-/* Materials Studio. Light, quiet chrome — the scene is a near-white studio backdrop, so anything
+/* Materials Studio. Light, quiet chrome: the scene is a near-white studio backdrop, so anything
    with strong colour in the UI competes with the thing being designed. */
 
 :root {
@@ -39,7 +39,7 @@ body {
 /* The stage reserves the preview area; the SCENE inside it is the export frame, at the exact
    aspect every image, clip and embed will be written at. Before this, the scene simply filled the
    stage, so choosing "1:1" changed the exported file but not the thing you were composing
-   against — and `camera.fit` had nothing visible to act on. */
+   against, and `camera.fit` had nothing visible to act on. */
 #stage {
   position: relative;
   display: flex;
@@ -54,7 +54,7 @@ body {
 #scene {
   position: relative;
   flex: none;
-  /* `refitPreview` sets the real inline/block size — CSS cannot fit an arbitrary aspect inside a
+  /* `refitPreview` sets the real inline/block size; CSS cannot fit an arbitrary aspect inside a
      box on its own, see the note there. These are the first-paint fallback and a safety net only;
      the aspect-ratio never survives once the computed size lands. */
   inline-size: 100%;
@@ -68,7 +68,7 @@ body {
 
 /* Actual size: the frame takes its real pixel dimensions and the stage scrolls to reach the rest.
    `safe center` rather than plain `center` because a centred flex item that overflows its scroll
-   container is unreachable at the start edge — the top and left of a 4K frame would be scrolled
+   container is unreachable at the start edge: the top and left of a 4K frame would be scrolled
    past with no way back. `safe` drops to start alignment exactly when that would happen. */
 #stage.actual-size {
   justify-content: safe center;
@@ -81,8 +81,8 @@ body {
   max-block-size: none;
 }
 
-/* The export-area readout, tucked under the frame's top edge. Quiet by default — it is a label,
-   not a control — and it brightens with the resize handles while the size is being changed. */
+/* The export-area readout, tucked under the frame's top edge. Quiet by default (it is a label,
+   not a control), and it brightens with the resize handles while the size is being changed. */
 #capture-size {
   position: absolute;
   inset-block-start: 100%;
@@ -102,6 +102,20 @@ body {
 #stage:hover #capture-size,
 #stage.size-adjusting #capture-size {
   opacity: 1;
+}
+
+/* Off-screen but read by assistive tech: the export size is announced from here once a resize
+   has landed, while the visible readout follows the pointer without narrating every move. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
 }
 
 /* Corner handles for dragging the export size. Hidden until the pointer is over the stage, so a
@@ -302,7 +316,7 @@ button:hover {
 }
 
 /* Hidden by the filter rather than removed: Tweakpane owns this DOM and rebuilds it, so the
-   panel must not restructure it — it may only decide what shows. */
+   panel must not restructure it; it may only decide what shows. */
 #pane .tp-search-hidden {
   display: none !important;
 }
@@ -603,7 +617,7 @@ dialog::backdrop {
 }
 
 /* A hinted BUTTON's info glyph. Buttons exist to be clicked, so the hint gets its own small target
-   rather than borrowing the label's dotted underline — which on a button would advertise the whole
+   rather than borrowing the label's dotted underline, which on a button would advertise the whole
    thing as hoverable-for-help and fight the click. Dim until approached; strokes with currentColor
    so it can never be invisible against its own control. */
 .g3-hint-info {

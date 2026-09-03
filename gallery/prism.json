@@ -148,20 +148,20 @@
       },
       "name": "prism",
       "material": {
-        "kind": "glass",
-        "albedo": "#eef1f6",
         "density": 0.35,
+        "ior": 1.645,
+        "dispersion": 0.05,
+        "rim": 1,
+        "specular": 1.7,
+        "saturation": 1,
+        "emission": 0,
+        "albedo": "#eef1f6",
+        "kind": "glass",
         "absorption": {
           "x": 1,
           "y": 1,
           "z": 0.54
-        },
-        "ior": 1.645,
-        "dispersion": 0.05,
-        "rim": 1.35,
-        "specular": 1.7,
-        "emission": 0,
-        "saturation": 1
+        }
       },
       "motion": {
         "kind": "none",

@@ -37,6 +37,8 @@
     "./standalone": "./src/standalone.ts"
   },
   "publishConfig": {
+    "main": "./dist/index.js",
+    "types": "./dist/index.d.ts",
     "exports": {
       ".": {
         "types": "./dist/index.d.ts",
@@ -45,6 +47,10 @@
       "./renderer": {
         "types": "./dist/renderer/index.d.ts",
         "default": "./dist/renderer/index.js"
+      },
+      "./renderer-webgpu": {
+        "types": "./dist/renderer/NodeMaterialRenderer.d.ts",
+        "default": "./dist/renderer/NodeMaterialRenderer.js"
       },
       "./presets": {
         "types": "./dist/presets.d.ts",
@@ -81,5 +87,8 @@
     "@types/three": {
       "optional": true
     }
+  },
+  "engines": {
+    "node": ">=20.19"
   }
 }

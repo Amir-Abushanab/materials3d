@@ -1,12 +1,12 @@
 /**
- * The optional interactivity runtime — the trigger system ported from wave3d, minus its pointer
- * FIELD (hover swell / drag-wake / click ripples deform a membrane; these shapes are rigid, so
- * only the input→param bindings carried over). It lives in renderer/ so it stays below the
+ * The optional interactivity runtime: input-to-parameter bindings. There is no pointer FIELD
+ * (hover swell, drag-wake, click ripples deform a membrane; these shapes are rigid). It lives in
+ * renderer/ so it stays below the
  * shell/studio/index layers; it may import only `three`, ../config/model, and ../util/math.
  *
  * Split of responsibility with MaterialRenderer: this controller owns ALL input + smoothing (the
  * one cursor's position / presence / press / velocity, scroll progress + velocity, the `appear`
- * latch, custom inputs, and every binding's smoothed 0..1 source value — keyed by binding
+ * latch, custom inputs, and every binding's smoothed 0..1 source value, keyed by binding
  * identity, so scene + per-item + per-lamp lists all get their own smoothing). The renderer calls
  * update(dt) once per frame and writes uniforms through the applier tables below. Bindings NEVER
  * mutate `config`, so any refresh restores the authored base.
@@ -34,6 +34,7 @@ const SCROLL_VELOCITY_REF = 2.0; // progress/s that normalizes scrollVelocity to
 const SCROLL_VELOCITY_TAU = 0.15; // scroll-velocity smoothing (seconds)
 const DEFAULT_POINTER_TAU = 0.12; // pointer-follow smoothing (seconds)
 const DEFAULT_BINDING_TAU = 0.25; // per-binding source smoothing default (seconds)
+const PASSIVE = { passive: true } as const;
 
 type AnyBinding = ItemInteractionBinding | LampInteractionBinding | SceneInteractionBinding;
 
@@ -46,7 +47,7 @@ function alpha(tau: number, dt: number): number {
 
 /** What an item-scoped applier writes into: one shape's uniforms + its mesh transform. Bases read
  *  from the shape's RESOLVED material (the renderer caches it at push time) and its authored
- *  `home` pose, mirroring exactly what refresh() would restore — so a binding at rest writes the
+ *  `home` pose, mirroring exactly what refresh() would restore, so a binding at rest writes the
  *  value the renderer already had, with no visible jump. */
 export interface ItemApplyArgs {
   u: Record<string, THREE.IUniform>;
@@ -54,7 +55,7 @@ export interface ItemApplyArgs {
   home: THREE.Vector3;
 }
 /** What a lamp-scoped applier writes into: that lamp's packed uniform (xy centre · z radius ·
- *  w intensity — see applyLamps). */
+ *  w intensity, see applyLamps). */
 export interface LampApplyArgs {
   vec: THREE.Vector4;
 }
@@ -98,7 +99,7 @@ const uniform =
 /**
  * Per-shape binding targets → (how to read the authored base value, how to write the modulated
  * one). This object is the runtime source of truth for {@link ItemInteractionTarget} (enforced by
- * `satisfies`). The uniform names mirror pushMaterialUniforms — the ONE list both draw from.
+ * `satisfies`). The uniform names mirror pushMaterialUniforms, the ONE list both draw from.
  */
 export const ITEM_APPLIERS = {
   density: { base: (m) => m.density, apply: uniform("uSigma") },
@@ -164,7 +165,7 @@ export const SCENE_APPLIERS = {
       a.out.timeOffset = v;
     },
   },
-  // No authored cameraZoom exists in this config — the binding is a MULTIPLIER over the authored
+  // No authored cameraZoom exists in this config, the binding is a MULTIPLIER over the authored
   // camera distance (2 = twice as close), so its rest value is simply 1.
   cameraZoom: {
     base: () => 1,
@@ -176,7 +177,7 @@ export const SCENE_APPLIERS = {
    * The two odd ones out: every other scene applier writes a uniform, and these ask for the beam
    * to be retraced.
    *
-   * A beam's shape is decided on the CPU — Snell at each face, per wavelength — so there is no
+   * A beam's shape is decided on the CPU. Snell at each face, per wavelength, so there is no
    * uniform that can move it. They only record what is wanted; the renderer compares against what
    * the current mesh was built from and rebuilds when it differs, which is what keeps a pointer
    * that has stopped moving from retracing every frame for an identical answer.
@@ -262,7 +263,7 @@ export const SCENE_APPLIERS = {
 
 // ---- Active-state predicate ------------------------------------------------------------------
 
-/** Whether the interaction layer should run at all: not disabled, and SOME binding list exists —
+/** Whether the interaction layer should run at all: not disabled, and SOME binding list exists,
  *  on the scene, a shape (authored or scatter-generated), or a lamp. Keyed off config only, so
  *  input can never trigger it. */
 export function interactionActive(cfg: SceneConfig): boolean {
@@ -285,7 +286,8 @@ interface Vec2Like {
 /**
  * Owns the one cursor's input + scroll + press/appear/custom and all smoothing. Constructed by
  * the renderer when {@link interactionActive} first turns true, disposed when it turns false.
- * All listeners are passive and container-scoped (the poster overlay passes events through).
+ * All listeners are passive and container-scoped (the poster overlay passes events through),
+ * except the release of a held press, which is watched at the window; see {@link watchRelease}.
  */
 export class InteractionController {
   /** Studio-only scroll preview: when non-null, overrides the computed scroll progress. */
@@ -299,14 +301,23 @@ export class InteractionController {
   private presenceTarget = 0;
   private press = 0;
   private pressTarget = 0;
+  // The pointer that began the current press, so another pointer's release cannot end it.
+  private pressPointerId = -1;
+  // Whether the window is being watched for that press's release; see watchRelease.
+  private releaseWatched = false;
   private pointerSpeed = 0;
   private scroll = 0;
   private scrollPrev = 0;
   private scrollVel = 0;
+  // Frame counter and its delta, and the frame the scroll signal was last sampled on; see
+  // sampleScroll.
+  private frame = 0;
+  private frameDt = 0;
+  private scrollFrame = -1;
   private appearLatched = false;
   // Which config item the pointer is over (renderer raycasts and feeds this each frame); -1 = none.
   private hoverItemIndex = -1;
-  // Which config item the CURRENT press began on — latched at pointerdown, held until the next
+  // Which config item the CURRENT press began on, latched at pointerdown, held until the next
   // down (the smoothed `press` going to 0 already zeroes every pressSelf raw value on release).
   private pressItemIndex = -1;
   // A pointerdown whose hit test hasn't run yet: its NDC. The renderer consumes it (raycast) on
@@ -335,13 +346,12 @@ export class InteractionController {
     items?: () => readonly ItemConfig[],
   ) {
     this.itemList = items ?? ((): readonly ItemConfig[] => this.cfg()?.items ?? []);
-    const opts = { passive: true } as const;
-    container.addEventListener("pointerenter", this.onPointerEnter, opts);
-    container.addEventListener("pointermove", this.onPointerMove, opts);
-    container.addEventListener("pointerleave", this.onPointerLeave, opts);
-    container.addEventListener("pointercancel", this.onPointerCancel, opts);
-    container.addEventListener("pointerdown", this.onPointerDown, opts);
-    container.addEventListener("pointerup", this.onPointerUp, opts);
+    container.addEventListener("pointerenter", this.onPointerEnter, PASSIVE);
+    container.addEventListener("pointermove", this.onPointerMove, PASSIVE);
+    container.addEventListener("pointerleave", this.onPointerLeave, PASSIVE);
+    container.addEventListener("pointercancel", this.onPointerCancel, PASSIVE);
+    container.addEventListener("pointerdown", this.onPointerDown, PASSIVE);
+    container.addEventListener("pointerup", this.onPointerUp, PASSIVE);
   }
 
   /** Ignore coarse (touch) pointers unless the scene opts in with interaction.touch. */
@@ -372,10 +382,13 @@ export class InteractionController {
     this.presenceTarget = 0;
     this.ndcTarget.x = 0; // relax toward centre → pointerX/Y rest at 0.5
     this.ndcTarget.y = 0;
+    // Leaving with no button held means the release itself went unseen, so the press ends here
+    // rather than staying latched until the next click.
+    if (e.buttons === 0) this.release(e);
   };
   private onPointerCancel = (e: PointerEvent): void => {
     if (this.ignore(e)) return;
-    this.pressTarget = 0;
+    this.release(e);
     this.presenceTarget = 0;
     this.ndcTarget.x = 0;
     this.ndcTarget.y = 0;
@@ -385,6 +398,8 @@ export class InteractionController {
     this.pressTarget = 1;
     this.presenceTarget = 1;
     this.setNdcTarget(e);
+    this.pressPointerId = e.pointerId;
+    this.watchRelease();
     // Latch the down position for the per-shape press hit test (resolved by the renderer next
     // frame). A down on empty space resolves to no shape, replacing any previous latch.
     this.pressNdc.x = this.ndcTarget.x;
@@ -392,14 +407,48 @@ export class InteractionController {
     this.pressPending = this.pressNdc;
   };
   private onPointerUp = (e: PointerEvent): void => {
-    if (this.ignore(e)) return;
+    if (this.ignore(e) || e.pointerId !== this.pressPointerId) return;
+    this.release(e);
+  };
+  /** The window's view of the release, for a press that ended outside the container. */
+  private onWindowRelease = (e: PointerEvent): void => {
+    if (e.pointerId !== this.pressPointerId) return;
+    this.release(e);
+  };
+
+  private release(e: PointerEvent): void {
     this.pressTarget = 0;
+    this.pressPointerId = -1;
+    this.unwatchRelease();
     if (e.pointerType === "touch") {
-      this.presenceTarget = 0; // touch has no hover — presence ends with the touch
+      this.presenceTarget = 0; // touch has no hover, so presence ends with the touch
       this.ndcTarget.x = 0;
       this.ndcTarget.y = 0;
     }
-  };
+  }
+
+  /**
+   * Watch the window for the held press's release.
+   *
+   * The container's own listeners stop at its edge, so a press that starts inside and ends outside
+   * never sees its `pointerup` and stays latched until the next click. The window sees every
+   * release. Pointer capture would too, but the renderer's orbit captures on the canvas for a
+   * secondary-button drag, and a second capture on the container would take that pointer's moves
+   * away from it.
+   */
+  private watchRelease(): void {
+    if (this.releaseWatched || typeof window === "undefined") return;
+    window.addEventListener("pointerup", this.onWindowRelease, PASSIVE);
+    window.addEventListener("pointercancel", this.onWindowRelease, PASSIVE);
+    this.releaseWatched = true;
+  }
+
+  private unwatchRelease(): void {
+    if (!this.releaseWatched) return;
+    window.removeEventListener("pointerup", this.onWindowRelease);
+    window.removeEventListener("pointercancel", this.onWindowRelease);
+    this.releaseWatched = false;
+  }
 
   /** Advance all smoothed state by `dt` seconds. Called from the render loop with the same delta. */
   update(dt: number): void {
@@ -425,14 +474,9 @@ export class InteractionController {
     this.pointerSpeed =
       this.presence * clamp01(Math.hypot(this.velNdc.x, this.velNdc.y) / POINTER_SPEED_REF);
 
-    // Scroll progress + velocity.
-    const rawScroll = this.scrollOverride ?? this.computeScroll();
-    if (d > 1e-5) {
-      const sv = Math.abs(rawScroll - this.scrollPrev) / d;
-      this.scrollVel += (sv - this.scrollVel) * alpha(SCROLL_VELOCITY_TAU, d);
-    }
-    this.scrollPrev = rawScroll;
-    this.scroll = rawScroll;
+    // Scroll is sampled by the bindings that read it, at most once a frame; see sampleScroll.
+    this.frame++;
+    this.frameDt = d;
 
     // Appear latch: the render loop is visibility-gated, so the first update() IS first-visible.
     this.appearLatched = true;
@@ -440,7 +484,7 @@ export class InteractionController {
     this.updateBindings(cfg, d);
   }
 
-  // Indexed loops + a reused scratch set (no per-frame closure/array/Set) — this runs every frame.
+  // Indexed loops + a reused scratch set (no per-frame closure/array/Set), this runs every frame.
   private updateBindings(cfg: SceneConfig, dt: number): void {
     const seen = this.seenBindings;
     seen.clear();
@@ -460,7 +504,7 @@ export class InteractionController {
       for (let i = 0; i < bindings.length; i++) this.advanceBinding(bindings[i], dt, s);
     }
     // Prune state for bindings that no longer exist (edited/removed slots). advanceBinding puts
-    // every seen binding in the map, so map ⊇ seen — equal sizes means nothing is stale.
+    // every seen binding in the map, so map ⊇ seen, equal sizes means nothing is stale.
     if (this.bindingState.size > seen.size) {
       for (const key of this.bindingState.keys()) if (!seen.has(key)) this.bindingState.delete(key);
     }
@@ -491,12 +535,13 @@ export class InteractionController {
   private rawSource(source: InteractionSource, itemIndex = -1): number {
     switch (source) {
       case "scroll":
+        this.sampleScroll();
         return this.scroll;
       case "hover":
         return this.presence;
       case "hoverSelf":
         // Only meaningful on an item binding; the renderer raycasts the cursor into the scene
-        // and reports the hit. Raw 0/1 — the per-binding smoothing supplies the ease.
+        // and reports the hit. Raw 0/1, the per-binding smoothing supplies the ease.
         return itemIndex >= 0 && itemIndex === this.hoverItemIndex ? 1 : 0;
       case "pointerX":
         return (this.ndc.x + 1) * 0.5;
@@ -507,17 +552,37 @@ export class InteractionController {
       case "press":
         return this.press;
       case "pressSelf":
-        // The press that began on THIS shape, riding the shared smoothed press envelope — so a
+        // The press that began on THIS shape, riding the shared smoothed press envelope, so a
         // release eases out exactly like the global `press` source does.
         return itemIndex >= 0 && itemIndex === this.pressItemIndex ? this.press : 0;
       case "scrollVelocity":
+        this.sampleScroll();
         return clamp01(this.scrollVel / SCROLL_VELOCITY_REF);
       case "appear":
         return this.appearLatched ? 1 : 0;
       default:
-        // custom:<name> — fed by setInput(name, value).
+        // custom:<name>, fed by setInput(name, value).
         return this.customInputs.get(source.slice("custom:".length)) ?? 0;
     }
+  }
+
+  /**
+   * Scroll progress and velocity, sampled at most once per frame and only when a binding reads
+   * them. The sample is a `getBoundingClientRect`, which forces layout, and most scenes bind
+   * nothing to scroll: taking it every frame regardless was the one layout hit in the loop.
+   */
+  private sampleScroll(): void {
+    if (this.scrollFrame === this.frame) return;
+    const raw = this.scrollOverride ?? this.computeScroll();
+    // Velocity only against the previous frame's sample. After a gap the signal was asleep, and
+    // the jump from its stale value is a wake-up, not a movement.
+    if (this.scrollFrame === this.frame - 1 && this.frameDt > 1e-5) {
+      const sv = Math.abs(raw - this.scrollPrev) / this.frameDt;
+      this.scrollVel += (sv - this.scrollVel) * alpha(SCROLL_VELOCITY_TAU, this.frameDt);
+    }
+    this.scrollPrev = raw;
+    this.scroll = raw;
+    this.scrollFrame = this.frame;
   }
 
   /** Container progress through the viewport: 0 as it enters from below, 1 once scrolled past. */
@@ -528,7 +593,7 @@ export class InteractionController {
     return clamp01((vh - rect.top) / (vh + rect.height));
   }
 
-  /** The raw (unsmoothed) cursor target in NDC, or null while the pointer is away — what the
+  /** The raw (unsmoothed) cursor target in NDC, or null while the pointer is away, what the
    *  renderer raycasts to resolve `hoverSelf`. Live reference; read synchronously. */
   pointerTarget(): { x: number; y: number } | null {
     return this.presenceTarget > 0 ? this.ndcTarget : null;
@@ -541,7 +606,7 @@ export class InteractionController {
   }
 
   /** A pointerdown whose hit test hasn't run yet: its NDC, or null. The renderer raycasts it and
-   *  answers via setPressItem — which also clears the pending state, so each down is tested once. */
+   *  answers via setPressItem, which also clears the pending state, so each down is tested once. */
   pendingPress(): { x: number; y: number } | null {
     return this.pressPending;
   }
@@ -574,8 +639,8 @@ export class InteractionController {
     this.ndc.x = this.ndc.y = 0;
     this.ndcTarget.x = this.ndcTarget.y = 0;
     this.ndcPrev.x = this.ndcPrev.y = 0;
-    const rawScroll = this.scrollOverride ?? this.computeScroll();
-    this.scroll = this.scrollPrev = rawScroll;
+    this.scrollFrame = -1; // a fresh sample, and still: the settled frame has no velocity
+    this.sampleScroll();
     this.scrollVel = 0;
     this.appearLatched = true;
     this.hoverItemIndex = -1; // settled = no shape under the cursor
@@ -597,13 +662,13 @@ export class InteractionController {
    * Snap scroll progress + the scroll-sourced bindings to the current override at once, leaving
    * every other input (pointer / press / appear / custom) advancing live. Used by the studio
    * scroll preview: the studio page never really scrolls, so dragging the preview slider is a
-   * manual scrub that must reflect the instant you move it — not on the next animation frame,
+   * manual scrub that must reflect the instant you move it, not on the next animation frame,
    * which the browser suspends whenever the tab isn't foreground. Unlike settle() (which
    * collapses ALL input to rest for a paused still frame), this touches only the scroll signal.
    */
   snapScroll(): void {
-    const raw = this.scrollOverride ?? this.computeScroll();
-    this.scroll = this.scrollPrev = raw;
+    this.scrollFrame = -1;
+    this.sampleScroll();
     this.scrollVel = 0; // a static scrub has no velocity
     const cfg = this.cfg();
     if (!cfg) return;
@@ -625,6 +690,7 @@ export class InteractionController {
     c.removeEventListener("pointercancel", this.onPointerCancel);
     c.removeEventListener("pointerdown", this.onPointerDown);
     c.removeEventListener("pointerup", this.onPointerUp);
+    this.unwatchRelease();
     this.customInputs.clear();
     this.bindingState.clear();
   }

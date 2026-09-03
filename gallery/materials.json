@@ -185,8 +185,8 @@
         "specular": 1,
         "saturation": 1.14,
         "emission": 0,
-        "kind": "glass",
-        "roughness": 0
+        "roughness": 0,
+        "kind": "glass"
       },
       "motion": {
         "kind": "drift",
@@ -237,8 +237,8 @@
         "specular": 1,
         "saturation": 1.14,
         "emission": 0,
-        "kind": "glass",
-        "roughness": 0
+        "roughness": 0,
+        "kind": "glass"
       },
       "motion": {
         "kind": "drift",
@@ -289,8 +289,8 @@
         "specular": 1,
         "saturation": 1.14,
         "emission": 0,
-        "kind": "glass",
-        "roughness": 0
+        "roughness": 0,
+        "kind": "glass"
       },
       "motion": {
         "kind": "drift",
@@ -341,8 +341,8 @@
         "specular": 1,
         "saturation": 1.14,
         "emission": 0,
-        "kind": "glass",
-        "roughness": 0
+        "roughness": 0,
+        "kind": "glass"
       },
       "motion": {
         "kind": "drift",
@@ -393,8 +393,8 @@
         "specular": 1,
         "saturation": 1.14,
         "emission": 0,
-        "kind": "glass",
-        "roughness": 0
+        "roughness": 0,
+        "kind": "glass"
       },
       "motion": {
         "kind": "drift",
@@ -437,6 +437,7 @@
       },
       "name": "glass · sphere",
       "material": {
+        "path": 0.42,
         "density": 2.2,
         "ior": 1.48,
         "dispersion": 0.02,
@@ -445,9 +446,8 @@
         "specular": 1,
         "saturation": 1.14,
         "emission": 0,
-        "kind": "glass",
         "roughness": 0,
-        "path": 0.42
+        "kind": "glass"
       },
       "motion": {
         "kind": "drift",
@@ -498,8 +498,8 @@
         "specular": 1,
         "saturation": 1.14,
         "emission": 0,
-        "kind": "glass",
-        "roughness": 0
+        "roughness": 0,
+        "kind": "glass"
       },
       "motion": {
         "kind": "drift",
@@ -550,8 +550,8 @@
         "specular": 1,
         "saturation": 1.14,
         "emission": 0,
-        "kind": "glass",
-        "roughness": 0
+        "roughness": 0,
+        "kind": "glass"
       },
       "motion": {
         "kind": "drift",
@@ -594,6 +594,7 @@
       },
       "name": "glass · droplet",
       "material": {
+        "path": 0.45,
         "density": 2.2,
         "ior": 1.48,
         "dispersion": 0.02,
@@ -602,9 +603,8 @@
         "specular": 1,
         "saturation": 1.14,
         "emission": 0,
-        "kind": "glass",
         "roughness": 0,
-        "path": 0.45
+        "kind": "glass"
       },
       "motion": {
         "kind": "drift",
@@ -647,6 +647,7 @@
       },
       "name": "glass · blob",
       "material": {
+        "path": 0.42,
         "density": 2.2,
         "ior": 1.48,
         "dispersion": 0.02,
@@ -655,9 +656,8 @@
         "specular": 1,
         "saturation": 1.14,
         "emission": 0,
-        "kind": "glass",
         "roughness": 0,
-        "path": 0.42
+        "kind": "glass"
       },
       "motion": {
         "kind": "drift",
@@ -708,8 +708,8 @@
         "specular": 1,
         "saturation": 1.14,
         "emission": 0,
-        "kind": "glass",
-        "roughness": 0
+        "roughness": 0,
+        "kind": "glass"
       },
       "motion": {
         "kind": "drift",
@@ -761,8 +761,8 @@
         "specular": 1,
         "saturation": 1.14,
         "emission": 0,
-        "kind": "glass",
-        "roughness": 0
+        "roughness": 0,
+        "kind": "glass"
       },
       "motion": {
         "kind": "drift",
@@ -813,8 +813,8 @@
         "specular": 1,
         "saturation": 1.14,
         "emission": 0,
-        "kind": "frosted",
-        "roughness": 0.42
+        "roughness": 0.42,
+        "kind": "frosted"
       },
       "motion": {
         "kind": "drift",
@@ -865,8 +865,8 @@
         "specular": 1,
         "saturation": 1.14,
         "emission": 0,
-        "kind": "frosted",
-        "roughness": 0.42
+        "roughness": 0.42,
+        "kind": "frosted"
       },
       "motion": {
         "kind": "drift",
@@ -917,8 +917,8 @@
         "specular": 1,
         "saturation": 1.14,
         "emission": 0,
-        "kind": "frosted",
-        "roughness": 0.42
+        "roughness": 0.42,
+        "kind": "frosted"
       },
       "motion": {
         "kind": "drift",
@@ -969,8 +969,8 @@
         "specular": 1,
         "saturation": 1.14,
         "emission": 0,
-        "kind": "frosted",
-        "roughness": 0.42
+        "roughness": 0.42,
+        "kind": "frosted"
       },
       "motion": {
         "kind": "drift",
@@ -1021,8 +1021,8 @@
         "specular": 1,
         "saturation": 1.14,
         "emission": 0,
-        "kind": "frosted",
-        "roughness": 0.42
+        "roughness": 0.42,
+        "kind": "frosted"
       },
       "motion": {
         "kind": "drift",
@@ -1065,6 +1065,7 @@
       },
       "name": "frosted · sphere",
       "material": {
+        "path": 0.42,
         "density": 2.2,
         "ior": 1.48,
         "dispersion": 0.02,
@@ -1073,9 +1074,8 @@
         "specular": 1,
         "saturation": 1.14,
         "emission": 0,
-        "kind": "frosted",
         "roughness": 0.42,
-        "path": 0.42
+        "kind": "frosted"
       },
       "motion": {
         "kind": "drift",
@@ -1126,8 +1126,8 @@
         "specular": 1,
         "saturation": 1.14,
         "emission": 0,
-        "kind": "frosted",
-        "roughness": 0.42
+        "roughness": 0.42,
+        "kind": "frosted"
       },
       "motion": {
         "kind": "drift",
@@ -1178,8 +1178,8 @@
         "specular": 1,
         "saturation": 1.14,
         "emission": 0,
-        "kind": "frosted",
-        "roughness": 0.42
+        "roughness": 0.42,
+        "kind": "frosted"
       },
       "motion": {
         "kind": "drift",
@@ -1222,6 +1222,7 @@
       },
       "name": "frosted · droplet",
       "material": {
+        "path": 0.45,
         "density": 2.2,
         "ior": 1.48,
         "dispersion": 0.02,
@@ -1230,9 +1231,8 @@
         "specular": 1,
         "saturation": 1.14,
         "emission": 0,
-        "kind": "frosted",
         "roughness": 0.42,
-        "path": 0.45
+        "kind": "frosted"
       },
       "motion": {
         "kind": "drift",
@@ -1275,6 +1275,7 @@
       },
       "name": "frosted · blob",
       "material": {
+        "path": 0.42,
         "density": 2.2,
         "ior": 1.48,
         "dispersion": 0.02,
@@ -1283,9 +1284,8 @@
         "specular": 1,
         "saturation": 1.14,
         "emission": 0,
-        "kind": "frosted",
         "roughness": 0.42,
-        "path": 0.42
+        "kind": "frosted"
       },
       "motion": {
         "kind": "drift",
@@ -1336,8 +1336,8 @@
         "specular": 1,
         "saturation": 1.14,
         "emission": 0,
-        "kind": "frosted",
-        "roughness": 0.42
+        "roughness": 0.42,
+        "kind": "frosted"
       },
       "motion": {
         "kind": "drift",
@@ -1389,8 +1389,8 @@
         "specular": 1,
         "saturation": 1.14,
         "emission": 0,
-        "kind": "frosted",
-        "roughness": 0.42
+        "roughness": 0.42,
+        "kind": "frosted"
       },
       "motion": {
         "kind": "drift",
@@ -1441,8 +1441,8 @@
         "specular": 1,
         "saturation": 1.14,
         "emission": 0,
-        "kind": "glitter",
-        "roughness": 0.12
+        "roughness": 0.12,
+        "kind": "glitter"
       },
       "motion": {
         "kind": "drift",
@@ -1493,8 +1493,8 @@
         "specular": 1,
         "saturation": 1.14,
         "emission": 0,
-        "kind": "glitter",
-        "roughness": 0.12
+        "roughness": 0.12,
+        "kind": "glitter"
       },
       "motion": {
         "kind": "drift",
@@ -1545,8 +1545,8 @@
         "specular": 1,
         "saturation": 1.14,
         "emission": 0,
-        "kind": "glitter",
-        "roughness": 0.12
+        "roughness": 0.12,
+        "kind": "glitter"
       },
       "motion": {
         "kind": "drift",
@@ -1597,8 +1597,8 @@
         "specular": 1,
         "saturation": 1.14,
         "emission": 0,
-        "kind": "glitter",
-        "roughness": 0.12
+        "roughness": 0.12,
+        "kind": "glitter"
       },
       "motion": {
         "kind": "drift",
@@ -1649,8 +1649,8 @@
         "specular": 1,
         "saturation": 1.14,
         "emission": 0,
-        "kind": "glitter",
-        "roughness": 0.12
+        "roughness": 0.12,
+        "kind": "glitter"
       },
       "motion": {
         "kind": "drift",
@@ -1693,6 +1693,7 @@
       },
       "name": "glitter · sphere",
       "material": {
+        "path": 0.42,
         "density": 2.2,
         "ior": 1.48,
         "dispersion": 0.02,
@@ -1701,9 +1702,8 @@
         "specular": 1,
         "saturation": 1.14,
         "emission": 0,
-        "kind": "glitter",
         "roughness": 0.12,
-        "path": 0.42
+        "kind": "glitter"
       },
       "motion": {
         "kind": "drift",
@@ -1754,8 +1754,8 @@
         "specular": 1,
         "saturation": 1.14,
         "emission": 0,
-        "kind": "glitter",
-        "roughness": 0.12
+        "roughness": 0.12,
+        "kind": "glitter"
       },
       "motion": {
         "kind": "drift",
@@ -1806,8 +1806,8 @@
         "specular": 1,
         "saturation": 1.14,
         "emission": 0,
-        "kind": "glitter",
-        "roughness": 0.12
+        "roughness": 0.12,
+        "kind": "glitter"
       },
       "motion": {
         "kind": "drift",
@@ -1850,6 +1850,7 @@
       },
       "name": "glitter · droplet",
       "material": {
+        "path": 0.45,
         "density": 2.2,
         "ior": 1.48,
         "dispersion": 0.02,
@@ -1858,9 +1859,8 @@
         "specular": 1,
         "saturation": 1.14,
         "emission": 0,
-        "kind": "glitter",
         "roughness": 0.12,
-        "path": 0.45
+        "kind": "glitter"
       },
       "motion": {
         "kind": "drift",
@@ -1903,6 +1903,7 @@
       },
       "name": "glitter · blob",
       "material": {
+        "path": 0.42,
         "density": 2.2,
         "ior": 1.48,
         "dispersion": 0.02,
@@ -1911,9 +1912,8 @@
         "specular": 1,
         "saturation": 1.14,
         "emission": 0,
-        "kind": "glitter",
         "roughness": 0.12,
-        "path": 0.42
+        "kind": "glitter"
       },
       "motion": {
         "kind": "drift",
@@ -1964,8 +1964,8 @@
         "specular": 1,
         "saturation": 1.14,
         "emission": 0,
-        "kind": "glitter",
-        "roughness": 0.12
+        "roughness": 0.12,
+        "kind": "glitter"
       },
       "motion": {
         "kind": "drift",
@@ -2017,8 +2017,8 @@
         "specular": 1,
         "saturation": 1.14,
         "emission": 0,
-        "kind": "glitter",
-        "roughness": 0.12
+        "roughness": 0.12,
+        "kind": "glitter"
       },
       "motion": {
         "kind": "drift",
@@ -2069,8 +2069,8 @@
         "specular": 1,
         "saturation": 1.14,
         "emission": 0,
-        "kind": "liquid",
-        "roughness": 0
+        "roughness": 0,
+        "kind": "liquid"
       },
       "motion": {
         "kind": "drift",
@@ -2121,8 +2121,8 @@
         "specular": 1,
         "saturation": 1.14,
         "emission": 0,
-        "kind": "liquid",
-        "roughness": 0
+        "roughness": 0,
+        "kind": "liquid"
       },
       "motion": {
         "kind": "drift",
@@ -2173,8 +2173,8 @@
         "specular": 1,
         "saturation": 1.14,
         "emission": 0,
-        "kind": "liquid",
-        "roughness": 0
+        "roughness": 0,
+        "kind": "liquid"
       },
       "motion": {
         "kind": "drift",
@@ -2225,8 +2225,8 @@
         "specular": 1,
         "saturation": 1.14,
         "emission": 0,
-        "kind": "liquid",
-        "roughness": 0
+        "roughness": 0,
+        "kind": "liquid"
       },
       "motion": {
         "kind": "drift",
@@ -2277,8 +2277,8 @@
         "specular": 1,
         "saturation": 1.14,
         "emission": 0,
-        "kind": "liquid",
-        "roughness": 0
+        "roughness": 0,
+        "kind": "liquid"
       },
       "motion": {
         "kind": "drift",
@@ -2321,6 +2321,7 @@
       },
       "name": "liquid · sphere",
       "material": {
+        "path": 0.42,
         "density": 2.2,
         "ior": 1.48,
         "dispersion": 0.02,
@@ -2329,9 +2330,8 @@
         "specular": 1,
         "saturation": 1.14,
         "emission": 0,
-        "kind": "liquid",
         "roughness": 0,
-        "path": 0.42
+        "kind": "liquid"
       },
       "motion": {
         "kind": "drift",
@@ -2382,8 +2382,8 @@
         "specular": 1,
         "saturation": 1.14,
         "emission": 0,
-        "kind": "liquid",
-        "roughness": 0
+        "roughness": 0,
+        "kind": "liquid"
       },
       "motion": {
         "kind": "drift",
@@ -2434,8 +2434,8 @@
         "specular": 1,
         "saturation": 1.14,
         "emission": 0,
-        "kind": "liquid",
-        "roughness": 0
+        "roughness": 0,
+        "kind": "liquid"
       },
       "motion": {
         "kind": "drift",
@@ -2478,6 +2478,7 @@
       },
       "name": "liquid · droplet",
       "material": {
+        "path": 0.45,
         "density": 2.2,
         "ior": 1.48,
         "dispersion": 0.02,
@@ -2486,9 +2487,8 @@
         "specular": 1,
         "saturation": 1.14,
         "emission": 0,
-        "kind": "liquid",
         "roughness": 0,
-        "path": 0.45
+        "kind": "liquid"
       },
       "motion": {
         "kind": "drift",
@@ -2531,6 +2531,7 @@
       },
       "name": "liquid · blob",
       "material": {
+        "path": 0.42,
         "density": 2.2,
         "ior": 1.48,
         "dispersion": 0.02,
@@ -2539,9 +2540,8 @@
         "specular": 1,
         "saturation": 1.14,
         "emission": 0,
-        "kind": "liquid",
         "roughness": 0,
-        "path": 0.42
+        "kind": "liquid"
       },
       "motion": {
         "kind": "drift",
@@ -2592,8 +2592,8 @@
         "specular": 1,
         "saturation": 1.14,
         "emission": 0,
-        "kind": "liquid",
-        "roughness": 0
+        "roughness": 0,
+        "kind": "liquid"
       },
       "motion": {
         "kind": "drift",
@@ -2645,8 +2645,8 @@
         "specular": 1,
         "saturation": 1.14,
         "emission": 0,
-        "kind": "liquid",
-        "roughness": 0
+        "roughness": 0,
+        "kind": "liquid"
       },
       "motion": {
         "kind": "drift",
@@ -2697,10 +2697,10 @@
         "specular": 1,
         "saturation": 1.14,
         "emission": 0,
-        "kind": "metal",
         "roughness": 0.22,
         "albedo": "#f5f6f6",
-        "edgeTint": "#f5f8fa"
+        "edgeTint": "#f5f8fa",
+        "kind": "metal"
       },
       "motion": {
         "kind": "drift",
@@ -2751,10 +2751,10 @@
         "specular": 1,
         "saturation": 1.14,
         "emission": 0,
-        "kind": "metal",
         "roughness": 0.22,
         "albedo": "#f5f6f6",
-        "edgeTint": "#f5f8fa"
+        "edgeTint": "#f5f8fa",
+        "kind": "metal"
       },
       "motion": {
         "kind": "drift",
@@ -2805,10 +2805,10 @@
         "specular": 1,
         "saturation": 1.14,
         "emission": 0,
-        "kind": "metal",
         "roughness": 0.22,
         "albedo": "#f5f6f6",
-        "edgeTint": "#f5f8fa"
+        "edgeTint": "#f5f8fa",
+        "kind": "metal"
       },
       "motion": {
         "kind": "drift",
@@ -2859,10 +2859,10 @@
         "specular": 1,
         "saturation": 1.14,
         "emission": 0,
-        "kind": "metal",
         "roughness": 0.22,
         "albedo": "#f5f6f6",
-        "edgeTint": "#f5f8fa"
+        "edgeTint": "#f5f8fa",
+        "kind": "metal"
       },
       "motion": {
         "kind": "drift",
@@ -2913,10 +2913,10 @@
         "specular": 1,
         "saturation": 1.14,
         "emission": 0,
-        "kind": "metal",
         "roughness": 0.22,
         "albedo": "#f5f6f6",
-        "edgeTint": "#f5f8fa"
+        "edgeTint": "#f5f8fa",
+        "kind": "metal"
       },
       "motion": {
         "kind": "drift",
@@ -2959,6 +2959,7 @@
       },
       "name": "metal · sphere",
       "material": {
+        "path": 0.42,
         "density": 2.2,
         "ior": 1.48,
         "dispersion": 0.02,
@@ -2967,11 +2968,10 @@
         "specular": 1,
         "saturation": 1.14,
         "emission": 0,
-        "kind": "metal",
         "roughness": 0.22,
         "albedo": "#f5f6f6",
         "edgeTint": "#f5f8fa",
-        "path": 0.42
+        "kind": "metal"
       },
       "motion": {
         "kind": "drift",
@@ -3022,10 +3022,10 @@
         "specular": 1,
         "saturation": 1.14,
         "emission": 0,
-        "kind": "metal",
         "roughness": 0.22,
         "albedo": "#f5f6f6",
-        "edgeTint": "#f5f8fa"
+        "edgeTint": "#f5f8fa",
+        "kind": "metal"
       },
       "motion": {
         "kind": "drift",
@@ -3076,10 +3076,10 @@
         "specular": 1,
         "saturation": 1.14,
         "emission": 0,
-        "kind": "metal",
         "roughness": 0.22,
         "albedo": "#f5f6f6",
-        "edgeTint": "#f5f8fa"
+        "edgeTint": "#f5f8fa",
+        "kind": "metal"
       },
       "motion": {
         "kind": "drift",
@@ -3122,6 +3122,7 @@
       },
       "name": "metal · droplet",
       "material": {
+        "path": 0.45,
         "density": 2.2,
         "ior": 1.48,
         "dispersion": 0.02,
@@ -3130,11 +3131,10 @@
         "specular": 1,
         "saturation": 1.14,
         "emission": 0,
-        "kind": "metal",
         "roughness": 0.22,
         "albedo": "#f5f6f6",
         "edgeTint": "#f5f8fa",
-        "path": 0.45
+        "kind": "metal"
       },
       "motion": {
         "kind": "drift",
@@ -3177,6 +3177,7 @@
       },
       "name": "metal · blob",
       "material": {
+        "path": 0.42,
         "density": 2.2,
         "ior": 1.48,
         "dispersion": 0.02,
@@ -3185,11 +3186,10 @@
         "specular": 1,
         "saturation": 1.14,
         "emission": 0,
-        "kind": "metal",
         "roughness": 0.22,
         "albedo": "#f5f6f6",
         "edgeTint": "#f5f8fa",
-        "path": 0.42
+        "kind": "metal"
       },
       "motion": {
         "kind": "drift",
@@ -3240,10 +3240,10 @@
         "specular": 1,
         "saturation": 1.14,
         "emission": 0,
-        "kind": "metal",
         "roughness": 0.22,
         "albedo": "#f5f6f6",
-        "edgeTint": "#f5f8fa"
+        "edgeTint": "#f5f8fa",
+        "kind": "metal"
       },
       "motion": {
         "kind": "drift",
@@ -3295,10 +3295,10 @@
         "specular": 1,
         "saturation": 1.14,
         "emission": 0,
-        "kind": "metal",
         "roughness": 0.22,
         "albedo": "#f5f6f6",
-        "edgeTint": "#f5f8fa"
+        "edgeTint": "#f5f8fa",
+        "kind": "metal"
       },
       "motion": {
         "kind": "drift",
@@ -3349,9 +3349,9 @@
         "specular": 1,
         "saturation": 1.14,
         "emission": 0,
-        "kind": "ceramic",
         "roughness": 0.62,
-        "albedo": "#e8e2d9"
+        "albedo": "#e8e2d9",
+        "kind": "ceramic"
       },
       "motion": {
         "kind": "drift",
@@ -3402,9 +3402,9 @@
         "specular": 1,
         "saturation": 1.14,
         "emission": 0,
-        "kind": "ceramic",
         "roughness": 0.62,
-        "albedo": "#e8e2d9"
+        "albedo": "#e8e2d9",
+        "kind": "ceramic"
       },
       "motion": {
         "kind": "drift",
@@ -3455,9 +3455,9 @@
         "specular": 1,
         "saturation": 1.14,
         "emission": 0,
-        "kind": "ceramic",
         "roughness": 0.62,
-        "albedo": "#e8e2d9"
+        "albedo": "#e8e2d9",
+        "kind": "ceramic"
       },
       "motion": {
         "kind": "drift",
@@ -3508,9 +3508,9 @@
         "specular": 1,
         "saturation": 1.14,
         "emission": 0,
-        "kind": "ceramic",
         "roughness": 0.62,
-        "albedo": "#e8e2d9"
+        "albedo": "#e8e2d9",
+        "kind": "ceramic"
       },
       "motion": {
         "kind": "drift",
@@ -3561,9 +3561,9 @@
         "specular": 1,
         "saturation": 1.14,
         "emission": 0,
-        "kind": "ceramic",
         "roughness": 0.62,
-        "albedo": "#e8e2d9"
+        "albedo": "#e8e2d9",
+        "kind": "ceramic"
       },
       "motion": {
         "kind": "drift",
@@ -3606,6 +3606,7 @@
       },
       "name": "ceramic · sphere",
       "material": {
+        "path": 0.42,
         "density": 2.2,
         "ior": 1.48,
         "dispersion": 0.02,
@@ -3614,10 +3615,9 @@
         "specular": 1,
         "saturation": 1.14,
         "emission": 0,
-        "kind": "ceramic",
         "roughness": 0.62,
         "albedo": "#e8e2d9",
-        "path": 0.42
+        "kind": "ceramic"
       },
       "motion": {
         "kind": "drift",
@@ -3668,9 +3668,9 @@
         "specular": 1,
         "saturation": 1.14,
         "emission": 0,
-        "kind": "ceramic",
         "roughness": 0.62,
-        "albedo": "#e8e2d9"
+        "albedo": "#e8e2d9",
+        "kind": "ceramic"
       },
       "motion": {
         "kind": "drift",
@@ -3721,9 +3721,9 @@
         "specular": 1,
         "saturation": 1.14,
         "emission": 0,
-        "kind": "ceramic",
         "roughness": 0.62,
-        "albedo": "#e8e2d9"
+        "albedo": "#e8e2d9",
+        "kind": "ceramic"
       },
       "motion": {
         "kind": "drift",
@@ -3766,6 +3766,7 @@
       },
       "name": "ceramic · droplet",
       "material": {
+        "path": 0.45,
         "density": 2.2,
         "ior": 1.48,
         "dispersion": 0.02,
@@ -3774,10 +3775,9 @@
         "specular": 1,
         "saturation": 1.14,
         "emission": 0,
-        "kind": "ceramic",
         "roughness": 0.62,
         "albedo": "#e8e2d9",
-        "path": 0.45
+        "kind": "ceramic"
       },
       "motion": {
         "kind": "drift",
@@ -3820,6 +3820,7 @@
       },
       "name": "ceramic · blob",
       "material": {
+        "path": 0.42,
         "density": 2.2,
         "ior": 1.48,
         "dispersion": 0.02,
@@ -3828,10 +3829,9 @@
         "specular": 1,
         "saturation": 1.14,
         "emission": 0,
-        "kind": "ceramic",
         "roughness": 0.62,
         "albedo": "#e8e2d9",
-        "path": 0.42
+        "kind": "ceramic"
       },
       "motion": {
         "kind": "drift",
@@ -3882,9 +3882,9 @@
         "specular": 1,
         "saturation": 1.14,
         "emission": 0,
-        "kind": "ceramic",
         "roughness": 0.62,
-        "albedo": "#e8e2d9"
+        "albedo": "#e8e2d9",
+        "kind": "ceramic"
       },
       "motion": {
         "kind": "drift",
@@ -3936,9 +3936,9 @@
         "specular": 1,
         "saturation": 1.14,
         "emission": 0,
-        "kind": "ceramic",
         "roughness": 0.62,
-        "albedo": "#e8e2d9"
+        "albedo": "#e8e2d9",
+        "kind": "ceramic"
       },
       "motion": {
         "kind": "drift",
@@ -3989,9 +3989,9 @@
         "specular": 1,
         "saturation": 1.14,
         "emission": 0,
-        "kind": "plastic",
         "roughness": 0.24,
-        "albedo": "#cf5b52"
+        "albedo": "#cf5b52",
+        "kind": "plastic"
       },
       "motion": {
         "kind": "drift",
@@ -4042,9 +4042,9 @@
         "specular": 1,
         "saturation": 1.14,
         "emission": 0,
-        "kind": "plastic",
         "roughness": 0.24,
-        "albedo": "#cf5b52"
+        "albedo": "#cf5b52",
+        "kind": "plastic"
       },
       "motion": {
         "kind": "drift",
@@ -4095,9 +4095,9 @@
         "specular": 1,
         "saturation": 1.14,
         "emission": 0,
-        "kind": "plastic",
         "roughness": 0.24,
-        "albedo": "#cf5b52"
+        "albedo": "#cf5b52",
+        "kind": "plastic"
       },
       "motion": {
         "kind": "drift",
@@ -4148,9 +4148,9 @@
         "specular": 1,
         "saturation": 1.14,
         "emission": 0,
-        "kind": "plastic",
         "roughness": 0.24,
-        "albedo": "#cf5b52"
+        "albedo": "#cf5b52",
+        "kind": "plastic"
       },
       "motion": {
         "kind": "drift",
@@ -4201,9 +4201,9 @@
         "specular": 1,
         "saturation": 1.14,
         "emission": 0,
-        "kind": "plastic",
         "roughness": 0.24,
-        "albedo": "#cf5b52"
+        "albedo": "#cf5b52",
+        "kind": "plastic"
       },
       "motion": {
         "kind": "drift",
@@ -4246,6 +4246,7 @@
       },
       "name": "plastic · sphere",
       "material": {
+        "path": 0.42,
         "density": 2.2,
         "ior": 1.48,
         "dispersion": 0.02,
@@ -4254,10 +4255,9 @@
         "specular": 1,
         "saturation": 1.14,
         "emission": 0,
-        "kind": "plastic",
         "roughness": 0.24,
         "albedo": "#cf5b52",
-        "path": 0.42
+        "kind": "plastic"
       },
       "motion": {
         "kind": "drift",
@@ -4308,9 +4308,9 @@
         "specular": 1,
         "saturation": 1.14,
         "emission": 0,
-        "kind": "plastic",
         "roughness": 0.24,
-        "albedo": "#cf5b52"
+        "albedo": "#cf5b52",
+        "kind": "plastic"
       },
       "motion": {
         "kind": "drift",
@@ -4361,9 +4361,9 @@
         "specular": 1,
         "saturation": 1.14,
         "emission": 0,
-        "kind": "plastic",
         "roughness": 0.24,
-        "albedo": "#cf5b52"
+        "albedo": "#cf5b52",
+        "kind": "plastic"
       },
       "motion": {
         "kind": "drift",
@@ -4406,6 +4406,7 @@
       },
       "name": "plastic · droplet",
       "material": {
+        "path": 0.45,
         "density": 2.2,
         "ior": 1.48,
         "dispersion": 0.02,
@@ -4414,10 +4415,9 @@
         "specular": 1,
         "saturation": 1.14,
         "emission": 0,
-        "kind": "plastic",
         "roughness": 0.24,
         "albedo": "#cf5b52",
-        "path": 0.45
+        "kind": "plastic"
       },
       "motion": {
         "kind": "drift",
@@ -4460,6 +4460,7 @@
       },
       "name": "plastic · blob",
       "material": {
+        "path": 0.42,
         "density": 2.2,
         "ior": 1.48,
         "dispersion": 0.02,
@@ -4468,10 +4469,9 @@
         "specular": 1,
         "saturation": 1.14,
         "emission": 0,
-        "kind": "plastic",
         "roughness": 0.24,
         "albedo": "#cf5b52",
-        "path": 0.42
+        "kind": "plastic"
       },
       "motion": {
         "kind": "drift",
@@ -4522,9 +4522,9 @@
         "specular": 1,
         "saturation": 1.14,
         "emission": 0,
-        "kind": "plastic",
         "roughness": 0.24,
-        "albedo": "#cf5b52"
+        "albedo": "#cf5b52",
+        "kind": "plastic"
       },
       "motion": {
         "kind": "drift",
@@ -4576,9 +4576,9 @@
         "specular": 1,
         "saturation": 1.14,
         "emission": 0,
-        "kind": "plastic",
         "roughness": 0.24,
-        "albedo": "#cf5b52"
+        "albedo": "#cf5b52",
+        "kind": "plastic"
       },
       "motion": {
         "kind": "drift",

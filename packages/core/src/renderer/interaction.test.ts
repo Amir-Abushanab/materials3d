@@ -1,8 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createDefaultConfig,
   createItem,
   createLamp,
+  ensureSceneConfig,
   type ItemInteractionBinding,
   type SceneConfig,
   type SceneInteractionBinding,
@@ -13,24 +14,53 @@ import {
   ITEM_APPLIERS,
   SCENE_APPLIERS,
 } from "./interaction";
-import { expandScatter } from "./MaterialRenderer";
+import { expandScatter } from "./shared";
 
 /**
  * A stand-in container: records the controller's listeners so a test can feed synthetic pointer
- * events, and reports a fixed 100×100 box so client coords map to NDC predictably. No DOM — the
- * controller's browser-only path (computeScroll) guards on `typeof window`.
+ * events, and reports a fixed 100x100 box so client coords map to NDC predictably. No DOM: the
+ * controller's browser-only paths (computeScroll, the window release watch) guard on
+ * `typeof window`.
  */
 function stubContainer() {
   const listeners = new Map<string, (e: unknown) => void>();
+  const counts = { added: 0, removed: 0 };
   const el = {
-    addEventListener: (type: string, fn: (e: unknown) => void) => listeners.set(type, fn),
-    removeEventListener: (type: string) => listeners.delete(type),
+    addEventListener: (type: string, fn: (e: unknown) => void) => {
+      counts.added++;
+      listeners.set(type, fn);
+    },
+    removeEventListener: (type: string) => {
+      if (listeners.delete(type)) counts.removed++;
+    },
     getBoundingClientRect: () => ({ left: 0, top: 0, width: 100, height: 100 }),
   } as unknown as HTMLElement;
   const fire = (type: string, e: Record<string, unknown> = {}): void => {
     listeners.get(type)?.({ pointerType: "mouse", clientX: 50, clientY: 50, ...e });
   };
-  return { el, fire, listeners };
+  return { el, fire, listeners, counts };
+}
+
+/** A stand-in window, for the release listeners the controller adds while a press is held. */
+function stubWindow() {
+  const listeners = new Map<string, Set<(e: unknown) => void>>();
+  const counts = { added: 0, removed: 0 };
+  const win = {
+    innerHeight: 800,
+    addEventListener: (type: string, fn: (e: unknown) => void) => {
+      counts.added++;
+      let set = listeners.get(type);
+      if (!set) listeners.set(type, (set = new Set()));
+      set.add(fn);
+    },
+    removeEventListener: (type: string, fn: (e: unknown) => void) => {
+      if (listeners.get(type)?.delete(fn)) counts.removed++;
+    },
+  };
+  const fire = (type: string, e: Record<string, unknown> = {}): void => {
+    for (const fn of listeners.get(type) ?? []) fn({ pointerType: "mouse", ...e });
+  };
+  return { win, fire, counts };
 }
 
 /** Advance the controller far enough that every exponential lag has effectively converged. */
@@ -188,7 +218,7 @@ describe("InteractionController sources", () => {
       bindings: [{ source: "hoverSelf", target: "hueShift", to: 0.4 }],
     };
     // What the renderer does: expand once, build meshes from it, and hand the controller that
-    // exact list — the generated shapes never appear in config.items.
+    // exact list, the generated shapes never appear in config.items.
     const resolved = expandScatter(config.scatter!);
     const ic = new InteractionController(
       el,
@@ -221,7 +251,7 @@ describe("InteractionController sources", () => {
     fire("pointerdown");
     expect(ic.pendingPress()).not.toBeNull(); // the down waits for the renderer's hit test
     ic.setPressItem(0); // …which resolves it to shape A
-    expect(ic.pendingPress()).toBeNull(); // consumed — each down is tested once
+    expect(ic.pendingPress()).toBeNull(); // consumed, each down is tested once
     converge(ic);
     expect(ic.bindingValue(a.interaction.bindings![0])).toBeGreaterThan(0.98);
     expect(ic.bindingValue(b.interaction.bindings![0])).toBe(0);
@@ -250,6 +280,92 @@ describe("InteractionController sources", () => {
     ic.update(1 / 60);
     expect(ic.bindingValue(binding)).toBe(0); // unknown again
     ic.dispose();
+  });
+});
+
+describe("press release", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  function pressScene() {
+    const binding: SceneInteractionBinding = { source: "press", target: "bloom", to: 1 };
+    return { binding, config: sceneWith([binding]) };
+  }
+
+  it("ends a press released outside the container", () => {
+    // The container's listeners stop at its edge, so a press that starts inside and ends outside
+    // never saw its pointerup and stayed latched until the next click. The window sees it.
+    const { el, fire } = stubContainer();
+    const win = stubWindow();
+    vi.stubGlobal("window", win.win);
+    const { binding, config } = pressScene();
+    const ic = new InteractionController(el, () => config);
+
+    fire("pointerdown", { pointerId: 1 });
+    converge(ic);
+    expect(ic.bindingValue(binding)).toBeGreaterThan(0.98);
+
+    fire("pointerleave", { pointerId: 1, buttons: 1 }); // dragged out with the button still held
+    converge(ic);
+    expect(ic.bindingValue(binding)).toBeGreaterThan(0.98);
+
+    win.fire("pointerup", { pointerId: 1 }); // released out there, where only the window sees it
+    converge(ic);
+    expect(ic.bindingValue(binding)).toBeLessThan(0.02);
+    ic.dispose();
+  });
+
+  it("ends a press on pointercancel", () => {
+    const { el, fire } = stubContainer();
+    const { binding, config } = pressScene();
+    const ic = new InteractionController(el, () => config);
+    fire("pointerdown", { pointerId: 1 });
+    converge(ic);
+    expect(ic.bindingValue(binding)).toBeGreaterThan(0.98);
+    fire("pointercancel", { pointerId: 1 });
+    converge(ic);
+    expect(ic.bindingValue(binding)).toBeLessThan(0.02);
+    ic.dispose();
+  });
+
+  it("ends a press when the pointer leaves with no button held", () => {
+    const { el, fire } = stubContainer();
+    const { binding, config } = pressScene();
+    const ic = new InteractionController(el, () => config);
+    fire("pointerdown", { pointerId: 1 });
+    converge(ic);
+    fire("pointerleave", { pointerId: 1, buttons: 0 });
+    converge(ic);
+    expect(ic.bindingValue(binding)).toBeLessThan(0.02);
+    ic.dispose();
+  });
+
+  it("ignores another pointer's release", () => {
+    const { el, fire } = stubContainer();
+    const { binding, config } = pressScene();
+    const ic = new InteractionController(el, () => config);
+    fire("pointerdown", { pointerId: 1 });
+    converge(ic);
+    fire("pointerup", { pointerId: 2 });
+    converge(ic);
+    expect(ic.bindingValue(binding)).toBeGreaterThan(0.98);
+    fire("pointerup", { pointerId: 1 });
+    converge(ic);
+    expect(ic.bindingValue(binding)).toBeLessThan(0.02);
+    ic.dispose();
+  });
+
+  it("removes every listener it added, on the container and on the window", () => {
+    const { el, fire, listeners, counts } = stubContainer();
+    const win = stubWindow();
+    vi.stubGlobal("window", win.win);
+    const { config } = pressScene();
+    const ic = new InteractionController(el, () => config);
+    fire("pointerdown", { pointerId: 1 }); // arms the window watch mid-press
+    expect(win.counts.added).toBe(2);
+    ic.dispose();
+    expect(listeners.size).toBe(0);
+    expect(counts.removed).toBe(counts.added);
+    expect(win.counts.removed).toBe(win.counts.added);
   });
 });
 
@@ -315,8 +431,7 @@ describe("applier tables", () => {
   });
 
   /** The beam targets fall back to the authored values, so a scene without a beam is inert. */
-  it("bases the beam targets on the authored beam, and on rest values without one", async () => {
-    const { ensureSceneConfig } = await import("../config/model");
+  it("bases the beam targets on the authored beam, and on rest values without one", () => {
     const withBeam = ensureSceneConfig({
       beam: { radius: 4, sides: 3, face: 0, incidence: 41, entry: 0.3 },
     });
@@ -328,9 +443,13 @@ describe("applier tables", () => {
   });
 });
 
-describe("binding validation (model)", () => {
-  it("drops junk and keeps custom sources when normalizing a scene", async () => {
-    const { ensureSceneConfig } = await import("../config/model");
+/**
+ * `ensureSceneConfig` owns binding validation and has its own suite next door. It is exercised
+ * here as well because every raw value this layer reads arrives through it: a source or target
+ * it let through would reach the applier tables above unchecked.
+ */
+describe("ensureSceneConfig, the binding contract the controller relies on", () => {
+  it("drops junk and keeps custom sources when normalizing a scene", () => {
     const config = ensureSceneConfig({
       interaction: {
         bindings: [
@@ -348,8 +467,7 @@ describe("binding validation (model)", () => {
     ]);
   });
 
-  it("stays absent when absent, and survives a JSON round trip when present", async () => {
-    const { ensureSceneConfig } = await import("../config/model");
+  it("stays absent when absent, and survives a JSON round trip when present", () => {
     const plain = ensureSceneConfig({});
     expect("interaction" in plain).toBe(false);
     expect(plain.lamps.every((lamp) => !("bindings" in lamp))).toBe(true);
@@ -372,8 +490,7 @@ describe("binding validation (model)", () => {
     expect(roundTripped.lamps[0].bindings?.[0].from).toBe(0.1);
   });
 
-  it("carries a scatter's shared reactions through normalization and cleans junk", async () => {
-    const { ensureSceneConfig } = await import("../config/model");
+  it("carries a scatter's shared reactions through normalization and cleans junk", () => {
     // An inert scatter stays inert: no interaction key materializes from normalization.
     expect("interaction" in ensureSceneConfig({}).scatter!).toBe(false);
 

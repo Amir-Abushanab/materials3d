@@ -1,5 +1,5 @@
 /**
- * Shape builders. Almost every primitive here is a lathe — a 2D profile swept about Y. Change the
+ * Shape builders. Almost every primitive here is a lathe, a 2D profile swept about Y. Change the
  * profile and you get rods, discs, cones, spheres and rings; change the *segment count* and you
  * get prisms, since a hexagon is a lathe with `sides: 6`. That one observation covers most of the
  * geometry in this visual language. `arrow`/`extrude` are the exceptions: swept 2D paths.
@@ -8,6 +8,7 @@
 import * as THREE from "three";
 import { fbmSimplex3d } from "../util/noise";
 import { DEFAULT_OUTLINE, type CutConfig, type ShapeConfig } from "../config/model";
+import { prismCrossSection } from "./lightSheet";
 import { fitOutline, narrowestFeature } from "./svgPath";
 
 export interface RodOptions {
@@ -80,13 +81,13 @@ export interface SlabOptions {
 }
 
 export interface PathOptions {
-  /** SVG path data — or a whole `<svg>` document; see {@link ShapeConfig.outline}. */
+  /** SVG path data, or a whole `<svg>` document; see {@link ShapeConfig.outline}. */
   outline?: string;
   /** Half-extent the outline is fitted to, on its LONGER axis. */
   r?: number;
   depth?: number;
   /** Positive is a literal bevel radius, `0` picks one from the outline's narrowest limb, and
-   *  NEGATIVE turns the bevel off — the one kind here that can refuse one. */
+   *  NEGATIVE turns the bevel off, the one kind here that can refuse one. */
   fillet?: number;
   cuts?: readonly CutConfig[];
 }
@@ -103,7 +104,7 @@ export interface ArrowOptions {
  * A rounded-rectangle contour, counter-clockwise.
  *
  * This is the only cut primitive there is. A circle is a rect whose corner radius has eaten it
- * (`w === h === 2r`), and a slot is one whose radius has reached half its short side — so
+ * (`w === h === 2r`), and a slot is one whose radius has reached half its short side, so
  * `normalizeCuts` can express every {@link CutConfig} by choosing `w`, `h` and `r`, and this
  * function never has to know which of them it is drawing.
  */
@@ -152,13 +153,13 @@ function cutPath(cut: CutConfig, grow: number): THREE.Path {
  * Extrude a profile so the FINISHED solid has the dimensions that were asked for.
  *
  * Three's bevel does not inset. It grows the outer contour by `bevelSize`, grows the depth by
- * twice `bevelThickness`, and SHRINKS every hole by `bevelSize` — three offsets in three
+ * twice `bevelThickness`, and SHRINKS every hole by `bevelSize`, three offsets in three
  * directions. A lathe's fillet does the opposite: it rounds within the radius you gave it. Left
  * uncompensated, every plate here comes out a little too wide, a little too thick and slotted a
  * little too narrow; small enough to miss by eye, and exactly the drift that would stop a carved
  * plate sitting where its lathe twin did.
  *
- * `outline` is a function rather than a contour so each shape can inset itself correctly — a
+ * `outline` is a function rather than a contour so each shape can inset itself correctly, a
  * rounded rect loses the bevel off each side, a regular polygon loses it off each EDGE, which is
  * a bigger bite out of the circumradius the fewer sides it has.
  */
@@ -177,7 +178,7 @@ function bevelledExtrude(
  * The largest bevel that will not eat a carve-out.
  *
  * Extrude offsets every hole contour OUTWARD by `bevelSize` to form its lip, so a bevel wider than
- * half a cut's short side turns that cut inside out — the walls cross and the shape renders with a
+ * half a cut's short side turns that cut inside out, the walls cross and the shape renders with a
  * black knot where the slot should be. Clamping is better than refusing: the fillet is a look, the
  * slot is the point.
  */
@@ -194,7 +195,7 @@ function resolveFillet(fillet: number | undefined, proportional: number): number
 
 /**
  * The profile for a flat-ended barrel with a corner fillet. Flat ends, not hemispheres: the
- * fillet catches the rim highlight and the flat face reads as an ellipse when tilted — a strong
+ * fillet catches the rim highlight and the flat face reads as an ellipse when tilted, a strong
  * glass cue that a capsule loses entirely.
  */
 function barrelProfile(r: number, len: number, fillet: number): THREE.Vector2[] {
@@ -216,7 +217,7 @@ function barrelProfile(r: number, len: number, fillet: number): THREE.Vector2[] 
   return pts;
 }
 
-/** A long flat-ended cylinder — the tube from the reference scene. */
+/** A long flat-ended cylinder, the tube from the reference scene. */
 export function rod({
   r = 0.4,
   len = 8,
@@ -275,7 +276,7 @@ export function sphere({ r = 1, sides = 64 }: SphereOptions = {}): THREE.LatheGe
   return new THREE.LatheGeometry(pts, sides);
 }
 
-/** An annulus / washer — a disc with a hole, so the profile is a closed rectangle. */
+/** An annulus / washer, a disc with a hole, so the profile is a closed rectangle. */
 export function ring({
   r = 2,
   hole = 1,
@@ -297,8 +298,8 @@ export function ring({
 }
 
 /**
- * A teardrop: still a lathe. The profile is `sin(a)·sin^1.5(a/2)` — a hemispherical bottom easing
- * into a soft point at the top — normalized so `r` is the radius at the widest point, matching
+ * A teardrop: still a lathe. The profile is `sin(a)·sin^1.5(a/2)`, a hemispherical bottom easing
+ * into a soft point at the top, normalized so `r` is the radius at the widest point, matching
  * what `r` means on every other shape. The tip is held just off the axis for the same reason the
  * cone's is: a profile touching the axis makes degenerate triangles with undefined normals.
  */
@@ -331,7 +332,7 @@ export function droplet({
  * every octave shared the alignment.
  *
  * The seed is a translation of the sample point rather than a parameter of the field, which is
- * what a lattice noise wants — two seeds are two different regions of one infinite field, so they
+ * what a lattice noise wants, two seeds are two different regions of one infinite field, so they
  * cannot rhyme the way two phase offsets of the same sine can.
  */
 function lumpField(x: number, y: number, z: number, seed: number): number {
@@ -339,14 +340,14 @@ function lumpField(x: number, y: number, z: number, seed: number): number {
   // Sampled at 0.45x, which is the reference's own migration note: simplex is a markedly
   // higher-frequency field than the smooth trig octaves this replaced (~2.5x the slope), so the
   // same coordinates give a crumpled surface where the shape wants one or two broad lumps. Two
-  // octaves rather than three for the same reason — the third only adds the fine detail the
+  // octaves rather than three for the same reason, the third only adds the fine detail the
   // comment above deliberately avoids.
   const f = 0.45;
   return fbmSimplex3d(x * f + offset, y * f - offset * 0.61, z * f + offset * 0.29, 2, 2.05, 0.5);
 }
 
 /**
- * NOT a lathe: a sphere with seeded low-frequency lumps baked into its vertices — the organic
+ * NOT a lathe: a sphere with seeded low-frequency lumps baked into its vertices, the organic
  * counterpart to `sphere`, for anything gooey. The sphere's seam and pole vertices are welded by
  * position first, so the recomputed normals are smooth everywhere; without the weld the UV seam
  * splits the normals and draws a hard line straight through the refraction.
@@ -360,7 +361,7 @@ export function blob({
   const source = new THREE.SphereGeometry(r, sides, Math.max(8, Math.round(sides * 0.75)));
 
   // Weld duplicated vertices (seam column, pole fans) by quantized position. Only position
-  // survives — uv/normal differ across the seam and would defeat the merge; the glass shader
+  // survives, uv/normal differ across the seam and would defeat the merge; the glass shader
   // reads neither, and normals are recomputed below.
   const pos = source.getAttribute("position");
   const index = source.getIndex();
@@ -444,20 +445,20 @@ export function arrow({
   s.lineTo(-len / 2, b);
   s.closePath();
   // Only the holes are compensated. An arrow's outline is a swept path, not a plate, and every
-  // scene that already has one was authored against its uncompensated size — so it keeps it.
+  // scene that already has one was authored against its uncompensated size, so it keeps it.
   const bevel = bevelFor(0.06, cuts, shaft, depth);
   for (const cut of cuts) s.holes.push(cutPath(cut, bevel));
   return extrude({ shape: s, depth, bevel });
 }
 
 /**
- * A rounded-rectangular plate, extruded toward the lens — the primitive the lathes cannot make.
+ * A rounded-rectangular plate, extruded toward the lens, the primitive the lathes cannot make.
  *
  * A four-sided lathe already gives a square plate, and `assembly` used one for years, but its
  * fillet rounds the flat ENDS of the sweep, never the four vertical corners: the silhouette stays
  * hard. A slab rounds the silhouette, which is the whole difference between a plate and a tile.
  *
- * Authored in XY and swept along Z, like `arrow` — so it is already flat to the camera and is
+ * Authored in XY and swept along Z, like `arrow`, so it is already flat to the camera and is
  * posed by rotating it away, rather than by `facing()` aiming a sweep axis at the lens.
  */
 export function slab({
@@ -477,7 +478,7 @@ export function slab({
   );
 }
 
-/** The smaller side of a contour's bounding box — the widest bevel that contour can survive. */
+/** The smaller side of a contour's bounding box, the widest bevel that contour can survive. */
 function minSpan(contour: readonly THREE.Vector2[]): number {
   let minX = Infinity;
   let maxX = -Infinity;
@@ -496,7 +497,7 @@ function minSpan(contour: readonly THREE.Vector2[]): number {
  * An arbitrary silhouette, given as SVG path data and extruded toward the lens.
  *
  * The escape hatch, and the only builder here that takes a string. Everything else in this module
- * describes a solid with numbers because the solids it describes CAN be — a rod has a radius — and
+ * describes a solid with numbers because the solids it describes CAN be, a rod has a radius, and
  * the shapes this is for cannot: a pair of spectacles has no radius, only an outline. Authored in
  * XY and swept along Z like `slab` and `arrow`, so it is already flat to the camera.
  *
@@ -508,7 +509,7 @@ function minSpan(contour: readonly THREE.Vector2[]): number {
  * a solid a bevel's width thicker than it claims absorbs visibly more light than the scene was
  * authored for. The outline cannot be compensated on the same terms: correctly insetting an
  * arbitrary contour is a polygon-offset problem whose answer for a non-convex one is not even a
- * single contour. So the drawing comes out as drawn, plus the bevel's own lip — the trade `arrow`
+ * single contour. So the drawing comes out as drawn, plus the bevel's own lip, the trade `arrow`
  * makes, for the same reason. What keeps that lip from swamping fine detail is the default bevel
  * being measured against the outline's NARROWEST limb rather than its bounding box, and a negative
  * `fillet` turning it off outright.
@@ -528,7 +529,7 @@ export function pathShape({
 
   const [outer, ...holes] = placed;
   // A drawn silhouette is the one shape here whose detail a bevel can visibly fatten, so it is
-  // also the one that can refuse a bevel outright — see ShapeConfig.fillet.
+  // also the one that can refuse a bevel outright, see ShapeConfig.fillet.
   const bevel =
     fillet !== undefined && fillet < 0 ? 0 : pathBevel(outer, holes, cuts, depth, r, fillet);
 
@@ -548,7 +549,7 @@ export function pathShape({
  * contour OUTWARD to form its lip: one wider than half the hole's short side turns it inside out
  * and the shape renders with a black knot where the opening should be.
  *
- * One bevel serves the WHOLE outline — `ExtrudeGeometry` has a single `bevelSize` — so a shape
+ * One bevel serves the WHOLE outline, `ExtrudeGeometry` has a single `bevelSize`, so a shape
  * with one fine limb comes out less rounded everywhere, not just along the limb. That is the right
  * way round: a uniform slightly-crisper edge reads as a design choice, a limb swallowed by its own
  * fillet reads as a broken mesh.
@@ -573,29 +574,17 @@ function pathBevel(
 }
 
 /**
- * A plate's outline as a polygon, at the SAME vertex angles its lathe would use.
- *
- * This is what lets `disc`, `prism` and `hex` swap representation the moment they carry a cut
- * without appearing to move. Lathe places vertex `i` at `(r·sin φ, y, r·cos φ)` for `φ = 2πi/n`;
- * extruding in XY and rotating by +90° about X sends `(x, y, z)` to `(x, −z, y)`, so the two agree
- * when the polygon angle is `π/2 + 2πi/n`. Get that offset wrong and adding a slot to a hexagon
- * silently spins it half a facet.
- */
-function plateOutline(r: number, sides: number): THREE.Vector2[] {
-  const pts: THREE.Vector2[] = [];
-  for (let i = 0; i < sides; i++) {
-    const a = Math.PI / 2 + (Math.PI * 2 * i) / sides;
-    pts.push(new THREE.Vector2(Math.cos(a) * r, Math.sin(a) * r));
-  }
-  return pts;
-}
-
-/**
  * The carved twin of a lathed plate: same outline, same orientation, holes through the face.
  *
  * Only reached when a shape actually carries cuts, so nothing that has ever rendered changes.
- * The bevel stands in for the lathe's corner fillet — close enough at plate thicknesses that the
+ * The bevel stands in for the lathe's corner fillet: close enough at plate thicknesses that the
  * two are hard to tell apart, and the alternative is a boolean solver.
+ *
+ * The outline is the beam tracer's own cross-section at its default rotation, which is the SAME
+ * vertex angles the lathe uses. Lathe places vertex `i` at `(r sin f, y, r cos f)` for
+ * `f = 2 pi i / n`; extruding in XY and rotating by +90 degrees about X sends `(x, y, z)` to
+ * `(x, -z, y)`, so the two agree when the polygon angle is `pi / 2 + 2 pi i / n`. Get that offset
+ * wrong and adding a slot to a hexagon silently spins it half a facet.
  */
 function carvedPlate(
   r: number,
@@ -605,11 +594,11 @@ function carvedPlate(
   cuts: readonly CutConfig[],
 ): THREE.BufferGeometry {
   const bevel = bevelFor(resolveFillet(fillet, thickness * 0.3), cuts, r * 2, thickness);
-  // A polygon insets off its EDGES, so the circumradius loses bevel / cos(π/n) — for a square
+  // A polygon insets off its EDGES, so the circumradius loses bevel / cos(π/n), for a square
   // that is 1.41× the bevel, and ignoring it would leave a slotted plate visibly fatter than the
   // lathe it replaced.
   const geometry = bevelledExtrude(
-    (inset) => plateOutline(Math.max(0.01, r - inset / Math.cos(Math.PI / sides)), sides),
+    (inset) => prismCrossSection(Math.max(0.01, r - inset / Math.cos(Math.PI / sides)), sides),
     cuts,
     thickness,
     bevel,
@@ -624,8 +613,8 @@ export function buildShape(shape: ShapeConfig): THREE.BufferGeometry {
   const { kind, r, len, thickness, fillet, bevel, sides, hole, shaft, head, depth, seed, bump } =
     shape;
   const cuts = shape.cuts ?? [];
-  // The plates are lathes until you carve one, then they are extrusions. Same outline either way
-  // (see plateOutline) — this is a change of representation, not of shape.
+  // The plates are lathes until you carve one, then they are extrusions. Same outline either way,
+  // see carvedPlate: this is a change of representation, not of shape.
   if (cuts.length > 0 && (kind === "disc" || kind === "prism" || kind === "hex")) {
     return carvedPlate(
       r,
@@ -647,7 +636,7 @@ export function buildShape(shape: ShapeConfig): THREE.BufferGeometry {
     case "disc":
       return disc({ r, thickness, fillet, sides });
     case "prism":
-      // A bevel means every edge is rounded, which a lathe cannot do — see beveledPrism().
+      // A bevel means every edge is rounded, which a lathe cannot do, see beveledPrism().
       return bevel > 0 ? beveledPrism({ r, len, sides, bevel }) : prism({ r, len, sides, fillet });
     case "hex":
       return bevel > 0
@@ -668,7 +657,7 @@ export function buildShape(shape: ShapeConfig): THREE.BufferGeometry {
 }
 
 /**
- * Half the optical path through a shape at normal incidence — the default for `material.path`.
+ * Half the optical path through a shape at normal incidence, the default for `material.path`.
  *
  * This exists because getting it wrong is the single easiest way to ruin a scene: `path` feeds
  * the Beer–Lambert chord, and for a flat disc the optical path is its *thickness*, not its
@@ -693,7 +682,7 @@ export function defaultPath(shape: ShapeConfig): number {
     case "path":
       return shape.depth / 2;
     case "droplet":
-      // Spherical through the belly, thin at the tip — the same over-absorption trade the
+      // Spherical through the belly, thin at the tip, the same over-absorption trade the
       // sphere makes, softened for the taper.
       return shape.r * 0.8;
     case "blob":
@@ -705,8 +694,8 @@ export function defaultPath(shape: ShapeConfig): number {
   }
 }
 
-/** Bevel radius as a fraction of the circumradius, arc/ring/edge subdivision. Ported from the
- *  reference's prism-mesh.ts, whose values are an 0.8mm fillet on a 57mm solid. */
+/** Subdivision of a bevelled prism's corner arcs, cap rings and straight runs. Ported from the
+ *  reference's prism-mesh.ts. */
 const BEVEL_CORNER_SEGMENTS = 4;
 const BEVEL_RING_SEGMENTS = 4;
 const BEVEL_EDGE_SEGMENTS = 16;
@@ -717,13 +706,6 @@ interface ContourPoint {
   n: [number, number];
 }
 
-/**
- * The cross-section outline with every corner replaced by a tangent arc.
- *
- * Each corner's arc is the circle of `radius` inscribed against both adjacent edges, so the
- * outline stays tangent-continuous — no crease where the arc meets the straight run, which is the
- * whole point: a crease catches the environment as a hard line and reads as a modelling error.
- */
 function norm2(v: [number, number]): [number, number] {
   const l = Math.hypot(v[0], v[1]) || 1;
   return [v[0] / l, v[1] / l];
@@ -736,6 +718,14 @@ function edgeNormal2(a: [number, number], b: [number, number]): [number, number]
   return [e[1] / l, -e[0] / l];
 }
 
+/**
+ * The cross-section outline with every corner replaced by a tangent arc. `corners` must wind
+ * counter-clockwise: the normals, and the way round each arc is taken, both assume it.
+ *
+ * Each corner's arc is the circle of `radius` inscribed against both adjacent edges, so the
+ * outline stays tangent-continuous. No crease where the arc meets the straight run, which is the
+ * whole point: a crease catches the environment as a hard line and reads as a modelling error.
+ */
 function roundedContour(corners: [number, number][], radius: number): ContourPoint[] {
   const arcs = corners.map((corner, i) => {
     const prev = corners[(i + corners.length - 1) % corners.length];
@@ -793,11 +783,11 @@ function roundedContour(corners: [number, number][], radius: number): ContourPoi
  * the vertical corners geometrically sharp. This rounds those too: the cross-section's corners
  * become tangent arcs, and quarter-round rings blend the sides into inset caps. What that buys is
  * a narrow bevel strip all the way around the solid, sitting at an angle to both surfaces it
- * joins — so it catches the environment differently from either and reads as a faceted block of
+ * joins, so it catches the environment differently from either and reads as a faceted block of
  * glass rather than a flat silhouette.
  *
- * Ported from the reference's prism-mesh.ts. Built in the same local frame `prism()` uses — the
- * cross-section in XZ, the depth along Y — so an item can swap between the two without moving,
+ * Ported from the reference's prism-mesh.ts. Built in the same local frame `prism()` uses, the
+ * cross-section in XZ, the depth along Y, so an item can swap between the two without moving,
  * and the analytic planes the beam and the refraction tracer use stay valid.
  */
 export function beveledPrism({
@@ -808,10 +798,15 @@ export function beveledPrism({
 }: { r?: number; len?: number; sides?: number; bevel?: number } = {}): THREE.BufferGeometry {
   const half = len / 2;
   const radius = Math.min(bevel, len * 0.45, r * 0.45);
+  // The lathe's own vertices, which sit at `(r sin a, r cos a)` in XZ with the first one on +Z, but
+  // walked the OTHER way round: that order is clockwise in the (x, z) frame, and `roundedContour`
+  // needs counter-clockwise or its normals point inward, its corner arcs sweep the long way round
+  // through the interior, and the cap rings inset outward past the sides. Negating the angle keeps
+  // the same vertex set and the same first corner, so the beam's cross-section still lines up.
   const corners: [number, number][] = Array.from(
     { length: Math.max(3, Math.floor(sides)) },
     (_, i) => {
-      const a = (Math.PI * 2 * i) / Math.max(3, Math.floor(sides));
+      const a = -(Math.PI * 2 * i) / Math.max(3, Math.floor(sides));
       return [Math.sin(a) * r, Math.cos(a) * r];
     },
   );
@@ -852,12 +847,14 @@ export function beveledPrism({
     addRing(theta, half - radius + (radius * Math.sin(theta)) / maxSine, Math.sin(theta));
   }
 
+  // Wound so the front face is the outside: rings climb +Y and the contour runs counter-clockwise
+  // seen from -Y, so a triangle that walks up before it walks along faces out.
   for (let band = 0; band < rings.length - 1; band++) {
     const a = rings[band];
     const b = rings[band + 1];
     for (let i = 0; i < contour.length; i++) {
       const j = (i + 1) % contour.length;
-      indices.push(a[i], a[j], b[j], a[i], b[j], b[i]);
+      indices.push(a[i], b[j], a[j], a[i], b[i], b[j]);
     }
   }
 
@@ -880,8 +877,10 @@ export function beveledPrism({
       else indices.push(centre, cap[i], cap[j]);
     }
   };
-  addCap(rings[0], -1, true);
-  addCap(rings[rings.length - 1], 1, false);
+  // The contour is counter-clockwise seen from -Y, so the bottom cap fans in its own order and the
+  // top cap, seen from +Y, has to be reversed to face out.
+  addCap(rings[0], -1, false);
+  addCap(rings[rings.length - 1], 1, true);
 
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));

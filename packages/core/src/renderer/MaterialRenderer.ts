@@ -8,14 +8,13 @@
  *
  * Pass 3 is what makes glass refract other glass. Sharing one scene-wide plate pass is a trade,
  * not an improvement on per-mesh backside buffers: cheaper with many objects, less accurate per
- * object. Pass 1 exists mostly to keep the backdrop OUT of the depth of field — see resize().
+ * object. Pass 1 exists mostly to keep the backdrop OUT of the depth of field; see renderOnce().
  */
 
 import * as THREE from "three";
 import {
   ensureSceneConfig,
   FAR,
-  FRAME_ASPECT,
   MAX_LAMPS,
   BACKGROUND_MODES,
   MATERIAL_KINDS,
@@ -25,21 +24,41 @@ import {
   MAX_STOPS,
   normalizeMotion,
   resolveMaterial,
-  type CameraFit,
   type SceneConfig,
+  type BeamConfig,
   type GradientType,
   type ItemConfig,
+  type ItemInteractionBinding,
   type LampConfig,
+  type LampInteractionBinding,
   type MaterialConfig,
   type MotionConfig,
   type PostConfig,
-  type ScatterConfig,
+  type SceneInteractionBinding,
   GROUND_MAX_SIDES,
   GROUND_SLOTS,
 } from "../config/model";
 import type { Engine } from "../engine";
+import {
+  BACKDROP_BEHIND_PLATE,
+  BLOOM_DIVISORS,
+  BLOOM_TAPS,
+  ENV_LEVELS,
+  ENV_TEXEL,
+  ENV_WIDTH,
+  backdropLayout,
+  backdropRamp,
+  backgroundMediaUrl,
+  environmentKey,
+  fillGroundSlots,
+  frameFov,
+  needsFinish,
+  postTaps,
+  resolveItems,
+  wallExtent,
+} from "./shared";
+export { expandScatter, resolveItems, bakeScatter, frameFov } from "./shared";
 import { parseHex } from "../util/color";
-import { makeRng } from "../util/math";
 import type { FrameCallback, MaterialItem } from "./item";
 import {
   InteractionController,
@@ -47,6 +66,9 @@ import {
   ITEM_APPLIERS,
   LAMP_APPLIERS,
   SCENE_APPLIERS,
+  type ItemApplyArgs,
+  type LampApplyArgs,
+  type SceneApplyArgs,
 } from "./interaction";
 import { applyMotions, loopFrequency } from "./motions";
 import {
@@ -92,7 +114,7 @@ export interface MaterialRendererOptions {
   respectReducedMotion?: boolean;
   /** Render into this canvas instead of creating one inside the container. */
   canvas?: HTMLCanvasElement;
-  /** Keep the drawing buffer readable so `captureImage` works. Default true — poster capture is
+  /** Keep the drawing buffer readable so `captureImage` works. Default true, poster capture is
    *  the whole point of the shell. Turn it off for a pure background that never exports. */
   preserveDrawingBuffer?: boolean;
 }
@@ -111,7 +133,7 @@ export interface AddOptions {
 }
 
 /** Assign raw display-space components into a `Color` without three's sRGB→linear conversion.
- *  See util/color.ts — the whole pass chain is authored in display space. */
+ *  See util/color.ts, the whole pass chain is authored in display space. */
 function setRaw(target: THREE.Color, hex: string): THREE.Color {
   const [r, g, b] = parseHex(hex);
   target.r = r;
@@ -170,108 +192,11 @@ function rawVec(hex: string, target = new THREE.Vector3()): THREE.Vector3 {
   return target.set(r, g, b);
 }
 
-/** Expand a {@link ScatterConfig} into concrete items — deterministically, so the same config
- *  produces the same scene in the browser, in an export, and in a captured poster. */
-export function expandScatter(scatter: ScatterConfig): ItemConfig[] {
-  const rng = makeRng(scatter.seed);
-  const out: ItemConfig[] = [];
-  const startX = scatter.position.x - scatter.spanX / 2;
-  for (let index = 0; index < scatter.count; index++) {
-    const u = scatter.count > 1 ? index / (scatter.count - 1) : 0.5;
-    const len = scatter.shape.len * (1 - rng() * scatter.lengthVariance);
-    const r = scatter.shape.r + rng() * scatter.radiusVariance;
-    const z = scatter.position.z + (rng() - 0.5) * scatter.spread;
-    const jitter = (rng() - 0.5) * scatter.phaseJitter;
-    out.push({
-      shape: { ...scatter.shape, r, len },
-      position: { x: startX + u * scatter.spanX, y: scatter.position.y, z },
-      rotation: { x: 0, y: 0, z: 0 },
-      scale: { x: 1, y: 1, z: 1 },
-      // Cloned, not shared. Every other field here is already copied; leaving this one as a
-      // reference meant a BAKED scatter handed all of its items the same material object, so
-      // editing one shape's IOR in the panel silently edited all of them.
-      material: { ...scatter.material },
-      motion: { ...scatter.motion },
-      // The arrangement's stagger is baked into each shape's own phase here, rather than being
-      // re-derived from the index at render time — so a baked scene animates identically to the
-      // generated one it came from.
-      phase: index * scatter.stagger + jitter,
-      // Cloned per shape for the same reason as the material — and because binding smoothing is
-      // keyed by binding-object identity, so shared binding objects would make all the generated
-      // shapes ease as one instead of the hovered rod answering alone.
-      ...(scatter.interaction ? { interaction: structuredClone(scatter.interaction) } : {}),
-    });
-  }
-  return out;
-}
+/** Any binding the applier tables evaluate. */
+type InteractionBinding = ItemInteractionBinding | LampInteractionBinding | SceneInteractionBinding;
 
-/** The items a config describes: scatter when present, the explicit list otherwise. */
-export function resolveItems(config: SceneConfig): ItemConfig[] {
-  return config.scatter ? expandScatter(config.scatter) : config.items;
-}
-
-/**
- * Turn a generated scene into an authored one: expand `scatter` into a concrete `items` list and
- * drop the scatter block. The frame is pixel-identical afterwards — the same generator produced
- * the list — but every shape now has a config of its own to select, move and edit.
- *
- * Mutates in place and returns whether anything changed, so an editor can call it unconditionally
- * before a per-shape edit. A no-op on a scene that is already authored.
- */
-export function bakeScatter(config: SceneConfig): boolean {
-  if (!config.scatter) return false;
-  config.items = expandScatter(config.scatter);
-  config.scatter = undefined;
-  return true;
-}
-
-/**
- * The effective vertical FOV for a canvas of aspect `aspect`, given the fov authored at
- * {@link FRAME_ASPECT}.
- *
- * Wave3D solves the same problem with a zoom multiplier because its camera is orthographic. A
- * perspective camera has no `zoom` that means "show more world" without also moving the lens, so
- * the policy is expressed as a FOV instead: scale the visible HEIGHT at the focal plane by `k`,
- * and since height = 2·d·tan(fov/2), that is `fovEff = 2·atan(k·tan(fov/2))` — exact at every
- * depth, so nothing about the perspective or the depth of field shifts.
- *
- * `k` is the visible height relative to the authored frame:
- *   cover   k = min(1, A₀/A)   crop the overflow — never reveal world beyond the frame
- *   contain k = max(1, A₀/A)   reveal beyond the frame — never crop it
- *   width   k = A₀/A           hold the horizontal composition
- *   height  k = 1              hold the vertical composition (three's own behaviour)
- *
- * At `aspect === FRAME_ASPECT` every branch gives k = 1, which is what makes this inert for the
- * 16:9 framing every preset is authored against.
- */
-/** Clear colour for the back-face pass — see the note at its call site. */
+/** Clear colour for the back-face pass; see the note at its call site. */
 const BLACK = new THREE.Color(0, 0, 0);
-
-export function frameFov(
-  fov: number,
-  aspect: number,
-  fit: CameraFit = "cover",
-  minVisibleWidth = 0,
-): number {
-  const byFrame = FRAME_ASPECT / aspect;
-  let k: number;
-  switch (fit) {
-    case "contain":
-      k = Math.max(1, byFrame);
-      break;
-    case "width":
-      k = byFrame;
-      break;
-    case "height":
-      k = 1;
-      break;
-    default:
-      k = Math.min(1, byFrame);
-  }
-  // A floor on k only ever widens the view, so it cannot tighten a fit that already shows enough.
-  if (minVisibleWidth > 0) k = Math.max(k, byFrame * minVisibleWidth);
-  return THREE.MathUtils.radToDeg(2 * Math.atan(k * Math.tan(THREE.MathUtils.degToRad(fov) / 2)));
-}
 
 export class MaterialRenderer implements Engine {
   readonly renderer: THREE.WebGLRenderer;
@@ -283,9 +208,15 @@ export class MaterialRenderer implements Engine {
   private config: SceneConfig;
   private readonly respectReducedMotion: boolean;
 
-  private readonly colorRT: THREE.WebGLRenderTarget;
-  private readonly bgRT: THREE.WebGLRenderTarget;
-  private readonly plainRT: THREE.WebGLRenderTarget;
+  /** The colour targets. Reallocated when the tone map turns on or off, since that changes their
+   *  pixel type; see `syncColorTargets`. */
+  private colorRT!: THREE.WebGLRenderTarget;
+  private bgRT!: THREE.WebGLRenderTarget;
+  private plainRT!: THREE.WebGLRenderTarget;
+  /** Whether the colour targets are half-float and multisampled; undefined before the first
+   *  allocation. */
+  private hdrTargets?: boolean;
+  private readonly byteTarget: THREE.RenderTargetOptions;
   private readonly depthRT: THREE.WebGLRenderTarget;
 
   private readonly backdrop: THREE.Mesh;
@@ -294,8 +225,10 @@ export class MaterialRenderer implements Engine {
   private mediaVideo?: HTMLVideoElement;
   /** URL currently loaded, so refresh() doesn't re-request the same file every frame. */
   private mediaUrl?: string;
+  /** Bumped per media request, so a load that lands late or after dispose() is thrown away. */
+  private mediaLoadId = 0;
   private readonly depthMaterial: THREE.ShaderMaterial;
-  /** Same depth encoding as depthRT, but of BACK faces — the exit surface of each shape. */
+  /** Same depth encoding as depthRT, but of BACK faces, the exit surface of each shape. */
   private readonly backRT: THREE.WebGLRenderTarget;
   private readonly backMaterial: THREE.ShaderMaterial;
   private readonly postMaterial: THREE.ShaderMaterial;
@@ -308,12 +241,14 @@ export class MaterialRenderer implements Engine {
 
   /**
    * The multi-scale bloom pyramid: four half-resolution steps, each with a ping-pong pair so the
-   * separable blur can go horizontal then vertical. Allocated only when a scene asks for it —
+   * separable blur can go horizontal then vertical. Allocated only when a scene asks for it,
    * eight extra targets is not a cost to impose on presets using the post pass's own gather.
    */
   private bloomLevels?: { a: THREE.WebGLRenderTarget; b: THREE.WebGLRenderTarget }[];
   private bloomExtract?: THREE.ShaderMaterial;
-  private bloomBlur?: THREE.ShaderMaterial;
+  /** One blur program per level: the tap count is a loop bound, so it is a define, and flipping
+   *  a define on a shared material recompiles it. */
+  private bloomBlurs?: THREE.ShaderMaterial[];
   private bloomComposite?: THREE.ShaderMaterial;
   private bloomDown?: THREE.ShaderMaterial;
   private particleDown?: THREE.ShaderMaterial;
@@ -323,39 +258,49 @@ export class MaterialRenderer implements Engine {
   /** The prefiltered room, mip 0 sharp and each level a wider cone. Absent while analytic. */
   private envRT?: THREE.WebGLRenderTarget;
   private envKey = "";
-  private readonly bloomScene = new THREE.Scene();
-  private bloomQuad?: THREE.Mesh;
+  /** One fullscreen quad for every blit: the bloom pyramid, the environment bake, the mip copies.
+   *  Always present, so a bake never depends on the bloom having been allocated first. */
+  private readonly blitScene = new THREE.Scene();
+  private readonly blitQuad: THREE.Mesh;
 
   /** Airborne dust, drawn after the beam and lit by the pyramid's widest level. */
   private dustMesh?: THREE.Mesh;
   private dustMaterial?: THREE.ShaderMaterial;
   private dustKey = "";
-  /** Its own scene, because dust is drawn AFTER the bloom pyramid it reads from — it cannot be
+  /** Its own scene, because dust is drawn AFTER the bloom pyramid it reads from, it cannot be
    *  part of the main pass without the pyramid depending on its own output. */
   private readonly dustScene = new THREE.Scene();
 
   /** The traced light beam, or undefined when the scene has no `beam`. Its geometry is rebuilt
-   *  whenever the beam config changes — see {@link applyBeam}. */
+   *  by {@link traceBeam} whenever the beam, or what drives it, changes. */
   private beamMesh?: THREE.Mesh;
   private beamMaterial?: THREE.ShaderMaterial;
-  /** The caustic draws the SAME geometry a second time — see CAUSTIC_FRAG. */
+  /** The caustic draws the SAME geometry a second time, see CAUSTIC_FRAG. */
   private causticMesh?: THREE.Mesh;
   private causticMaterial?: THREE.ShaderMaterial;
-  /** The prism's inner interface — see BACKGLASS_FRAG. */
+  /** The prism's inner interface; see BACKGLASS_FRAG. */
   private backGlass?: THREE.ShaderMaterial;
   private readonly backGlassScene = new THREE.Scene();
-  /** Serialized beam config the current geometry was traced from, so a refresh() that changes
-   *  something else does not pay for a retrace. */
+  /** Stands in for each traced solid during the inner-interface draw, so the item itself is
+   *  never re-parented or handed another material per frame. */
+  private backGlassProxy?: THREE.Mesh;
+  /** Serialized beam config the current trace answers, so a refresh() that changes something
+   *  else does not pay for a retrace. */
   private beamKey = "";
+  /** What the sheet was last traced with. A frame whose values match costs four compares. */
+  private readonly beamTraced = { incidence: NaN, entry: NaN, wallX: NaN, wallY: NaN };
+  private readonly beamWallScratch = new THREE.Vector2();
 
   /** One set of uniform holders shared by every glass material AND the backdrop, so the colour a
    *  shape refracts and the colour showing faintly around it can never drift apart. */
   private readonly lampUniforms: Record<string, THREE.IUniform>;
   private readonly lampPositions: THREE.Vector4[] = [];
   private readonly lampColors: THREE.Vector3[] = [];
+  /** The camera's view-projection, shared by every glass material and written once per frame. */
+  private readonly viewProjUniform: THREE.IUniform = { value: new THREE.Matrix4() };
 
   private readonly items: MaterialItem[] = [];
-  /** The ItemConfig list the meshes were built from — config.items, or the ONE scatter expansion
+  /** The ItemConfig list the meshes were built from, config.items, or the ONE scatter expansion
    *  this build used (expanding again would make fresh objects and break identity). Indices into
    *  it are the interaction layer's currency for hoverSelf/pressSelf. */
   private resolvedItems: ItemConfig[] = [];
@@ -364,6 +309,12 @@ export class MaterialRenderer implements Engine {
   private readonly clearColor = new THREE.Color();
   private readonly depthClearColor = new THREE.Color();
   private readonly normalScratch = new THREE.Matrix3();
+  // Prism-plane scratch. The planes are re-derived every frame for a traced solid, so this must
+  // not allocate.
+  private readonly planeLocalN = new THREE.Vector3();
+  private readonly planeLocalP = new THREE.Vector3();
+  private readonly planeWorldN = new THREE.Vector3();
+  private readonly planeWorldP = new THREE.Vector3();
 
   // Picking / direct manipulation scratch. Allocated once: these run on every pointer move.
   private readonly raycaster = new THREE.Raycaster();
@@ -389,7 +340,7 @@ export class MaterialRenderer implements Engine {
   private visible = true;
   // Read, not assumed: a scene built in a background tab gets no visibilitychange for the state
   // it is already in, so an optimistic `true` here makes it believe it is animating while its
-  // rAF never fires — and it then never schedules another one either.
+  // rAF never fires, and it then never schedules another one either.
   private pageVisible = typeof document === "undefined" || document.visibilityState === "visible";
   /** Intro ease-in: scales animation accumulation 0→1 over ~1s on load. See `step`. */
   private introRamp = 0;
@@ -398,6 +349,14 @@ export class MaterialRenderer implements Engine {
   /** Straight copy of the colour target to the screen, for `probeActive()`. Built on first use. */
   private probeBlit?: THREE.ShaderMaterial;
   private probeScene?: THREE.Scene;
+  // Dev-probe state, read from the harness globals once per refresh() rather than per frame: a
+  // material probe index, a dump-only target name, and the wall tap the name selects.
+  private probeIndex = 0;
+  private probeName?: string;
+  private probeDump = false;
+  private probeWall = 0;
+  /** Whether the glass and backdrop programs currently carry the probe branches (GLSL_PROBES). */
+  private probesCompiled = false;
   private reducedMotion = false;
   private capturing = false;
   private disposed = false;
@@ -418,10 +377,18 @@ export class MaterialRenderer implements Engine {
     orbitYaw: 0,
     orbitPitch: 0,
   };
+  // Applier argument records, reused every frame rather than built per lamp and per item.
+  private readonly sceneArgs: SceneApplyArgs;
+  private readonly lampArgs: LampApplyArgs = { vec: new THREE.Vector4() };
+  private readonly itemArgs: ItemApplyArgs = {
+    u: {},
+    mesh: new THREE.Object3D(),
+    home: new THREE.Vector3(),
+  };
   /** The studio's scroll scrub (null = live container progress). Kept OUTSIDE the controller so a
    *  config edit that rebuilds the controller doesn't silently drop an active scrub. */
   private scrollPreview: number | null = null;
-  /** Each item's resolved material — the authored base a binding at rest restores. Refilled by
+  /** Each item's resolved material, the authored base a binding at rest restores. Refilled by
    *  refresh()/buildItems()/add() from the same resolveMaterial call that fills the uniforms. */
   private readonly baseMaterials = new WeakMap<MaterialItem, MaterialConfig>();
 
@@ -462,8 +429,7 @@ export class MaterialRenderer implements Engine {
     if (this.ownsCanvas) {
       const canvas = this.renderer.domElement;
       canvas.style.display = "block";
-      canvas.style.width = "100%";
-      canvas.style.height = "100%";
+      // No CSS size here: setSize() writes the pixel size on every resize.
       canvas.style.touchAction = "none";
       container.appendChild(canvas);
     }
@@ -481,32 +447,10 @@ export class MaterialRenderer implements Engine {
       colorSpace: THREE.NoColorSpace,
       depthBuffer: true,
     };
-    // The two colour targets carry HDR when the scene tone maps.
-    //
-    // Without this the tone map is applied too late to matter: the main pass writes into an 8-bit
-    // target, so a value above 1 is clamped PER CHANNEL before the post pass ever samples it, and
-    // an over-range spectrum arrives already destroyed — magenta where red and blue both pinned,
-    // cyan where green and blue did. Half-float keeps the beam's real radiance alive until there
-    // is a curve to compress it with. Byte targets stay the default because every preset built
-    // before tone mapping existed was calibrated against them.
-    //
-    // The same switch turns on MULTISAMPLING, for a related reason. `antialias: true` on the
-    // renderer applies to the DEFAULT framebuffer only; a render target gets none unless it asks.
-    // That is invisible for glass, whose silhouettes are large and smooth, and ruinous for a beam:
-    // near the exit face adjacent wavelengths are a fraction of a unit apart, so every quad in the
-    // fan is a long sub-pixel wedge, and two dozen staggered slice-fans alias against each other
-    // into a comb of streaks. Four samples resolves them into one continuous sheet.
-    const hdr = this.config.post.toneMap !== "none";
-    const colorOptions: THREE.RenderTargetOptions = hdr
-      ? { ...rtOptions, type: THREE.HalfFloatType, samples: 4 }
-      : rtOptions;
-    this.colorRT = new THREE.WebGLRenderTarget(1, 1, colorOptions);
-    this.bgRT = new THREE.WebGLRenderTarget(1, 1, colorOptions);
-    // The plate WITHOUT the glass in it. See `renderPlainPlate`.
-    this.plainRT = new THREE.WebGLRenderTarget(1, 1, colorOptions);
+    this.byteTarget = rtOptions;
     this.depthRT = new THREE.WebGLRenderTarget(1, 1, {
       ...rtOptions,
-      // Nearest: the packed two-channel depth must not be interpolated — a blend of the low byte
+      // Nearest: the packed two-channel depth must not be interpolated, a blend of the low byte
       // of two different depths decodes to a distance that is in neither.
       minFilter: THREE.NearestFilter,
       magFilter: THREE.NearestFilter,
@@ -520,7 +464,8 @@ export class MaterialRenderer implements Engine {
       uLamp: { value: this.lampPositions },
       uLampCol: { value: this.lampColors },
       uLampCount: { value: 0 },
-      uLampGain: { value: this.config.lampGain },
+      // Holders only: the gain and the gate are pushed by refresh() with everything else.
+      uLampGain: { value: 0 },
       // Scene-level, so they live with the lamps rather than on each item: what a reflection sees
       // where the plate does not reach is a property of the room, not of the shape.
       uStudio: { value: 0 },
@@ -532,10 +477,9 @@ export class MaterialRenderer implements Engine {
       uEnvTexel: { value: 1 },
       uEnvLevels: { value: 1 },
       uEnvOn: { value: 0 },
-      uLampLo: { value: this.config.lampGate.lo },
-      uLampHi: { value: this.config.lampGate.hi },
+      uLampLo: { value: 0 },
+      uLampHi: { value: 1 },
     };
-    this.applyLamps(this.config.lamps);
 
     this.backdropMaterial = new THREE.ShaderMaterial({
       uniforms: {
@@ -620,7 +564,7 @@ export class MaterialRenderer implements Engine {
     this.postMaterial = new THREE.ShaderMaterial({
       defines: this.postDefines(),
       uniforms: {
-        tColor: { value: this.colorRT.texture },
+        tColor: { value: null },
         tDepth: { value: this.depthRT.texture },
         uRes: { value: new THREE.Vector2(1, 1) },
         uHazeCol: { value: new THREE.Vector3() },
@@ -649,6 +593,15 @@ export class MaterialRenderer implements Engine {
       depthWrite: false,
     });
     this.postScene.add(new THREE.Mesh(this.screenQuad, this.postMaterial));
+    // The colour targets, bound into the post pass by the same call that reallocates them.
+    this.syncColorTargets();
+    this.sceneArgs = {
+      post: this.postMaterial.uniforms,
+      lamps: this.lampUniforms,
+      out: this.interactionSceneOut,
+    };
+    this.blitQuad = new THREE.Mesh(this.screenQuad, this.depthMaterial);
+    this.blitScene.add(this.blitQuad);
 
     this.postRT = new THREE.WebGLRenderTarget(1, 1, rtOptions);
     this.finishMaterial = new THREE.ShaderMaterial({
@@ -714,14 +667,12 @@ export class MaterialRenderer implements Engine {
   // ---------------------------------------------------------------- scene ---
 
   private postDefines(): Record<string, string> {
-    // Fewer taps below full quality: at that point the frame is already soft, and 24 gathers ×
-    // two textures is the most expensive thing in the pass.
-    const taps = this.config.quality >= 0.85 ? 24 : this.config.quality >= 0.6 ? 16 : 10;
-    return { DOF_TAPS: String(taps), CAUSTIC_TAPS: this.config.quality >= 0.6 ? "10" : "6" };
+    const { dofTaps, causticTaps } = postTaps(this.config.quality);
+    return { DOF_TAPS: String(dofTaps), CAUSTIC_TAPS: String(causticTaps) };
   }
 
-  private makeMaterial(material: Partial<MaterialConfig>, shapePath: number): THREE.ShaderMaterial {
-    const m = resolveMaterial({ path: shapePath, ...material });
+  /** A glass program for an already-resolved material, its uniforms filled from it. */
+  private makeMaterial(m: MaterialConfig): THREE.ShaderMaterial {
     const shader = new THREE.ShaderMaterial({
       uniforms: {
         ...this.lampUniforms,
@@ -735,7 +686,7 @@ export class MaterialRenderer implements Engine {
         uPlateScale: { value: new THREE.Vector2() },
         uPlateOffset: { value: new THREE.Vector2() },
         uPlaneZ: { value: this.config.plate.z },
-        // The per-material uniforms: allocated empty here, filled by pushMaterialUniforms —
+        // The per-material uniforms: allocated empty here, filled by pushMaterialUniforms,
         // the same single list `refresh()` uses, so creation and update can never drift.
         uTint: { value: new THREE.Vector3() },
         uUseTint: { value: 0 },
@@ -751,7 +702,7 @@ export class MaterialRenderer implements Engine {
           value: Array.from({ length: 6 }, () => new THREE.Vector4()),
         },
         uPrismPlaneCount: { value: 0 },
-        uViewProj: { value: new THREE.Matrix4() },
+        uViewProj: this.viewProjUniform,
         uRim: { value: 0 },
         uSpec: { value: 0 },
         uSat: { value: 0 },
@@ -779,8 +730,9 @@ export class MaterialRenderer implements Engine {
       },
       // Eleven, the reference's count. It is a compile-time constant rather than a uniform because
       // GLSL ES 1.00 wants a constant loop bound, and because a scene has no reason to change it
-      // per material — the cone's WIDTH is what varies, and that comes from roughness.
-      defines: { CONE_SAMPLES: "11" },
+      // per material: the cone's WIDTH is what varies, and that comes from roughness. The probe
+      // branches are compiled in only while a harness has one active; see `syncProbes`.
+      defines: { CONE_SAMPLES: "11", ...(this.probesCompiled ? { GLSL_PROBES: "1" } : {}) },
       vertexShader: GLASS_VERT,
       fragmentShader: GLASS_FRAG,
       transparent: false,
@@ -792,13 +744,13 @@ export class MaterialRenderer implements Engine {
   }
 
   /**
-   * Add a shape built elsewhere — the escape hatch for scenes that are easier to write as code
+   * Add a shape built elsewhere, the escape hatch for scenes that are easier to write as code
    * than as config. `material.path` defaults to the item's own radius, which is right for a rod
    * and wrong for anything squat, so pass it for discs and rings (see the shapes module).
    */
   add(geometry: THREE.BufferGeometry, options: AddOptions = {}): MaterialItem {
-    const fallbackPath = options.material?.path ?? 0.4;
-    const material = this.makeMaterial(options.material ?? {}, fallbackPath);
+    const resolved = resolveMaterial({ path: options.material?.path ?? 0.4, ...options.material });
+    const material = this.makeMaterial(resolved);
     const mesh = new THREE.Mesh(geometry, material);
     if (options.position) mesh.position.set(...options.position);
     if (options.rotationOrder) mesh.rotation.order = options.rotationOrder;
@@ -821,30 +773,47 @@ export class MaterialRenderer implements Engine {
       data: options.data ?? {},
     };
     this.items.push(item);
-    this.baseMaterials.set(item, resolveMaterial({ path: fallbackPath, ...options.material }));
+    this.baseMaterials.set(item, resolved);
     this.applyPlateUniforms(material);
     return item;
   }
 
-  /** Remove one item and release its GPU resources. */
+  /** Remove one item and release its GPU resources. The config is untouched, so a rebuild()
+   *  brings the shape back. */
   remove(item: MaterialItem): void {
     const index = this.items.indexOf(item);
     if (index < 0) return;
     this.items.splice(index, 1);
+    // The resolved list stays in step with the meshes, since the interaction layer indexes into
+    // it. Copied first when it IS config.items, so the config keeps the shape.
+    if (item.config) {
+      if (this.resolvedItems === this.config.items) this.resolvedItems = this.resolvedItems.slice();
+      const at = this.resolvedItems.indexOf(item.config);
+      if (at >= 0) this.resolvedItems.splice(at, 1);
+    }
+    this.releaseItem(item);
+    // The contact shadows are read off the items, so the wall has to forget this one.
+    this.applyGrounding();
+  }
+
+  /** Remove every item. The backdrop, camera and post stack stay. */
+  clear(): void {
+    for (const item of this.items) this.releaseItem(item);
+    this.items.length = 0;
+    this.resolvedItems = [];
+    this.applyGrounding();
+  }
+
+  private releaseItem(item: MaterialItem): void {
     this.scene.remove(item.mesh);
     item.mesh.geometry.dispose();
     item.material.dispose();
   }
 
-  /** Remove every item. The backdrop, camera and post stack stay. */
-  clear(): void {
-    while (this.items.length > 0) this.remove(this.items[this.items.length - 1]);
-  }
-
   private buildItems(): void {
     this.clear();
     // NOT normalized per item here. `ensureSceneConfig` already normalized `config.items` on the
-    // way in, and normalizing again would return COPIES — which is fatal for direct manipulation:
+    // way in, and normalizing again would return COPIES, which is fatal for direct manipulation:
     // an editor dragging a shape writes to `item.config`, and if that is a copy the move survives
     // in the viewport but is lost on save, undo and reload. Identity is the contract.
     //
@@ -855,7 +824,8 @@ export class MaterialRenderer implements Engine {
     this.resolvedItems = resolveItems(this.config);
     for (const item of this.resolvedItems) {
       const geometry = buildShape(item.shape);
-      const material = this.makeMaterial(item.material, defaultPath(item.shape));
+      const resolved = resolveMaterial({ path: defaultPath(item.shape), ...item.material });
+      const material = this.makeMaterial(resolved);
       const mesh = new THREE.Mesh(geometry, material);
       mesh.position.set(item.position.x, item.position.y, item.position.z);
       mesh.rotation.set(item.rotation.x, item.rotation.y, item.rotation.z);
@@ -873,10 +843,7 @@ export class MaterialRenderer implements Engine {
         data: {},
       };
       this.items.push(built);
-      this.baseMaterials.set(
-        built,
-        resolveMaterial({ path: defaultPath(item.shape), ...item.material }),
-      );
+      this.baseMaterials.set(built, resolved);
     }
   }
 
@@ -905,9 +872,12 @@ export class MaterialRenderer implements Engine {
     return this;
   }
 
-  /** Merge post-processing settings. */
+  /** Merge post-processing settings. The tone map and the bloom mode allocate rather than write
+   *  a uniform, so they take the same steps refresh() does. */
   setPost(post: Partial<PostConfig>): this {
     this.config.post = { ...this.config.post, ...post };
+    this.syncColorTargets();
+    this.applyBloom();
     this.applyPost();
     this.renderIfIdle();
     return this;
@@ -938,65 +908,49 @@ export class MaterialRenderer implements Engine {
     }
   }
 
-  /** Per-frame binding write. No-op without a controller. While capturing it writes the REST
-   *  state instead (every bound param at its authored base) — merely skipping the write would
-   *  freeze whatever live hover/scroll state the previous frame left in the uniforms, so exports
-   *  wouldn't be deterministic. */
-  private applyInteraction(): void {
-    // Seed the out-params from config BEFORE any early return. They are read unconditionally after
-    // this — the beam retrace reads beamIncidence/beamEntry every frame — so a scene with no
-    // interaction layer at all would otherwise be driven by their initial zeroes, silently
-    // overriding whatever the config authored.
+  /** Seed the scene out-params at their authored base. Appliers overwrite only what they drive,
+   *  so with no scene binding these stay at rest: interactionTime 0, interactionZoom 1. */
+  private seedInteractionOut(): void {
     const c = this.config;
-    this.interactionSceneOut.timeOffset = c.timeOffset;
-    this.interactionSceneOut.zoom = 1;
-    this.interactionSceneOut.beamIncidence = c.beam?.incidence ?? 0;
-    this.interactionSceneOut.beamEntry = c.beam?.entry ?? 0.5;
-    this.interactionSceneOut.orbitYaw = 0;
-    this.interactionSceneOut.orbitPitch = 0;
-    if (!this.interaction) return;
-    if (this.capturing) {
-      this.applyInteractionRest();
-      return;
-    }
-    this.applyBindings(this.interaction);
+    const out = this.interactionSceneOut;
+    out.timeOffset = c.timeOffset;
+    out.zoom = 1;
+    out.beamIncidence = c.beam?.incidence ?? 0;
+    out.beamEntry = c.beam?.entry ?? 0.5;
+    out.orbitYaw = 0;
+    out.orbitPitch = 0;
   }
 
-  /** Evaluate bindings via the applier tables: value = mix(from ?? base, to, smoothedSource).
-   *  Scene bindings drive shared params; each shape's and lamp's bindings drive their own. */
-  private applyBindings(ic: InteractionController): void {
+  /** Per-frame binding write. Seeds the out-params BEFORE any early return: they are read
+   *  unconditionally afterwards (the beam retrace reads beamIncidence/beamEntry every frame), so a
+   *  scene with no interaction layer would otherwise be driven by stale values. */
+  private applyInteraction(): void {
+    this.seedInteractionOut();
+    if (!this.interaction) return;
+    // While capturing, every bound param is written at its authored base: merely skipping the
+    // write would freeze whatever live hover/scroll state the previous frame left in the
+    // uniforms, so exports wouldn't be deterministic. Live controller state is left untouched, so
+    // the frame after a capture resumes mid-gesture.
+    this.writeBindings(this.capturing ? null : this.interaction);
+  }
+
+  /** Evaluate every binding through the applier tables and write the results. With a controller,
+   *  value = mix(from ?? base, to, smoothedSource); without one, every value is its base. Scene
+   *  bindings drive shared params; each shape's and lamp's bindings drive their own. */
+  private writeBindings(ic: InteractionController | null): void {
     const c = this.config;
-    // Seed the out-params at base; appliers overwrite only what they drive, so with no scene
-    // binding these stay at rest → interactionTime 0 / interactionZoom 1.
-    this.interactionSceneOut.timeOffset = c.timeOffset;
-    this.interactionSceneOut.zoom = 1;
-    this.interactionSceneOut.beamIncidence = c.beam?.incidence ?? 0;
-    this.interactionSceneOut.beamEntry = c.beam?.entry ?? 0.5;
-    this.interactionSceneOut.orbitYaw = 0;
-    this.interactionSceneOut.orbitPitch = 0;
-    const sceneArgs = {
-      post: this.postMaterial.uniforms,
-      lamps: this.lampUniforms,
-      out: this.interactionSceneOut,
-    };
     for (const b of c.interaction?.bindings ?? []) {
       const applier = SCENE_APPLIERS[b.target];
-      const value = THREE.MathUtils.lerp(b.from ?? applier.base(c), b.to, ic.bindingValue(b));
-      applier.apply(value, sceneArgs);
+      applier.apply(this.bindingValue(ic, b, applier.base(c)), this.sceneArgs);
     }
     const lampCount = Math.min(c.lamps.length, MAX_LAMPS);
     for (let i = 0; i < lampCount; i++) {
       const bindings = c.lamps[i].bindings;
       if (!bindings || bindings.length === 0) continue;
-      const args = { vec: this.lampPositions[i] };
+      this.lampArgs.vec = this.lampPositions[i];
       for (const b of bindings) {
         const applier = LAMP_APPLIERS[b.target];
-        const value = THREE.MathUtils.lerp(
-          b.from ?? applier.base(c.lamps[i]),
-          b.to,
-          ic.bindingValue(b),
-        );
-        applier.apply(value, args);
+        applier.apply(this.bindingValue(ic, b, applier.base(c.lamps[i])), this.lampArgs);
       }
     }
     for (const item of this.items) {
@@ -1004,15 +958,12 @@ export class MaterialRenderer implements Engine {
       if (!bindings || bindings.length === 0) continue;
       const base = this.baseMaterials.get(item);
       if (!base) continue;
-      const args = { u: item.material.uniforms, mesh: item.mesh, home: item.home };
+      this.itemArgs.u = item.material.uniforms;
+      this.itemArgs.mesh = item.mesh;
+      this.itemArgs.home = item.home;
       for (const b of bindings) {
         const applier = ITEM_APPLIERS[b.target];
-        const value = THREE.MathUtils.lerp(
-          b.from ?? applier.base(base, item.home),
-          b.to,
-          ic.bindingValue(b),
-        );
-        applier.apply(value, args);
+        applier.apply(this.bindingValue(ic, b, applier.base(base, item.home)), this.itemArgs);
       }
     }
     // The time offset is a DELTA over the authored one; the zoom is a plain multiplier.
@@ -1020,50 +971,15 @@ export class MaterialRenderer implements Engine {
     this.interactionZoom = this.interactionSceneOut.zoom;
   }
 
-  /** Write the capture-frame interaction state: exactly what this config renders with no input —
-   *  every bound param at its authored base. Live controller state is left untouched, so the
-   *  frame after a capture resumes mid-gesture. */
-  private applyInteractionRest(): void {
-    const c = this.config;
-    this.interactionTime = 0;
-    this.interactionZoom = 1;
-    this.interactionSceneOut.timeOffset = c.timeOffset;
-    this.interactionSceneOut.zoom = 1;
-    this.interactionSceneOut.beamIncidence = c.beam?.incidence ?? 0;
-    this.interactionSceneOut.beamEntry = c.beam?.entry ?? 0.5;
-    const sceneArgs = {
-      post: this.postMaterial.uniforms,
-      lamps: this.lampUniforms,
-      out: this.interactionSceneOut,
-    };
-    for (const b of c.interaction?.bindings ?? []) {
-      const applier = SCENE_APPLIERS[b.target];
-      applier.apply(applier.base(c), sceneArgs);
-    }
-    const lampCount = Math.min(c.lamps.length, MAX_LAMPS);
-    for (let i = 0; i < lampCount; i++) {
-      const bindings = c.lamps[i].bindings;
-      if (!bindings || bindings.length === 0) continue;
-      const args = { vec: this.lampPositions[i] };
-      for (const b of bindings) {
-        const applier = LAMP_APPLIERS[b.target];
-        applier.apply(applier.base(c.lamps[i]), args);
-      }
-    }
-    for (const item of this.items) {
-      const bindings = item.config?.interaction?.bindings;
-      if (!bindings || bindings.length === 0) continue;
-      const base = this.baseMaterials.get(item);
-      if (!base) continue;
-      const args = { u: item.material.uniforms, mesh: item.mesh, home: item.home };
-      for (const b of bindings) {
-        const applier = ITEM_APPLIERS[b.target];
-        applier.apply(applier.base(base, item.home), args);
-      }
-    }
+  private bindingValue(
+    ic: InteractionController | null,
+    b: InteractionBinding,
+    base: number,
+  ): number {
+    return ic ? THREE.MathUtils.lerp(b.from ?? base, b.to, ic.bindingValue(b)) : base;
   }
 
-  /** Scratch state for updateItemHover — reused every frame, never reallocated. */
+  /** Scratch state for updateItemHover, reused every frame, never reallocated. */
   private readonly hoverCandidates: THREE.Object3D[] = [];
   private readonly hoverNdc = new THREE.Vector2();
 
@@ -1076,7 +992,7 @@ export class MaterialRenderer implements Engine {
       ic.setHoverItem(this.resolveItemHit(ic.pointerTarget()));
     }
     // pressSelf resolves the latched pointerdown position, once per down. A pending press must
-    // always be consumed — even when nothing binds pressSelf — or it would wait forever.
+    // always be consumed, even when nothing binds pressSelf, or it would wait forever.
     const pressNdc = ic.pendingPress();
     if (pressNdc) {
       this.collectHitCandidates("pressSelf");
@@ -1089,15 +1005,20 @@ export class MaterialRenderer implements Engine {
     const candidates = this.hoverCandidates;
     candidates.length = 0;
     for (const item of this.items) {
-      if (item.config?.interaction?.bindings?.some((b) => b.source === source)) {
-        candidates.push(item.mesh);
+      const bindings = item.config?.interaction?.bindings;
+      if (!bindings) continue;
+      for (const b of bindings) {
+        if (b.source === source) {
+          candidates.push(item.mesh);
+          break;
+        }
       }
     }
     return candidates.length > 0;
   }
 
   /** Raycast `ndc` against the collected candidates; the nearest hit's index into the RESOLVED
-   *  item list (the controller's index space — covers scatter-generated shapes), or null. */
+   *  item list (the controller's index space, covers scatter-generated shapes), or null. */
   private resolveItemHit(ndc: { x: number; y: number } | null): number | null {
     if (!ndc || this.hoverCandidates.length === 0) return null;
     this.hoverNdc.set(ndc.x, ndc.y);
@@ -1109,7 +1030,7 @@ export class MaterialRenderer implements Engine {
     return index >= 0 ? index : null;
   }
 
-  /** Feed a `custom:<name>` interaction input (developer API — drive any binding from your own
+  /** Feed a `custom:<name>` interaction input (developer API, drive any binding from your own
    *  signal each frame). No-op while the interaction layer is off. */
   setInteractionInput(name: string, value: number): this {
     this.interaction?.setInput(name, value);
@@ -1140,7 +1061,7 @@ export class MaterialRenderer implements Engine {
    * Feed a live scroll position (0..1) from a real scrollable surface (the studio's scroll-test
    * overlay). Unlike setScrollPreview's instant snap (built for a slider and a possibly-frozen
    * loop), this leaves the RUNNING render loop's update() to smooth the bindings and derive
-   * `scrollVelocity` from the real scroll delta — the scene reacts exactly as it would on a
+   * `scrollVelocity` from the real scroll delta, the scene reacts exactly as it would on a
    * scrolling page, velocity included. Falls back to a snapped frame when the loop isn't running.
    */
   setScrollTestProgress(value: number): this {
@@ -1162,41 +1083,20 @@ export class MaterialRenderer implements Engine {
     rawVec(this.config.clearGlass, material.uniforms.uClearCol.value as THREE.Vector3);
   }
 
-  /**
-   * Push the painted-backdrop config into the backdrop material.
-   *
-   * Colours go in raw, the same way every other Materials3D colour does — `parseHex` straight into a
-   * Vector3, never through THREE.Color, which would linearize them and wash the gradient out.
-   */
-  /**
-   * Where each solid meets the wall, for the contact shadow.
-   *
-   * The footprint is the shape's own cross-section — a regular polygon for a prism or hex, a
-   * circle for every other lathe — placed at the item's world position. It was previously a single
-   * disc pinned to the origin, which is wrong twice over in any scene with more than one solid or
-   * with a solid that is not in the middle: `cascade` had one circular shadow under the gap
-   * between its three shapes.
-   */
+  /** Where each solid meets the wall, for the contact shadow: one footprint per item, read off
+   *  the meshes. The derivation lives in `fillGroundSlots`, shared with the node engine. */
   private applyGrounding(): void {
     const u = this.backdropMaterial.uniforms;
-    if (!u.uGround) return;
     const slots = u.uGround.value as THREE.Vector4[];
     const phases = u.uGroundPhase.value as number[];
-    let count = 0;
-    for (const item of this.items) {
-      if (count >= slots.length) break;
-      const shape = item.config?.shape;
-      if (!shape) continue;
-      const faceted = shape.kind === "prism" || shape.kind === "hex";
-      const sides = shape.kind === "hex" ? 6 : faceted ? Math.max(3, shape.sides) : 0;
-      // The apothem, not the circumradius: the shadow's edge follows the FACES, and using the
-      // corner distance inflates a triangle's footprint by a factor of two.
-      const apothem = faceted ? shape.r * Math.cos(Math.PI / sides) : shape.r;
-      slots[count].set(item.mesh.position.x, item.mesh.position.y, apothem, sides);
-      phases[count] = Math.PI / 2 + item.mesh.rotation.z;
-      count++;
-    }
-    u.uGroundCount.value = count;
+    u.uGroundCount.value = fillGroundSlots(
+      this.items,
+      slots.length,
+      (i, x, y, apothem, sides, phase) => {
+        slots[i].set(x, y, apothem, sides);
+        phases[i] = phase;
+      },
+    );
   }
 
   /** Wall dev taps, keyed by the same names the node engine's `wallShade` uses. */
@@ -1213,20 +1113,23 @@ export class MaterialRenderer implements Engine {
     "wallWp",
     "wallOccl",
     "wallFp",
-    // The uniform is `indexOf + 1`, so padding to index 19 puts the first lamp tap at 20 — the
+    // The uniform is `indexOf + 1`, so padding to index 19 puts the first lamp tap at 20, the
     // number the shader tests. Keep the pad count in step if a wall probe is ever added.
     ...Array.from({ length: 7 }, (_, i) => `__wallPad${i}`),
     "bgLampRgb",
     "bgLampA",
   ];
 
+  /**
+   * Push the painted-backdrop config into the backdrop material.
+   *
+   * Colours go in raw, the same way every other Materials3D colour does: `parseHex` straight into
+   * a Vector3, never through THREE.Color, which would linearize them and wash the gradient out.
+   */
   private applyBackground(): void {
     const c = this.config;
     const bg = this.backdropMaterial.uniforms;
-    if (bg.uWallProbe) {
-      const name = (globalThis as Record<string, unknown>)["__glslProbeName"];
-      bg.uWallProbe.value = MaterialRenderer.WALL_PROBES.indexOf(name as string) + 1;
-    }
+    bg.uWallProbe.value = this.probeWall;
     bg.uMode.value = BACKGROUND_MODES.indexOf(c.backgroundMode);
     // The wall spans whatever the camera sees of it, same derivation the beam uses so the two
     // agree about where the light lands. Unconditional, and see `refreshWallExtent`: the
@@ -1272,14 +1175,13 @@ export class MaterialRenderer implements Engine {
    * Load (or drop) the backdrop image / video to match the config.
    *
    * A video takes precedence over a still when both are set. Loading is keyed on the URL so a
-   * slider drag — which calls refresh() on every frame — doesn't re-request the same file.
+   * slider drag, which calls refresh() on every frame, doesn't re-request the same file.
    */
   private syncBackgroundMedia(): void {
-    const c = this.config;
-    const wanted =
-      c.backgroundMode === "image" ? (c.backgroundVideoUrl ?? c.backgroundImageUrl) : undefined;
+    const { url: wanted, video: isVideo } = backgroundMediaUrl(this.config);
     if (wanted === this.mediaUrl) return;
     this.mediaUrl = wanted;
+    const loadId = ++this.mediaLoadId;
     this.disposeMedia();
     const bg = this.backdropMaterial.uniforms;
     if (!wanted) {
@@ -1288,19 +1190,21 @@ export class MaterialRenderer implements Engine {
       return;
     }
 
-    if (c.backgroundVideoUrl && wanted === c.backgroundVideoUrl) {
+    if (isVideo) {
       const video = document.createElement("video");
+      // Before the source: the CORS mode has to be in place when the request starts.
+      video.crossOrigin = "anonymous";
       video.src = wanted;
       video.loop = true;
       video.muted = true;
       video.playsInline = true;
-      video.crossOrigin = "anonymous";
       const texture = new THREE.VideoTexture(video);
       // Display-space throughout, like every other colour source here.
       texture.colorSpace = THREE.NoColorSpace;
       this.mediaVideo = video;
       this.mediaTexture = texture;
       video.addEventListener("loadedmetadata", () => {
+        if (this.disposed || this.mediaVideo !== video) return;
         bg.uImageAspect.value = video.videoWidth / Math.max(1, video.videoHeight);
         this.renderIfIdle();
       });
@@ -1313,14 +1217,16 @@ export class MaterialRenderer implements Engine {
     }
 
     new THREE.TextureLoader().load(wanted, (texture) => {
-      // A late load must not overwrite a newer one.
-      if (this.mediaUrl !== wanted) {
+      // Only the newest request may land: a late load must not overwrite a newer one, and
+      // nothing may land after dispose().
+      if (this.disposed || loadId !== this.mediaLoadId) {
         texture.dispose();
         return;
       }
       texture.colorSpace = THREE.NoColorSpace;
       texture.wrapS = THREE.ClampToEdgeWrapping;
       texture.wrapT = THREE.ClampToEdgeWrapping;
+      this.mediaTexture?.dispose();
       this.mediaTexture = texture;
       bg.tImage.value = texture;
       bg.uHasImage.value = 1;
@@ -1380,23 +1286,18 @@ export class MaterialRenderer implements Engine {
 
   /**
    * Whether any finish-pass effect is actually on. When none is, the post pass draws straight to
-   * the screen exactly as it did before the pass existed — no extra target, no extra draw.
+   * the screen exactly as it did before the pass existed, no extra target, no extra draw.
    */
   private needsFinish(): boolean {
-    const p = this.config.post;
-    return (
-      p.innerLight > 0.001 ||
-      p.dither > 0.001 ||
-      p.halftone > 0.001 ||
-      p.halftoneCmyk > 0.001 ||
-      p.paperTexture > 0.001
-    );
+    return needsFinish(this.config.post);
   }
 
   /** Push every non-structural config value into the live uniforms. Cheap enough to call on each
    *  slider drag; structural changes (item list, quality) go through {@link setConfig}. */
   refresh(): void {
     const c = this.config;
+    this.syncProbes();
+    this.syncColorTargets();
     this.applyLamps(c.lamps);
     this.lampUniforms.uLampGain.value = c.lampGain;
     this.lampUniforms.uStudio.value = STUDIO_KINDS.indexOf(c.studio);
@@ -1414,22 +1315,16 @@ export class MaterialRenderer implements Engine {
     bg.uShow.value = c.backdropLamps;
     (bg.uPlateScale.value as THREE.Vector2).set(c.plate.scale.x, c.plate.scale.y);
     (bg.uPlateOffset.value as THREE.Vector2).set(c.plate.offset.x, c.plate.offset.y);
-    // The backdrop is a gentle vertical gradient around the background colour: a touch darker at
-    // the top, a touch warmer at the bottom. Deriving it keeps `background` a single knob.
-    const [r, g, b] = parseHex(c.background);
-    (bg.uTop.value as THREE.Vector3).set(r * 0.958, g * 0.958, b * 0.96);
-    (bg.uBot.value as THREE.Vector3).set(
-      Math.min(1, r * 1.005),
-      Math.min(1, g * 1.002),
-      Math.min(1, b * 0.995),
-    );
+    const ramp = backdropRamp(c.background);
+    (bg.uTop.value as THREE.Vector3).set(...ramp.top);
+    (bg.uBot.value as THREE.Vector3).set(...ramp.bot);
     this.buildEnvironment();
     this.applyEnvironmentUniforms();
     this.applyBackground();
     this.applyBeam();
     this.applyBloom();
     this.applyDust();
-    this.backdrop.position.z = c.plate.z - 14;
+    this.backdrop.position.z = c.plate.z - BACKDROP_BEHIND_PLATE;
 
     for (const item of this.items) {
       this.applyPlateUniforms(item.material);
@@ -1457,10 +1352,9 @@ export class MaterialRenderer implements Engine {
       const u = item.material.uniforms;
       pushMaterialUniforms(u, m, c.loopSeconds);
       u.uThick.value = c.measuredThickness ? 1 : 0;
-      if (u.uConeTransmission) u.uConeTransmission.value = c.transmission === "cone" ? 1 : 0;
-      // Dev only; see the probe in GLASS_FRAG. Never set outside a harness.
-      if (u.uProbe)
-        u.uProbe.value = Number((globalThis as Record<string, unknown>)["__glslProbe"] ?? 0);
+      u.uConeTransmission.value = c.transmission === "cone" ? 1 : 0;
+      // Dev only; see the probe in GLASS_FRAG. Zero outside a harness.
+      u.uProbe.value = this.probeIndex;
       this.baseMaterials.set(item, m);
     }
     // AFTER the loop: footprints are read off the meshes, which only carry the authored pose once
@@ -1470,6 +1364,71 @@ export class MaterialRenderer implements Engine {
     this.applyPost();
     this.applyFov();
     this.syncInteraction();
+  }
+
+  /**
+   * Read the dev-probe globals a harness may have set, and compile the probe branches into the
+   * glass and backdrop programs only while one is active. Production never sets them, so its
+   * programs carry no probe code; the compare harness sets them and then constructs or refreshes.
+   */
+  private syncProbes(): void {
+    const g = globalThis as Record<string, unknown>;
+    this.probeIndex = Number(g["__glslProbe"] ?? 0);
+    this.probeName = typeof g["__glslProbeName"] === "string" ? g["__glslProbeName"] : undefined;
+    this.probeDump = Boolean(g["__glslDump"]);
+    this.probeWall = MaterialRenderer.WALL_PROBES.indexOf(this.probeName ?? "") + 1;
+    const wanted = this.probeIndex > 0 || this.probeWall > 0;
+    if (wanted === this.probesCompiled) return;
+    this.probesCompiled = wanted;
+    this.setProbeDefine(this.backdropMaterial);
+    for (const item of this.items) this.setProbeDefine(item.material);
+  }
+
+  private setProbeDefine(material: THREE.ShaderMaterial): void {
+    if (this.probesCompiled) material.defines.GLSL_PROBES = "1";
+    else delete material.defines.GLSL_PROBES;
+    material.needsUpdate = true;
+  }
+
+  /**
+   * Allocate the colour targets for the tone map in force, replacing them when it changes.
+   *
+   * They carry HDR when the scene tone maps. Without this the tone map is applied too late to
+   * matter: the main pass writes into an 8-bit target, so a value above 1 is clamped PER CHANNEL
+   * before the post pass ever samples it, and an over-range spectrum arrives already destroyed,
+   * magenta where red and blue both pinned, cyan where green and blue did. Half-float keeps the
+   * beam's real radiance alive until there is a curve to compress it with. Byte targets stay the
+   * default because every preset built before tone mapping existed was calibrated against them.
+   *
+   * The same switch turns on MULTISAMPLING, for a related reason. `antialias: true` on the
+   * renderer applies to the DEFAULT framebuffer only; a render target gets none unless it asks.
+   * That is invisible for glass, whose silhouettes are large and smooth, and ruinous for a beam:
+   * near the exit face adjacent wavelengths are a fraction of a unit apart, so every quad in the
+   * fan is a long sub-pixel wedge, and two dozen staggered slice-fans alias against each other
+   * into a comb of streaks. Four samples resolves them into one continuous sheet.
+   */
+  private syncColorTargets(): void {
+    const hdr = this.config.post.toneMap !== "none";
+    if (hdr === this.hdrTargets) return;
+    const first = this.hdrTargets === undefined;
+    const width = first ? 1 : this.colorRT.width;
+    const height = first ? 1 : this.colorRT.height;
+    if (!first) {
+      this.colorRT.dispose();
+      this.bgRT.dispose();
+      this.plainRT.dispose();
+    }
+    this.hdrTargets = hdr;
+    const options: THREE.RenderTargetOptions = hdr
+      ? { ...this.byteTarget, type: THREE.HalfFloatType, samples: 4 }
+      : this.byteTarget;
+    this.colorRT = new THREE.WebGLRenderTarget(width, height, options);
+    this.bgRT = new THREE.WebGLRenderTarget(width, height, options);
+    // The plate WITHOUT the glass in it; see the plain plate in renderOnce().
+    this.plainRT = new THREE.WebGLRenderTarget(width, height, options);
+    // The post pass holds the colour texture by reference. tBg and tPlain are bound per pass, and
+    // the bloom, dust and probe reads fetch the texture per frame, so this is the one rebind.
+    this.postMaterial.uniforms.tColor.value = this.colorRT.texture;
   }
 
   // ---------------------------------------------------------------- sizing ---
@@ -1485,14 +1444,22 @@ export class MaterialRenderer implements Engine {
 
   private metrics(): { w: number; h: number; dpr: number; quality: number } {
     return {
-      w: this.outputSize?.width ?? Math.max(1, this.container.clientWidth || 1),
-      h: this.outputSize?.height ?? Math.max(1, this.container.clientHeight || 1),
+      w: this.outputSize?.width ?? Math.max(1, this.container.clientWidth),
+      h: this.outputSize?.height ?? Math.max(1, this.container.clientHeight),
       dpr: this.outputSize ? 1 : Math.min(window.devicePixelRatio || 1, this.config.dprMax),
       quality: this.config.quality,
     };
   }
 
+  /** Refit everything to the container and draw. The steps that follow a config change call
+   *  {@link layout} instead and leave the one draw to `updateRunning`. */
   resize(): void {
+    this.layout();
+    this.renderOnce();
+  }
+
+  /** Fit the canvas, the camera and every target to the container, without drawing. */
+  private layout(): void {
     const { w, h, dpr, quality } = this.metrics();
     this.lastMetrics = { w, h, dpr, quality };
 
@@ -1509,18 +1476,10 @@ export class MaterialRenderer implements Engine {
     this.backRT.setSize(rw, rh);
     this.bgRT.setSize(rw, rh);
     this.plainRT.setSize(rw, rh);
-    if (this.bloomLevels) {
-      for (const [i, level] of this.bloomLevels.entries()) {
-        const d = MaterialRenderer.BLOOM_DIVISORS[i];
-        const lw = Math.max(1, Math.round(rw / d));
-        const lh = Math.max(1, Math.round(rh / d));
-        level.a.setSize(lw, lh);
-        level.b.setSize(lw, lh);
-      }
-    }
+    this.sizeBloomLevels(rw, rh);
     this.depthRT.setSize(rw, rh);
     (this.postMaterial.uniforms.uRes.value as THREE.Vector2).set(rw, rh);
-    // The finish pass runs at full drawing-buffer resolution — its dot screens and dither blocks
+    // The finish pass runs at full drawing-buffer resolution, its dot screens and dither blocks
     // are authored in device pixels, so they must not be scaled by `quality`.
     this.postRT.setSize(pw, ph);
     (this.finishMaterial.uniforms.uRes.value as THREE.Vector2).set(pw, ph);
@@ -1528,25 +1487,30 @@ export class MaterialRenderer implements Engine {
     // fraction of the frame when the scene passes render smaller than the canvas.
     this.postMaterial.uniforms.uScale.value = quality;
 
-    // Size the backdrop to cover the frustum at its distance, never shrinking below the authored
-    // 160×110 — the vertical gradient is calibrated against that span, so a smaller plane would
-    // pull the whole ramp into view and read as a much stronger gradient.
-    const backdropZ = this.config.plate.z - 14;
-    const dist = Math.abs(this.distance) + Math.abs(this.config.camera.lookAt.z - backdropZ);
-    const need = 2 * dist * Math.tan(THREE.MathUtils.degToRad(this.camera.fov) / 2) * 1.35;
-    const bh = Math.max(110, need);
-    const bw = Math.max(160, need * this.camera.aspect);
-    this.backdrop.scale.set(bw, bh, 1);
-    (this.backdropMaterial.uniforms.uSize.value as THREE.Vector2).set(bw, bh);
-    // What fraction of that oversized plane the camera actually sees. Gradients and images are
-    // authored against the VISIBLE rectangle, so they need this to know where its edges are.
-    const visibleH = need / 1.35;
-    (this.backdropMaterial.uniforms.uFrame.value as THREE.Vector2).set(
-      Math.min(1, (visibleH * this.camera.aspect) / bw),
-      Math.min(1, visibleH / bh),
+    // The backdrop covers the frustum at its depth; `backdropLayout` is the derivation the two
+    // engines share.
+    const plane = backdropLayout(
+      this.distance,
+      this.config.camera.lookAt.z,
+      this.config.plate.z,
+      this.camera.fov,
+      this.camera.aspect,
     );
+    this.backdrop.scale.set(plane.width, plane.height, 1);
+    (this.backdropMaterial.uniforms.uSize.value as THREE.Vector2).set(plane.width, plane.height);
+    (this.backdropMaterial.uniforms.uFrame.value as THREE.Vector2).set(plane.frameX, plane.frameY);
+  }
 
-    this.renderOnce();
+  /** Size the pyramid's levels against the scene resolution, when there is a pyramid. */
+  private sizeBloomLevels(rw: number, rh: number): void {
+    if (!this.bloomLevels) return;
+    for (const [i, level] of this.bloomLevels.entries()) {
+      const d = BLOOM_DIVISORS[i];
+      const lw = Math.max(1, Math.round(rw / d));
+      const lh = Math.max(1, Math.round(rh / d));
+      level.a.setSize(lw, lh);
+      level.b.setSize(lw, lh);
+    }
   }
 
   private onResize = (): void => {
@@ -1596,7 +1560,7 @@ export class MaterialRenderer implements Engine {
         // belongs to whatever is layered on top: the studio marquee-selects with it, and a
         // left-drag that orbited underneath a rubber band would make selection impossible.
         // A layer above can still claim a right-drag for itself by stopping the event in capture
-        // — the studio does exactly that to rotate a selected shape.
+        //, the studio does exactly that to rotate a selected shape.
         if (!this.config.orbit || (e.button !== 2 && e.button !== 1)) return;
         dragging = true;
         px = e.clientX;
@@ -1638,8 +1602,11 @@ export class MaterialRenderer implements Engine {
         if (!this.config.orbit) return;
         e.preventDefault();
         const base = this.config.camera.distance;
+        // Line and page deltas (Firefox, some trackpads) are normalized to pixels, or one notch
+        // dollies a fraction of what it does elsewhere.
+        const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? canvas.clientHeight : 1;
         this.distance = THREE.MathUtils.clamp(
-          this.distance + e.deltaY * 0.03,
+          this.distance + e.deltaY * unit * 0.03,
           base * 0.6,
           base * 1.6,
         );
@@ -1676,8 +1643,8 @@ export class MaterialRenderer implements Engine {
     // the drag-orbit angles rather than replacing them, so the two compose.
     //
     // `pitch` is a height FACTOR here, not an angle: the position below reads it as
-    // `pitch * d * 0.5`, so a tilt of θ degrees — which puts the camera d·tan(θ) above the subject
-    // — is 2·tan(θ) in these units. Converting keeps the binding in degrees, which is the only
+    // `pitch * d * 0.5`, so a tilt of θ degrees, which puts the camera d·tan(θ) above the subject
+    //, is 2·tan(θ) in these units. Converting keeps the binding in degrees, which is the only
     // unit anyone can reason about when choosing a range.
     const yaw = this.yaw + THREE.MathUtils.degToRad(this.interactionSceneOut.orbitYaw);
     const pitch =
@@ -1691,75 +1658,70 @@ export class MaterialRenderer implements Engine {
   }
 
   /**
-   * Build, update or tear down the traced beam to match `config.beam`.
-   *
-   * The retrace is guarded by a key rather than run every frame: tracing 96 wavelengths through a
-   * polygon and writing ~14k vertices is cheap enough to do on a config change and far too
-   * expensive to do at 60Hz. A beam bound to an interaction input will need this called from the
-   * frame loop, and the key is what keeps that honest — identical config, no work.
-   */
-
-  /**
-   * Half-extents of the wall the beam lands on, at the sheet's depth.
-   *
-   * Walked from the frustum so it always covers the frame, with a little margin: a wall that fell
-   * short would end in a hard edge partway across the picture, and the rays that reach past it
-   * would simply stop in mid-air.
-   */
-  /**
-   * Re-derive the wall's world extent. Must run after anything that changes the camera's aspect.
-   *
-   * It used to run only from `applyBackground`, which happens once on refresh — before the first
-   * `resize`, when `camera.aspect` is still three's default of 1. `beamWallExtent` takes
-   * `max(aspect, 1)` for the horizontal half-width, so the wall came out SQUARE: its horizontal
-   * extent was short by the whole aspect ratio, 40% on a 16:9 frame. Everything the wall shades
-   * from world position — the relief at both scales, the light falloff, the contact shadows — was
-   * therefore computed on a horizontally compressed surface, and stayed that way through every
-   * resize because nothing recomputed it.
+   * Re-derive the wall's world extent. Must run after anything that changes the camera's aspect:
+   * the derivation reads `camera.aspect`, which is three's default of 1 until the first resize,
+   * and a wall derived from that is square, so everything it shades from world position lands on
+   * a horizontally compressed surface.
    */
   private refreshWallExtent(): void {
     if (this.config.backgroundMode !== "wall") return;
-    (this.backdropMaterial.uniforms.uWallExtent.value as THREE.Vector2).copy(
-      this.beamWallExtent(this.config.beam?.z ?? 0),
+    this.beamWallExtent(
+      this.config.beam?.z ?? 0,
+      this.backdropMaterial.uniforms.uWallExtent.value as THREE.Vector2,
     );
   }
 
-  private beamWallExtent(z: number): THREE.Vector2 {
+  /** The wall's world extent at depth `z`, written into `out`; one derivation for both engines,
+   *  see `wallExtent`. */
+  private beamWallExtent(z: number, out: THREE.Vector2): THREE.Vector2 {
     const cam = this.config.camera;
-    const dist = Math.abs(this.distance) + Math.abs(cam.lookAt.z - z);
-    const halfHeight = dist * Math.tan(THREE.MathUtils.degToRad(this.camera.fov) / 2);
-    // The reference's WALL_SAFETY, plus room for the orbit to swing the frustum a few degrees.
-    const safety = 1.08;
-    return new THREE.Vector2(
-      halfHeight * Math.max(this.camera.aspect, 1) * safety,
-      halfHeight * safety,
+    const e = wallExtent(
+      this.distance || cam.distance,
+      cam.lookAt.z,
+      z,
+      this.camera.fov,
+      this.camera.aspect,
     );
+    return out.set(e.x, e.y);
   }
 
   /**
    * How far the beam has opened, on the SCENE clock.
    *
-   * Set per frame rather than with the rest of the beam, because the beam is only re-applied when
-   * something about its geometry changes and this changes on every frame of the reveal. Scene time
-   * rather than wall-clock keeps a still export reproducible — `captureImage` seeks to a fixed time
-   * and gets the same frame every run — at the cost that a scene which opts in renders empty at
-   * t=0, which is what asking for a reveal means.
+   * Set once per frame rather than with the rest of the beam, because the beam is only re-applied
+   * when its config changes and this changes on every frame of the reveal. Scene time rather than
+   * wall-clock keeps a still export reproducible: `captureImage` seeks to a fixed time and gets
+   * the same frame every run, at the cost that a scene which opts in renders empty at t=0, which
+   * is what asking for a reveal means.
    */
   private applyBeamReveal(): void {
     const seconds = this.config.beam?.revealSeconds ?? 0;
-    if (!this.beamMaterial) return;
+    if (!this.beamMaterial || !this.causticMaterial) return;
     const open = seconds > 0 ? Math.min(1, Math.max(0, this.time) / seconds) : 1;
     this.beamMaterial.uniforms.uReveal.value = open;
-    if (this.causticMaterial?.uniforms.uReveal) this.causticMaterial.uniforms.uReveal.value = open;
+    this.causticMaterial.uniforms.uReveal.value = open;
   }
 
-  private applyBeam(incidenceOverride?: number, entryOverride?: number): void {
+  /**
+   * Build, update or tear down the beam's materials and uniforms to match `config.beam`, and note
+   * whether its geometry has to be retraced. The trace itself is {@link traceBeam}, run from the
+   * frame loop, because the incidence and entry a binding may be driving are only known there.
+   * Keyed rather than retraced on every refresh: tracing 96 wavelengths through a polygon and
+   * writing ~14k vertices is cheap on a config change and far too expensive to repeat for one
+   * that has not changed.
+   */
+  private applyBeam(): void {
     const beam = this.config.beam;
     if (!beam) {
       if (this.beamMesh) {
         this.scene.remove(this.beamMesh);
         this.beamMesh.geometry.dispose();
         this.beamMesh = undefined;
+      }
+      // Shares the beam's geometry, disposed above, so only the mesh goes.
+      if (this.causticMesh) {
+        this.scene.remove(this.causticMesh);
+        this.causticMesh = undefined;
       }
       this.beamKey = "";
       return;
@@ -1778,7 +1740,7 @@ export class MaterialRenderer implements Engine {
         },
         transparent: true,
         // Additive in COLOUR only. Plain AdditiveBlending is (SrcAlpha, One) on both channels,
-        // which accumulates alpha as well — and the post pass divides by that alpha, so the layer
+        // which accumulates alpha as well, and the post pass divides by that alpha, so the layer
         // darkens what it should brighten. One/One on colour, Zero/One on alpha, leaves coverage
         // exactly as the scene passes left it.
         blending: THREE.CustomBlending,
@@ -1786,8 +1748,8 @@ export class MaterialRenderer implements Engine {
         blendDst: THREE.OneFactor,
         blendSrcAlpha: THREE.ZeroFactor,
         blendDstAlpha: THREE.OneFactor,
-        // A ribbon has no meaningful front. Its winding flips with the beam direction — the fan
-        // sweeps through segments heading down and left — so half of it culls under FrontSide and
+        // A ribbon has no meaningful front. Its winding flips with the beam direction, the fan
+        // sweeps through segments heading down and left, so half of it culls under FrontSide and
         // the effect renders as nothing at all.
         side: THREE.DoubleSide,
         // Neither tested nor written. The beam is light, not a surface: it has no business
@@ -1821,6 +1783,7 @@ export class MaterialRenderer implements Engine {
         uWallMicroFreq: { value: 7 },
         uWallMicroNormal: { value: 1.05 },
         uBeamDir: { value: new THREE.Vector2(1, 0) },
+        uReveal: { value: 1 },
       },
       transparent: true,
       blending: THREE.CustomBlending,
@@ -1849,27 +1812,59 @@ export class MaterialRenderer implements Engine {
     this.beamMaterial.uniforms.uEdgeFalloff.value = beam.edgeFalloff;
     this.beamMaterial.uniforms.uFalloffRate.value = beam.falloffRate;
     this.beamMaterial.uniforms.uFalloffPower.value = beam.falloffPower;
-    this.applyBeamReveal();
 
-    // The values a binding may be driving. Folded into the key rather than compared separately, so
-    // a pointer resting between frames costs one string compare and no retrace.
-    const incidence = incidenceOverride ?? beam.incidence;
-    const entry = entryOverride ?? beam.entry;
-    // The solid the beam refracts through, which is the ITEM's when one is named. Folded into the
-    // key so a shape edit retraces: the beam is solved on the CPU against this outline, and
-    // nothing else in the frame would notice that it had gone stale.
-    const targets = (beam.targets ?? [])
-      .map((name) => this.items.find((i) => i.config?.name === name)?.config)
-      .filter((c): c is ItemConfig => c !== undefined);
-    const key =
-      `${JSON.stringify(beam)}|${JSON.stringify(targets.map((c) => [c.shape, c.position, c.rotation, c.material.ior]))}` +
-      `|${incidence.toFixed(4)}|${entry.toFixed(4)}`;
-    if (key === this.beamKey && this.beamMesh) return;
+    // The solids the beam refracts through, which are the ITEMS' when named. Folded into the key
+    // so a shape edit retraces: the beam is solved on the CPU against this outline, and nothing
+    // else in the frame would notice that it had gone stale.
+    const targets = this.beamTargets(beam);
+    const key = `${JSON.stringify(beam)}|${JSON.stringify(
+      targets.map((c) => [c.shape, c.position, c.rotation, c.material.ior]),
+    )}`;
+    if (key === this.beamKey) return;
     this.beamKey = key;
+    // Forces the next trace, whatever the pointer is doing.
+    this.beamTraced.incidence = NaN;
+  }
+
+  /** The named items the beam refracts through, in the order named. */
+  private beamTargets(beam: BeamConfig): ItemConfig[] {
+    const out: ItemConfig[] = [];
+    for (const name of beam.targets ?? []) {
+      const config = this.items.find((i) => i.config?.name === name)?.config;
+      if (config) out.push(config);
+    }
+    return out;
+  }
+
+  /**
+   * Trace the sheet for `incidence` and `entry`, which a binding may be driving, unless the
+   * current geometry already answers them. A pointer resting between frames costs the compares
+   * below and no trace; a moving one retraces every frame, which is what a beam binding asks
+   * for. The wall extent is part of the answer: it is derived from the camera, so a resize or a
+   * dolly retraces too, and the sheet always ends on the wall the frame actually shows.
+   */
+  private traceBeam(incidence: number, entry: number): void {
+    const beam = this.config.beam;
+    if (!beam || !this.causticMaterial || !this.beamMaterial) return;
+    const wall = this.beamWallExtent(beam.z, this.beamWallScratch);
+    const traced = this.beamTraced;
+    if (
+      this.beamMesh &&
+      incidence === traced.incidence &&
+      entry === traced.entry &&
+      wall.x === traced.wallX &&
+      wall.y === traced.wallY
+    ) {
+      return;
+    }
+    traced.incidence = incidence;
+    traced.entry = entry;
+    traced.wallX = wall.x;
+    traced.wallY = wall.y;
 
     // A named item whose shape has no convex slice is dropped here rather than approximated, so a
     // `ring` in the list simply is not in the light's way.
-    const sections = targets
+    const sections = this.beamTargets(beam)
       .map((c) => ({
         polygon: crossSectionFor(c.shape, beam.rotation, c.rotation.z, {
           x: c.position.x,
@@ -1880,7 +1875,7 @@ export class MaterialRenderer implements Engine {
       .filter((s): s is { polygon: THREE.Vector2[]; ior: number } => s.polygon !== undefined);
     const polygon =
       sections[0]?.polygon ?? prismCrossSection(beam.radius, beam.sides, beam.rotation);
-    // An angle is the round-safe handle and a face index the faceted one — see BeamConfig. The
+    // An angle is the round-safe handle and a face index the faceted one, see BeamConfig. The
     // pointer drives `entry` on both: as a position along the chosen face, or as a sweep of a
     // quarter turn around the outline either side of the authored angle.
     const aim =
@@ -1911,7 +1906,7 @@ export class MaterialRenderer implements Engine {
       // Derived from the frustum at the sheet's depth rather than authored, exactly as the
       // reference derives it: the wall has to cover whatever the camera can see of it, so a scene
       // that changes fov or distance must not also have to remember to resize the wall.
-      wallHalfExtent: this.beamWallExtent(beam.z),
+      wallHalfExtent: wall,
       exposure: beam.exposure,
       edgeFalloff: beam.edgeFalloff,
     });
@@ -1919,7 +1914,7 @@ export class MaterialRenderer implements Engine {
     if (this.beamMesh) {
       // Copy into the EXISTING buffers when the vertex count is unchanged, which it is on every
       // frame of a pointer sweep. Swapping in a fresh BufferGeometry instead makes three drop the
-      // GPU buffers and allocate new ones every frame — on a retracing beam that costs more than
+      // GPU buffers and allocate new ones every frame, on a retracing beam that costs more than
       // the trace itself.
       const old = this.beamMesh.geometry;
       const oldPos = old.getAttribute("position") as THREE.BufferAttribute;
@@ -1953,13 +1948,8 @@ export class MaterialRenderer implements Engine {
     }
   }
 
-  /** Half-resolution divisors for the pyramid, and the tap count each level's blur uses. Wider
-   *  kernels cost almost nothing once the target is small, which is where the broad wash comes
-   *  from. The fourth level is built but not composited — it exists to light dust. */
-  private static readonly BLOOM_DIVISORS = [2, 4, 8, 16] as const;
-  private static readonly BLOOM_TAPS = [6, 10, 14, 18] as const;
-
-  /** Allocate (or tear down) the bloom pyramid to match the config. */
+  /** Allocate (or tear down) the bloom pyramid to match the config. Allocation only: the frame
+   *  that follows a config change is drawn by whoever called refresh(). */
   private applyBloom(): void {
     // Dust needs the pyramid too, and not for its bloom: each grain samples the BROADEST level as
     // its light field, which is what makes the field light up along a beam and stay invisible in
@@ -1992,10 +1982,13 @@ export class MaterialRenderer implements Engine {
       colorSpace: THREE.NoColorSpace,
       depthBuffer: false,
     };
-    this.bloomLevels = MaterialRenderer.BLOOM_DIVISORS.map(() => ({
+    this.bloomLevels = BLOOM_DIVISORS.map(() => ({
       a: new THREE.WebGLRenderTarget(1, 1, options),
       b: new THREE.WebGLRenderTarget(1, 1, options),
     }));
+    // Sized against the colour target, which already carries the scene resolution. Before the
+    // first layout both are a placeholder pixel, and that layout sizes them together.
+    this.sizeBloomLevels(this.colorRT.width, this.colorRT.height);
 
     this.bloomExtract ??= new THREE.ShaderMaterial({
       vertexShader: POST_VERT,
@@ -2008,19 +2001,22 @@ export class MaterialRenderer implements Engine {
       depthTest: false,
       depthWrite: false,
     });
-    this.bloomBlur ??= new THREE.ShaderMaterial({
-      vertexShader: POST_VERT,
-      fragmentShader: BLOOM_BLUR_FRAG,
-      defines: { BLOOM_TAPS: "18" },
-      uniforms: {
-        tSrc: { value: null },
-        uDir: { value: new THREE.Vector2(1, 0) },
-        uTexel: { value: new THREE.Vector2() },
-        uSigma: { value: 6 },
-      },
-      depthTest: false,
-      depthWrite: false,
-    });
+    this.bloomBlurs ??= BLOOM_TAPS.map(
+      (taps) =>
+        new THREE.ShaderMaterial({
+          vertexShader: POST_VERT,
+          fragmentShader: BLOOM_BLUR_FRAG,
+          defines: { BLOOM_TAPS: String(taps) },
+          uniforms: {
+            tSrc: { value: null },
+            uDir: { value: new THREE.Vector2(1, 0) },
+            uTexel: { value: new THREE.Vector2() },
+            uSigma: { value: taps / 3 },
+          },
+          depthTest: false,
+          depthWrite: false,
+        }),
+    );
     this.bloomDown ??= new THREE.ShaderMaterial({
       vertexShader: POST_VERT,
       fragmentShader: BLOOM_DOWN_FRAG,
@@ -2040,50 +2036,32 @@ export class MaterialRenderer implements Engine {
       depthTest: false,
       depthWrite: false,
     });
-    if (!this.bloomQuad) {
-      this.bloomQuad = new THREE.Mesh(this.screenQuad, this.bloomExtract);
-      this.bloomScene.add(this.bloomQuad);
-    }
-    this.resize();
   }
 
   /** Draw one fullscreen pass of `material` into `target`. */
   private blit(material: THREE.ShaderMaterial, target: THREE.WebGLRenderTarget | null): void {
-    if (!this.bloomQuad) return;
-    this.bloomQuad.material = material;
+    this.blitQuad.material = material;
     this.renderer.setRenderTarget(target);
     this.renderer.clear();
-    this.renderer.render(this.bloomScene, this.postCamera);
+    this.renderer.render(this.blitScene, this.postCamera);
   }
 
-  /**
-   * Extract → downsample → separable blur per level → composite.
-   *
-   * Runs between the main pass and post, so it sees the frame with the beam already in it and
-   * still in HDR. The blur is two passes per level because a separable Gaussian is O(2n) taps
-   * instead of O(n²) — the only reason an 18-tap kernel is affordable at all.
-   */
-  /** Point every material at the baked chain, or at nothing when the room stays analytic. */
+  /** Point every material at the baked chain, or at nothing when the room stays analytic. The
+   *  glass and the backdrop share the lamp uniform objects, so one write reaches them all; the
+   *  inner interface has uniforms of its own. */
   private applyEnvironmentUniforms(): void {
-    const width = MaterialRenderer.ENV_WIDTH;
-    const on = this.config.environment === "baked" && this.envRT !== undefined;
+    const env = this.config.environment === "baked" ? this.envRT : undefined;
     const write = (u: Record<string, THREE.IUniform> | undefined) => {
-      if (!u?.uEnvOn) return;
-      u.uEnvOn.value = on ? 1 : 0;
-      u.tEnv.value = on ? this.envRT!.texture : null;
-      (u.uEnvSize.value as THREE.Vector2).set(width, width / 2);
-      // Radians per texel across the equator, which is what a cone width is compared against.
-      u.uEnvTexel.value = (Math.PI * 2) / width;
-      u.uEnvLevels.value = MaterialRenderer.ENV_LEVELS;
+      if (!u) return;
+      u.uEnvOn.value = env ? 1 : 0;
+      u.tEnv.value = env ? env.texture : null;
+      (u.uEnvSize.value as THREE.Vector2).set(ENV_WIDTH, ENV_WIDTH / 2);
+      u.uEnvTexel.value = ENV_TEXEL;
+      u.uEnvLevels.value = ENV_LEVELS;
     };
-    write(this.lampUniforms as unknown as Record<string, THREE.IUniform>);
-    for (const item of this.items) write(item.material.uniforms);
+    write(this.lampUniforms);
     write(this.backGlass?.uniforms);
   }
-
-  /** Level 0 is 512 wide; eight levels take the widest cone to a whole hemisphere. */
-  private static readonly ENV_WIDTH = 512;
-  private static readonly ENV_LEVELS = 8;
 
   /**
    * Bake the room into an equirectangular mip chain, once per configuration.
@@ -2106,13 +2084,11 @@ export class MaterialRenderer implements Engine {
       this.envKey = "";
       return;
     }
-    // The room is a pure function of these, so a scene that never touches them bakes once.
-    const key = `${c.studio}|${c.studioGain}`;
+    const key = environmentKey(c);
     if (key === this.envKey && this.envRT) return;
-    this.envKey = key;
 
-    const width = MaterialRenderer.ENV_WIDTH;
-    const levels = MaterialRenderer.ENV_LEVELS;
+    const width = ENV_WIDTH;
+    const levels = ENV_LEVELS;
     if (!this.envRT) {
       this.envRT = new THREE.WebGLRenderTarget(width, width / 2, {
         type: THREE.HalfFloatType,
@@ -2203,6 +2179,8 @@ export class MaterialRenderer implements Engine {
     }
     source.dispose();
     renderer.setRenderTarget(previous);
+    // Recorded after the render, so nothing can leave a key on a chain that was never drawn.
+    this.envKey = key;
   }
 
   /** Whether a dev harness has asked for a material intermediate instead of the composed frame.
@@ -2210,10 +2188,7 @@ export class MaterialRenderer implements Engine {
   private probeActive(): boolean {
     // Two ways in: a material probe index, or a dump-only name that asks for a whole target and
     // deliberately leaves the material index at zero so the shapes render normally.
-    return (
-      Number((globalThis as Record<string, unknown>)["__glslProbe"] ?? 0) > 0 ||
-      Boolean((globalThis as Record<string, unknown>)["__glslDump"])
-    );
+    return this.probeIndex > 0 || this.probeDump;
   }
 
   /** Copy a scratch target into one mip of the environment texture. */
@@ -2227,20 +2202,31 @@ export class MaterialRenderer implements Engine {
       depthWrite: false,
     });
     this.envCopy.uniforms.tSrc.value = source.texture;
-    if (!this.bloomQuad) return;
-    this.bloomQuad.material = this.envCopy;
+    this.blitQuad.material = this.envCopy;
     this.renderer.setRenderTarget(this.envRT, 0, level);
     this.renderer.clear();
-    this.renderer.render(this.bloomScene, this.postCamera);
+    this.renderer.render(this.blitScene, this.postCamera);
   }
 
+  /**
+   * Extract, downsample, separable blur per level, composite.
+   *
+   * Runs between the main pass and post, so it sees the frame with the beam already in it and
+   * still in HDR. The blur is two passes per level because a separable Gaussian is O(2n) taps
+   * instead of O(n²), the only reason an 18-tap kernel is affordable at all. Each step runs only
+   * for a consumer: the visible bloom composites levels 0 to 2, the dust takes its hue from level
+   * 1 and its light from the field below, and nothing reads the widest level's own blur.
+   */
   private renderBloomPyramid(): void {
     const levels = this.bloomLevels;
     const extract = this.bloomExtract;
-    const blur = this.bloomBlur;
+    const blurs = this.bloomBlurs;
     const composite = this.bloomComposite;
     const down = this.bloomDown;
-    if (!levels || !extract || !blur || !composite || !down) return;
+    if (!levels || !extract || !blurs || !composite || !down) return;
+    const wantBloom = this.config.post.bloomMode === "pyramid";
+    const wantDust = this.dustMesh !== undefined;
+    if (!wantBloom && !wantDust) return;
 
     extract.uniforms.tSrc.value = this.colorRT.texture;
     extract.uniforms.uThreshold.value = this.config.post.bloomThreshold;
@@ -2250,51 +2236,42 @@ export class MaterialRenderer implements Engine {
     );
     this.blit(extract, levels[0].a);
 
-    for (let i = 0; i < levels.length; i++) {
+    const last = wantBloom ? 2 : 1;
+    for (let i = 0; i <= last; i++) {
       const level = levels[i];
       // Levels below the first downsample from the level above rather than from the source, which
       // is what makes the pyramid cheap: each step works on a quarter of the pixels.
-      if (i > 0 && this.bloomDown) {
+      if (i > 0) {
         const src = levels[i - 1].a;
-        this.bloomDown.uniforms.tSrc.value = src.texture;
-        (this.bloomDown.uniforms.uTexel.value as THREE.Vector2).set(1 / src.width, 1 / src.height);
-        this.blit(this.bloomDown, level.a);
+        down.uniforms.tSrc.value = src.texture;
+        (down.uniforms.uTexel.value as THREE.Vector2).set(1 / src.width, 1 / src.height);
+        this.blit(down, level.a);
       }
-      const taps = MaterialRenderer.BLOOM_TAPS[i];
-      blur.defines.BLOOM_TAPS = String(taps);
-      blur.needsUpdate = true;
-      blur.uniforms.uSigma.value = taps / 3;
-      (blur.uniforms.uTexel.value as THREE.Vector2).set(1 / level.a.width, 1 / level.a.height);
-
-      blur.uniforms.tSrc.value = level.a.texture;
-      (blur.uniforms.uDir.value as THREE.Vector2).set(1, 0);
-      this.blit(blur, level.b);
-
-      blur.uniforms.tSrc.value = level.b.texture;
-      (blur.uniforms.uDir.value as THREE.Vector2).set(0, 1);
-      this.blit(blur, level.a);
+      this.blurLevel(blurs[i], level);
     }
 
-    composite.uniforms.tL0.value = levels[0].a.texture;
-    composite.uniforms.tL1.value = levels[1].a.texture;
-    composite.uniforms.tL2.value = levels[2].a.texture;
-    composite.uniforms.uRadius.value = this.config.post.bloomSpread;
-    // Into the HALF-resolution level, not the sixteenth. Compositing at the bottom of the pyramid
-    // and letting the post pass upscale it sixteen times is what put a staircase along every thin
-    // diagonal highlight — the halo around the beam arrived as 16px blocks smeared back up. Half
-    // resolution is the standard place to resolve a bloom: still cheap, and a 2x upscale of
-    // already-blurred content is invisible.
-    this.blit(composite, levels[0].b);
-    this.postMaterial.uniforms.tBloom.value = levels[0].b.texture;
+    if (wantBloom) {
+      composite.uniforms.tL0.value = levels[0].a.texture;
+      composite.uniforms.tL1.value = levels[1].a.texture;
+      composite.uniforms.tL2.value = levels[2].a.texture;
+      composite.uniforms.uRadius.value = this.config.post.bloomSpread;
+      // Into the HALF-resolution level, not the sixteenth. Compositing at the bottom of the
+      // pyramid and letting the post pass upscale it sixteen times is what put a staircase along
+      // every thin diagonal highlight: the halo around the beam arrived as 16px blocks smeared
+      // back up. Half resolution is the standard place to resolve a bloom: still cheap, and a 2x
+      // upscale of already-blurred content is invisible.
+      this.blit(composite, levels[0].b);
+      this.postMaterial.uniforms.tBloom.value = levels[0].b.texture;
+    }
+    if (!wantDust) return;
 
     // The particle light field, built AFTER the composite and deliberately UNTHRESHOLDED.
     //
     // Dust cannot read the bloom chain: everything there has been through the bright-pass, so the
-    // field is sparse and dim, and a grain's response raises it to the 5.5th power — which takes a
+    // field is sparse and dim, and a grain's response raises it to the 5.5th power, which takes a
     // diluted 0.2 down to 0.00007 and lights nothing. What a particle needs is a broad blur of the
-    // WHOLE frame, so it glows wherever there is light rather than only where there is bloom.
-    // Chained down through the level targets, which are free once the visible bloom is composited
-    // into levels[0].b.
+    // WHOLE frame, so it glows wherever there is light rather than only where there is bloom. It
+    // lives in the widest level, which nothing else reads.
     const light = levels[levels.length - 1];
     this.particleDown ??= new THREE.ShaderMaterial({
       uniforms: {
@@ -2318,16 +2295,21 @@ export class MaterialRenderer implements Engine {
       this.colorRT.height / light.a.height,
     );
     this.blit(pd, light.a);
-    blur.defines.BLOOM_TAPS = String(MaterialRenderer.BLOOM_TAPS.at(-1));
-    blur.needsUpdate = true;
-    blur.uniforms.uSigma.value = MaterialRenderer.BLOOM_TAPS.at(-1)! / 3;
-    (blur.uniforms.uTexel.value as THREE.Vector2).set(1 / light.a.width, 1 / light.a.height);
-    blur.uniforms.tSrc.value = light.a.texture;
+    this.blurLevel(blurs[blurs.length - 1], light);
+  }
+
+  /** Blur one level in place: horizontal into its pair, vertical back. */
+  private blurLevel(
+    blur: THREE.ShaderMaterial,
+    level: { a: THREE.WebGLRenderTarget; b: THREE.WebGLRenderTarget },
+  ): void {
+    (blur.uniforms.uTexel.value as THREE.Vector2).set(1 / level.a.width, 1 / level.a.height);
+    blur.uniforms.tSrc.value = level.a.texture;
     (blur.uniforms.uDir.value as THREE.Vector2).set(1, 0);
-    this.blit(blur, light.b);
-    blur.uniforms.tSrc.value = light.b.texture;
+    this.blit(blur, level.b);
+    blur.uniforms.tSrc.value = level.b.texture;
     (blur.uniforms.uDir.value as THREE.Vector2).set(0, 1);
-    this.blit(blur, light.a);
+    this.blit(blur, level.a);
   }
 
   /**
@@ -2372,7 +2354,7 @@ export class MaterialRenderer implements Engine {
       },
       transparent: true,
       // Additive in COLOUR only. Plain AdditiveBlending is (SrcAlpha, One) on both channels,
-      // which accumulates alpha as well — and the post pass divides by that alpha, so the layer
+      // which accumulates alpha as well, and the post pass divides by that alpha, so the layer
       // darkens what it should brighten. One/One on colour, Zero/One on alpha, leaves coverage
       // exactly as the scene passes left it.
       blending: THREE.CustomBlending,
@@ -2428,7 +2410,7 @@ export class MaterialRenderer implements Engine {
       }
     }
     const geometry = new THREE.BufferGeometry();
-    // Positions are unused — the vertex shader derives world position from `aSeed` — but three
+    // Positions are unused, the vertex shader derives world position from `aSeed`, but three
     // needs the attribute present to know how many vertices to draw.
     const placeholder = Array.from({ length: (corners.length / 2) * 3 }, () => 0);
     geometry.setAttribute("position", new THREE.Float32BufferAttribute(placeholder, 3));
@@ -2451,7 +2433,7 @@ export class MaterialRenderer implements Engine {
    * Only a lathe of a few sides qualifies: the glass shader traces the refracted ray against these
    * to find where it really leaves, which is only meaningful for a solid whose faces ARE planes.
    *
-   * The local frame has to match three's lathe exactly — it places a vertex at
+   * The local frame has to match three's lathe exactly, it places a vertex at
    * `(r·sin(phi), y, r·cos(phi))`, so a face's outward normal is `(sin, 0, cos)` at the midpoint
    * angle between two vertices, at the apothem `r·cos(pi/sides)`. Note this is NOT the convention
    * `prismCrossSection` uses for the beam, which is `(cos, sin)`; they describe the same polygon
@@ -2461,43 +2443,52 @@ export class MaterialRenderer implements Engine {
     const u = item.material.uniforms;
     // An item added through the imperative `add()` carries no config; it cannot be a prism.
     const shape = item.config?.shape;
-    // The EFFECTIVE count, not the field: `hex` is six-sided by definition and its builder ignores
-    // `shape.sides` entirely, so reading the field traces a solid the mesh is not — a hexagon with
-    // a triangle refracting inside it.
-    const sides = shape?.kind === "hex" ? 6 : (shape?.sides ?? 0);
-    const eligible =
-      this.config.tracedRefraction &&
-      shape !== undefined &&
-      (shape.kind === "prism" || shape.kind === "hex") &&
-      sides >= 3 &&
-      sides <= 8;
+    const sides = shape ? MaterialRenderer.prismSides(shape) : 0;
+    const eligible = this.config.tracedRefraction && sides >= 3 && sides <= 8;
     if (!eligible) {
       u.uPrism.value = 0;
       u.uPrismPlaneCount.value = 0;
       return;
     }
-
+    // From the pose refresh() just wrote, which the scene's matrices do not carry yet.
     item.mesh.updateMatrixWorld(true);
+    this.writePrismPlanes(item);
+  }
+
+  /** The face count a traced solid is built with: the EFFECTIVE count, not the field. `hex` is
+   *  six-sided by definition and its builder ignores `shape.sides` entirely, so reading the field
+   *  would trace a solid the mesh is not. Zero for a shape that is not a prism at all. */
+  private static prismSides(shape: ItemConfig["shape"]): number {
+    if (shape.kind === "hex") return 6;
+    return shape.kind === "prism" ? shape.sides : 0;
+  }
+
+  /** Write an eligible item's planes from its CURRENT world matrix. Runs every frame for a traced
+   *  solid, since a motion or a binding moves the mesh, so it allocates nothing. */
+  private writePrismPlanes(item: MaterialItem): void {
+    const shape = item.config?.shape;
+    if (!shape) return;
+    const sides = MaterialRenderer.prismSides(shape);
+    const u = item.material.uniforms;
     const planes = u.uPrismPlanes.value as THREE.Vector4[];
-    const normalMatrix = this.normalScratch.getNormalMatrix(item.mesh.matrixWorld);
-    const r = shape.r;
+    const world = item.mesh.matrixWorld;
+    const normalMatrix = this.normalScratch.getNormalMatrix(world);
     const half = shape.len / 2;
-    const apothem = r * Math.cos(Math.PI / sides);
-    const normal = new THREE.Vector3();
-    const point = new THREE.Vector3();
+    const apothem = shape.r * Math.cos(Math.PI / sides);
+    const normal = this.planeLocalN;
+    const point = this.planeLocalP;
     let count = 0;
 
     for (let i = 0; i < sides && count < 6; i++) {
       const a = (Math.PI * 2 * (i + 0.5)) / sides;
       normal.set(Math.sin(a), 0, Math.cos(a));
       point.copy(normal).multiplyScalar(apothem);
-      this.writePlane(planes[count++], normal, point, normalMatrix, item.mesh.matrixWorld);
+      this.writePlane(planes[count++], normal, point, normalMatrix, world);
     }
-    for (const dir of [1, -1]) {
-      if (count >= 6) break;
+    for (let dir = 1; dir >= -1 && count < 6; dir -= 2) {
       normal.set(0, dir, 0);
       point.set(0, dir * half, 0);
-      this.writePlane(planes[count++], normal, point, normalMatrix, item.mesh.matrixWorld);
+      this.writePlane(planes[count++], normal, point, normalMatrix, world);
     }
     u.uPrism.value = 1;
     u.uPrismPlaneCount.value = count;
@@ -2511,8 +2502,8 @@ export class MaterialRenderer implements Engine {
     normalMatrix: THREE.Matrix3,
     world: THREE.Matrix4,
   ): void {
-    const n = localNormal.clone().applyMatrix3(normalMatrix).normalize();
-    const p = localPoint.clone().applyMatrix4(world);
+    const n = this.planeWorldN.copy(localNormal).applyMatrix3(normalMatrix).normalize();
+    const p = this.planeWorldP.copy(localPoint).applyMatrix4(world);
     out.set(n.x, n.y, n.z, -n.dot(p));
   }
 
@@ -2522,9 +2513,10 @@ export class MaterialRenderer implements Engine {
    * Between the plate and the main pass: the plate is what the main pass's glass refracts, so this
    * is where a back interface has to land for the front face to show it.
    *
-   * The mesh is moved into its own scene for the draw rather than swapping the material in place.
+   * Drawn through a proxy in its own scene rather than by rendering the item in place:
    * `renderer.render(mesh, camera)` on an object that still belongs to another scene picks up that
-   * scene's state — and quietly renders nothing useful.
+   * scene's state and quietly renders nothing useful, and moving the item between scenes every
+   * frame churns both child lists.
    */
   private renderBackGlass(): void {
     if (!this.config.tracedRefraction || this.config.backGlassStrength <= 0) return;
@@ -2546,7 +2538,7 @@ export class MaterialRenderer implements Engine {
         uBackStrength: { value: 1 },
         uPlateDepth: { value: 1 },
       },
-      // Additive on COLOUR, alpha untouched — the plate's alpha is depth, not coverage.
+      // Additive on COLOUR, alpha untouched, the plate's alpha is depth, not coverage.
       transparent: true,
       blending: THREE.CustomBlending,
       blendSrc: THREE.OneFactor,
@@ -2565,6 +2557,11 @@ export class MaterialRenderer implements Engine {
     u.uStudioGain.value = this.lampUniforms.uStudioGain.value;
     u.uBackStrength.value = this.config.backGlassStrength;
 
+    // The proxy draws each solid's geometry at its world matrix. Its matrix is written directly,
+    // so nothing under it is recomputed and the item is never touched.
+    const proxy = (this.backGlassProxy ??= this.makeBackGlassProxy());
+    proxy.material = this.backGlass;
+
     this.renderer.setRenderTarget(this.bgRT);
     for (const item of this.items) {
       const iu = item.material.uniforms;
@@ -2577,22 +2574,25 @@ export class MaterialRenderer implements Engine {
       // Re-emit the depth the plate pass stored, so the main pass's validation still passes.
       u.uPlateDepth.value = Math.abs(item.mesh.position.z - this.camera.position.z) / FAR;
 
-      const home = item.mesh.parent;
-      const previous = item.mesh.material;
-      item.mesh.material = this.backGlass;
-      this.backGlassScene.add(item.mesh);
+      proxy.geometry = item.mesh.geometry;
+      proxy.matrix.copy(item.mesh.matrixWorld);
       this.renderer.render(this.backGlassScene, this.camera);
-      this.backGlassScene.remove(item.mesh);
-      item.mesh.material = previous;
-      home?.add(item.mesh);
     }
+  }
+
+  private makeBackGlassProxy(): THREE.Mesh {
+    const proxy = new THREE.Mesh();
+    proxy.matrixAutoUpdate = false;
+    proxy.frustumCulled = false;
+    this.backGlassScene.add(proxy);
+    return proxy;
   }
 
   /** Whether any material asks for a real path, so the extra draw is skipped by every scene that
    *  does not use one. */
   private wantsPlainPlate(): boolean {
     for (const item of this.items) {
-      if ((item.material.uniforms.uBend?.value ?? 0) > 0) return true;
+      if (item.material.uniforms.uBend.value > 0) return true;
     }
     return false;
   }
@@ -2603,7 +2603,7 @@ export class MaterialRenderer implements Engine {
       // The refraction texture MUST be unbound while pass 2 renders INTO it, or the driver
       // reports a framebuffer feedback loop and the frame is undefined.
       item.material.uniforms.tBg.value = pass === 1 ? this.bgRT.texture : null;
-      // Never written during the main pass, so unlike tBg it can stay bound — no feedback loop.
+      // Never written during the main pass, so unlike tBg it can stay bound, no feedback loop.
       item.material.uniforms.tPlain.value = pass === 1 ? this.plainRT.texture : null;
     }
   }
@@ -2611,8 +2611,27 @@ export class MaterialRenderer implements Engine {
   renderOnce(): void {
     if (this.disposed) return;
     const renderer = this.renderer;
+    this.postMaterial.uniforms.uTime.value = this.time;
+
+    // Interaction bindings write over whatever refresh() pushed, so a bound param modulates and
+    // everything else stays authored. They run BEFORE the matrices below are read: a binding can
+    // move a mesh.
+    this.applyInteraction();
+    if (this.config.beam) {
+      // A beam binding is the one target that cannot be a uniform write, so the retrace happens
+      // here, after the bindings have resolved and before anything is drawn.
+      this.traceBeam(this.interactionSceneOut.beamIncidence, this.interactionSceneOut.beamEntry);
+      this.applyBeamReveal();
+    }
 
     this.scene.updateMatrixWorld(true);
+    this.camera.updateMatrixWorld();
+    // The glass fragment needs it to project a traced exit point, and three does not supply the
+    // projection to fragment shaders. One matrix, shared by every material.
+    (this.viewProjUniform.value as THREE.Matrix4).multiplyMatrices(
+      this.camera.projectionMatrix,
+      this.camera.matrixWorldInverse,
+    );
     for (const item of this.items) {
       const u = item.material.uniforms;
       (u.uCam.value as THREE.Vector3).copy(this.camera.position);
@@ -2621,88 +2640,62 @@ export class MaterialRenderer implements Engine {
       (u.uNormalMat.value as THREE.Matrix3).copy(
         this.normalScratch.getNormalMatrix(item.mesh.matrixWorld),
       );
-    }
-    this.postMaterial.uniforms.uTime.value = this.time;
-    // The glass fragment needs it to project a traced exit point, and three does not supply the
-    // projection to fragment shaders. Refreshed here because the camera moves.
-    this.camera.updateMatrixWorld();
-    for (const item of this.items) {
-      (item.material.uniforms.uViewProj.value as THREE.Matrix4).multiplyMatrices(
-        this.camera.projectionMatrix,
-        this.camera.matrixWorldInverse,
-      );
+      // The traced planes are world-space, so a solid a motion or a binding has moved needs them
+      // re-derived from this frame's matrix; the inner-interface pass reads them too.
+      if (u.uPrism.value > 0.5) this.writePrismPlanes(item);
     }
 
-    // Interaction bindings write LAST, over whatever refresh() and the loops above pushed, so a
-    // bound param modulates and everything else stays authored.
-    this.applyInteraction();
-    // A `beamAngle` binding is the one target that cannot be a uniform write, so the retrace has
-    // to happen here — after the bindings have resolved and before anything is drawn. Guarded by
-    // the beam key, so a still pointer costs a string compare.
-    if (this.config.beam) {
-      this.applyBeam(this.interactionSceneOut.beamIncidence, this.interactionSceneOut.beamEntry);
-    }
-
-    // 1. Depth — with the backdrop HIDDEN and the buffer cleared to the encoded focal depth.
+    // 1. Depth, with the backdrop HIDDEN and the buffer cleared to the encoded focal depth.
     //    A backdrop sitting far outside the focal range has a maximal circle of confusion, so
     //    every background pixel near a shape gathers ~14px of that shape's colour and the whole
     //    frame turns to smeared watercolour. Backgrounds are smooth gradients: they don't need
     //    blurring, and pinning them to the focal plane removes the bleed outright.
     const d = THREE.MathUtils.clamp(this.config.post.focus / FAR, 0, 1);
     const low = (d * 255) % 1;
-    // SET AS sRGB, not by assigning the channels.
-    //
-    // This renderer's `outputColorSpace` is sRGB, and a clear colour is converted out of the
-    // working space on its way into the target — so channels assigned directly, which land in the
-    // working space, were stored ENCODED. The depth pass writes a linear distance and the post
-    // pass decodes one, so the background came back as 67 world units instead of the 44 this
-    // clear is asking for: the focal plane it is supposed to pin the background to, and the whole
-    // reason this clear exists. Backgrounds were being blurred by a lens they were meant to sit
-    // exactly in focus for.
-    //
-    // Declaring the value as sRGB makes three convert it INTO the working space here, so the
-    // conversion on the way out returns exactly these numbers. The node engine needs no such dance
-    // because its output space is already linear.
-    this.depthClearColor.setRGB(d - low / 255, low, 0, THREE.SRGBColorSpace);
+    // Raw channels, set with the target BOUND. three converts a clear colour for whatever target
+    // is bound when setClearColor is called: bound to the canvas it encodes to sRGB, bound to a
+    // render target it stores the channels as given. The depth pass writes a linear distance and
+    // the post pass decodes one, so these numbers have to land untouched. The same rule covers
+    // every clear below; each is set after its target is bound.
+    this.depthClearColor.setRGB(d - low / 255, low, 0);
 
     this.scene.overrideMaterial = this.depthMaterial;
-    this.backdrop.visible = false; // hidden here in every mode — see the note above
+    this.backdrop.visible = false; // hidden here in every mode; see the note above
     // The beam contributes no depth and no thickness. Under `overrideMaterial` it would be drawn
     // with the depth material like any other mesh, and a sheet of quads lying across the frame at
     // the prism's Z would hand every pixel it covers a false near depth.
     if (this.beamMesh) this.beamMesh.visible = false;
     if (this.causticMesh) this.causticMesh.visible = false;
-    renderer.setClearColor(this.depthClearColor, 1);
     renderer.setRenderTarget(this.depthRT);
+    renderer.setClearColor(this.depthClearColor, 1);
     renderer.clear();
     renderer.render(this.scene, this.camera);
 
-    // 1b. Back faces — the exit surface, encoded exactly like the depth pass. Subtracting this
+    // 1b. Back faces, the exit surface, encoded exactly like the depth pass. Subtracting this
     //     from the front depth gives each fragment its real optical path, which is what the glass
     //     shader needs in order to stop assuming every shape is a cylinder.
     //
     //     Cleared to ZERO, not to the focal depth: a pixel with no back face must come out with no
     //     thickness, and zero minus the front depth clamps to exactly that. The backdrop stays
-    //     hidden — its back face is meaningless and would blanket the frame in false thickness.
+    //     hidden, its back face is meaningless and would blanket the frame in false thickness.
     if (this.config.measuredThickness) {
       this.scene.overrideMaterial = this.backMaterial;
-      renderer.setClearColor(BLACK, 1);
       renderer.setRenderTarget(this.backRT);
+      renderer.setClearColor(BLACK, 1);
       renderer.clear();
       renderer.render(this.scene, this.camera);
     }
 
     this.scene.overrideMaterial = null;
     this.backdrop.visible = !this.config.transparentBackground;
-    // Alpha 0 when transparent. The RGB is still the backdrop colour, but note that three
-    // premultiplies the clear against a premultiplied drawing buffer, so at alpha 0 the buffer
-    // really clears to black — the post pass un-premultiplies after its gather to compensate.
-    renderer.setClearColor(
-      setRaw(this.clearColor, this.config.background),
-      this.config.transparentBackground ? 0 : 1,
-    );
+    // The clear for the colour passes, set once the first of their targets is bound. Alpha 0 when
+    // transparent: the RGB is still the backdrop colour, but three premultiplies the clear, so at
+    // alpha 0 the buffer really clears to black, and the post pass un-premultiplies after its
+    // gather to compensate.
+    setRaw(this.clearColor, this.config.background);
+    const clearAlpha = this.config.transparentBackground ? 0 : 1;
 
-    // 2. Plate — the whole frame with glass falling back to the lamp field, linear depth in alpha.
+    // 2. Plate, the whole frame with glass falling back to the lamp field, linear depth in alpha.
     //    The beam stays hidden: the plate is what the glass REFRACTS, and the tracer has already
     //    computed the beam's true path through the glass. Letting the plate carry it too would
     //    refract it a second time and draw a bent ghost of the beam inside the prism.
@@ -2711,7 +2704,7 @@ export class MaterialRenderer implements Engine {
     //     The plate below is the whole frame INCLUDING the glass, which is what lets a tube refract
     //     the tube behind it. It is also why a convex solid cannot see through its own middle: a
     //     refracted ray near the centre lands back inside the shape's own silhouette, and what is
-    //     stored there is that shape's plate-pass pixel — clear glass and lamps, not the backdrop.
+    //     stored there is that shape's plate-pass pixel, clear glass and lamps, not the backdrop.
     //     No amount of bending helps, because the thing being sampled is flat.
     //
     //     So a shape tracing a real path gets a plate with the glass left out of it. The trade is
@@ -2720,6 +2713,7 @@ export class MaterialRenderer implements Engine {
     if (this.wantsPlainPlate()) {
       for (const item of this.items) item.mesh.visible = false;
       renderer.setRenderTarget(this.plainRT);
+      renderer.setClearColor(this.clearColor, clearAlpha);
       renderer.clear();
       renderer.render(this.scene, this.camera);
       for (const item of this.items) item.mesh.visible = true;
@@ -2727,13 +2721,14 @@ export class MaterialRenderer implements Engine {
 
     this.setPass(0);
     renderer.setRenderTarget(this.bgRT);
+    renderer.setClearColor(this.clearColor, clearAlpha);
     renderer.clear();
     renderer.render(this.scene, this.camera);
 
-    // 2b. Inner interface — into the PLATE, so the main pass's glass refracts it.
+    // 2b. Inner interface, into the PLATE, so the main pass's glass refracts it.
     this.renderBackGlass();
 
-    // 3. Main — the same frame with glass refracting pass 2. Tubes refracting tubes.
+    // 3. Main, the same frame with glass refracting pass 2. Tubes refracting tubes.
     //    The beam appears here, additively, over the glass it has already been traced through.
     this.setPass(1);
     if (this.beamMesh) this.beamMesh.visible = true;
@@ -2742,9 +2737,8 @@ export class MaterialRenderer implements Engine {
     renderer.clear();
     renderer.render(this.scene, this.camera);
 
-    // 3b. Bloom pyramid — between main and post, so it sees the beam and still has HDR to work
+    // 3b. Bloom pyramid, between main and post, so it sees the beam and still has HDR to work
     //     with. The post pass adds the result rather than gathering its own.
-    this.applyBeamReveal();
     if (this.bloomLevels) this.renderBloomPyramid();
 
     // A DEV PROBE BYPASSES POST ENTIRELY.
@@ -2752,13 +2746,13 @@ export class MaterialRenderer implements Engine {
     // A probe substitutes one intermediate into the material's output, and the whole point is to
     // read the value the material computed. Post is not a window onto that: tone mapping, bloom,
     // haze, vignette and grain are all non-linear, and a probe pushed through them is a different
-    // number — one that saturates, that shifts by a constant, and that answers identically for two
+    // number, one that saturates, that shifts by a constant, and that answers identically for two
     // different probes wherever the shape covers little of the frame. Reading probes through post
     // is the single most effective way to misread this tool, and it has cost real time.
     //
     // The node engine does the same thing at the same point, so the two stay comparable.
     if (this.probeActive()) {
-      const wantAlpha = (globalThis as Record<string, unknown>)["__glslProbeName"] === "coloralpha";
+      const wantAlpha = this.probeName === "coloralpha";
       this.probeBlit ??= new THREE.ShaderMaterial({
         vertexShader: POST_VERT,
         // Opaque: a target dump must not composite itself away through a depth it stores in alpha.
@@ -2769,12 +2763,11 @@ export class MaterialRenderer implements Engine {
       });
       // `front`/`back` ask for a depth target instead of the composed colour, so the two engines'
       // depth passes can be compared directly rather than through everything that reads them.
-      const probe = Number((globalThis as Record<string, unknown>)["__glslProbe"] ?? 0);
-      const named = (globalThis as Record<string, unknown>)["__glslProbeName"];
+      const named = this.probeName;
       // `bloom0`..`bloom3` are the blurred pyramid levels and `bloomC` the composite, so the two
       // engines' bloom chains can be compared level by level instead of only at the frame.
       const bloomLevel =
-        typeof named === "string" && /^bloom[0-3]$/.test(named) ? Number(named.slice(5)) : -1;
+        named !== undefined && /^bloom[0-3]$/.test(named) ? Number(named.slice(5)) : -1;
       this.probeBlit.uniforms.tSrc.value =
         named === "front"
           ? this.depthRT.texture
@@ -2787,9 +2780,8 @@ export class MaterialRenderer implements Engine {
                 : named === "bloomC" && this.bloomLevels
                   ? this.bloomLevels[0].b.texture
                   : this.colorRT.texture;
-      void probe;
       // Its OWN quad, not the bloom one. The bloom quad is set up for reduced-size mip passes, and
-      // borrowing it put the probe image a pixel off from what post produces — which then reads as
+      // borrowing it put the probe image a pixel off from what post produces, which then reads as
       // a registration difference between the two engines that does not exist in the real frames.
       this.probeScene ??= (() => {
         const scene = new THREE.Scene();
@@ -2802,12 +2794,12 @@ export class MaterialRenderer implements Engine {
       return;
     }
 
-    // 4. Post — to the screen, unless a finish effect needs the composited frame as a texture.
+    // 4. Post, to the screen, unless a finish effect needs the composited frame as a texture.
     if (this.needsFinish()) {
       renderer.setRenderTarget(this.postRT);
       renderer.clear();
       renderer.render(this.postScene, this.postCamera);
-      // 5. Finish — light shafts and stylisation over the finished frame.
+      // 5. Finish, light shafts and stylisation over the finished frame.
       renderer.setRenderTarget(null);
       renderer.render(this.finishScene, this.postCamera);
     } else {
@@ -2815,14 +2807,14 @@ export class MaterialRenderer implements Engine {
       renderer.render(this.postScene, this.postCamera);
     }
 
-    // 6. Dust — additively over the FINISHED frame, in display space.
+    // 6. Dust, additively over the FINISHED frame, in display space.
     //
     // It has to come after the bloom, for the obvious reason that the bloom is what tells each
     // grain whether any light reaches it. It has to come after the TONE MAP for a less obvious
     // one: a mote is a point of light in its own right rather than part of the scene beneath it,
     // and drawing it into the HDR target means the tone map compresses the grain together with
-    // whatever it lands on. That crushes every mote sitting on the beam — precisely where they are
-    // brightest and most worth seeing — and passes them through the depth of field besides, which
+    // whatever it lands on. That crushes every mote sitting on the beam, precisely where they are
+    // brightest and most worth seeing, and passes them through the depth of field besides, which
     // smears specks that should be pixel-sharp. The shader therefore tone maps and encodes each
     // grain on its own; see DUST_FRAG.
     this.renderDust();
@@ -2839,7 +2831,10 @@ export class MaterialRenderer implements Engine {
     u.tColor.value = this.bloomLevels[1].a.texture;
     u.uTime.value = this.time;
     u.uCamDist.value = Math.abs(this.camera.position.z);
-    (u.uRes.value as THREE.Vector2).set(this.colorRT.width, this.colorRT.height);
+    // The drawing buffer, not the scene target: the field draws straight to the canvas, so its
+    // pixel snapping and its gl_FragCoord lookups are in canvas pixels whatever `quality` did to
+    // the passes before it.
+    this.renderer.getDrawingBufferSize(u.uRes.value as THREE.Vector2);
     this.renderer.render(this.dustScene, this.camera);
   }
 
@@ -2848,7 +2843,7 @@ export class MaterialRenderer implements Engine {
    * or under reduced motion still show up.
    *
    * It goes through `seek`, not `renderOnce`: the camera is positioned in `step`/`seek`, so a
-   * bare `renderOnce` would redraw with whatever pose the last frame left behind — which is why
+   * bare `renderOnce` would redraw with whatever pose the last frame left behind, which is why
    * orbiting or resetting the camera on a paused scene appeared to do nothing.
    */
   private renderIfIdle(): void {
@@ -2866,7 +2861,7 @@ export class MaterialRenderer implements Engine {
       this.updateItemHover(this.interaction); // resolve `hoverSelf` before the sources advance
       this.interaction.update(delta); // advance smoothed input by the SAME delta
     }
-    // A timeOffset binding scrubs the clock the motions and the liquid ripple read — as a DELTA,
+    // A timeOffset binding scrubs the clock the motions and the liquid ripple read, as a DELTA,
     // so the authored timeline is untouched and removing the binding restores it.
     const t = this.time + this.interactionTime;
     applyMotions(this.items, t, this.config.loopSeconds);
@@ -2930,11 +2925,11 @@ export class MaterialRenderer implements Engine {
     }
     if (!this.running && !this.capturing && !this.disposed) {
       // An authored halt (never started, `stop()`, `paused`, reduced motion) settles the camera
-      // and shows the frame the scene opens on — the poster contract. An ENVIRONMENTAL pause
+      // and shows the frame the scene opens on, the poster contract. An ENVIRONMENTAL pause
       // (tab hidden, scrolled out of view) freezes at the current time instead, so scrolling a
       // hero away and back resumes the motion rather than restarting it; a hidden tab skips the
-      // paint entirely — nobody can see it, and becoming visible re-enters here.
-      // Collapse pointer/input to rest before the one settled frame — reduced-motion users must
+      // paint entirely, nobody can see it, and becoming visible re-enters here.
+      // Collapse pointer/input to rest before the one settled frame, reduced-motion users must
       // see the final entered state, not a frozen mid-gesture.
       this.interaction?.settle();
       if (!this.started || this.config.paused || this.reducedMotion) {
@@ -2972,10 +2967,11 @@ export class MaterialRenderer implements Engine {
   };
 
   private onContextRestored = (): void => {
-    // Every GPU resource from the old context is invalid; rebuild the items and re-push uniforms.
-    this.buildItems();
+    // three re-uploads geometry, textures and programs from what it still holds on the CPU. The
+    // one thing nothing holds is the baked room, so its key is dropped and refresh() rebakes it.
+    this.envKey = "";
     this.refresh();
-    this.resize();
+    this.layout();
     this.updateRunning();
   };
 
@@ -3002,7 +2998,7 @@ export class MaterialRenderer implements Engine {
    *
    * Raycasts the geometry, not the picture: refraction displaces a shape's apparent silhouette by
    * a few pixels at the rim, so a pixel-accurate pick would disagree with where the shape actually
-   * *is* — which is what a drag then moves.
+   * *is*, which is what a drag then moves.
    */
   pick(clientX: number, clientY: number): MaterialItem | null {
     const ndc = this.toNdc(clientX, clientY);
@@ -3016,7 +3012,7 @@ export class MaterialRenderer implements Engine {
   }
 
   /**
-   * The screen-space bounding box of an item, in CSS pixels relative to the canvas — what a DOM
+   * The screen-space bounding box of an item, in CSS pixels relative to the canvas, what a DOM
    * selection overlay needs. Null when the item is entirely behind the camera.
    *
    * Every one of the box's eight corners is projected and re-bounded, rather than projecting the
@@ -3061,7 +3057,7 @@ export class MaterialRenderer implements Engine {
    * Where a client point lands on the plane that faces the camera and passes through `through`.
    *
    * This is the drag surface. A camera-facing plane is what makes a drag feel like "the shape
-   * follows my cursor" — constraining to a world axis instead would send it sliding off in a
+   * follows my cursor", constraining to a world axis instead would send it sliding off in a
    * direction the pointer never moved.
    */
   pointOnDragPlane(
@@ -3078,7 +3074,7 @@ export class MaterialRenderer implements Engine {
     return this.raycaster.ray.intersectPlane(this.dragPlane, out);
   }
 
-  /** The camera's view direction — the axis a depth-drag moves along. */
+  /** The camera's view direction, the axis a depth-drag moves along. */
   viewDirection(out = new THREE.Vector3()): THREE.Vector3 {
     return this.camera.getWorldDirection(out);
   }
@@ -3095,7 +3091,7 @@ export class MaterialRenderer implements Engine {
   }
 
   /**
-   * The renderer's own config object — the live one it reads every frame.
+   * The renderer's own config object, the live one it reads every frame.
    *
    * This is NOT the object you passed in: the constructor and {@link setConfig} both run it
    * through `ensureSceneConfig`, which returns a normalized copy. An editor that wants to mutate
@@ -3107,7 +3103,7 @@ export class MaterialRenderer implements Engine {
   }
 
   /**
-   * Swap in a whole config. Rebuilds geometry only when something structural changed — the item
+   * Swap in a whole config. Rebuilds geometry only when something structural changed, the item
    * list, the scatter, or the quality (which recompiles the post shader's tap count).
    */
   setConfig(config: Partial<SceneConfig>): void {
@@ -3115,7 +3111,7 @@ export class MaterialRenderer implements Engine {
     const next = ensureSceneConfig(config);
     const structural =
       next.quality !== previous.quality ||
-      // Changes the colour targets' pixel type — see the constructor.
+      // Changes the colour targets' pixel type, see the constructor.
       next.post.toneMap !== previous.post.toneMap ||
       JSON.stringify(next.scatter) !== JSON.stringify(previous.scatter) ||
       JSON.stringify(next.items) !== JSON.stringify(previous.items);
@@ -3126,7 +3122,9 @@ export class MaterialRenderer implements Engine {
     if (structural) this.rebuild();
     else {
       this.refresh();
-      this.resize();
+      this.layout();
+      // The one draw: a running loop picks the change up on its next frame, and an idle scene is
+      // drawn by the seek in here.
       this.updateRunning();
     }
   }
@@ -3136,7 +3134,7 @@ export class MaterialRenderer implements Engine {
    *
    * An editor mutating the config in place has to call this rather than rely on {@link setConfig}:
    * that method decides "structural" by diffing the incoming config against the one it holds, and
-   * when they are the same object — which is exactly what `getConfig()` hands an editor — the diff
+   * when they are the same object, which is exactly what `getConfig()` hands an editor, the diff
    * is empty and the rebuild never happens. The caller knows what it changed; the renderer can't.
    */
   rebuild(): void {
@@ -3144,12 +3142,12 @@ export class MaterialRenderer implements Engine {
     this.postMaterial.needsUpdate = true;
     this.buildItems();
     this.refresh();
-    this.resize();
+    this.layout();
     this.updateRunning();
   }
 
   /**
-   * Capture the current frame as an image Blob — the poster path.
+   * Capture the current frame as an image Blob, the poster path.
    * Pass `time` for a reproducible frame (0 = the frame the scene opens on) so a poster
    * regenerated later is byte-comparable instead of whatever happened to be on screen.
    */
@@ -3157,26 +3155,29 @@ export class MaterialRenderer implements Engine {
     const previousTime = this.time;
     this.capturing = true;
     // Strip the live interaction state BEFORE the camera is posed for the capture frame;
-    // applyInteractionRest handles the uniforms, but the camera is set in seek(), earlier.
+    // applyInteraction writes the uniforms at rest, but the camera is set in seek(), earlier.
     //
     // THE ORBIT PAIR BELONGS HERE TOO, and leaving it out was a real bug: `updateCamera` reads
     // `orbitYaw`/`orbitPitch` straight out of the out-params, so a capture was taken from wherever
     // the last live frame had swung the camera. On a scene that binds `cameraYaw` this is not a
-    // small error and it is not zero at rest — before any pointer arrives the sources read 0, not
+    // small error and it is not zero at rest, before any pointer arrives the sources read 0, not
     // their midpoint, so `prism` captured from a camera swung to the binding's `from` end: -3.5
     // degrees of yaw and -3 of pitch. Every poster and every export of such a scene was framed
     // from a position the config never asked for.
     //
     // It stayed hidden because it moves the camera by about a degree of arc, which is invisible in
-    // anything except a specular highlight — where `pow(dot(...), 40)` turns it into a factor of
+    // anything except a specular highlight, where `pow(dot(...), 40)` turns it into a factor of
     // three, and which is exactly how it was eventually found.
     this.interactionTime = 0;
     this.interactionZoom = 1;
     this.interactionSceneOut.orbitYaw = 0;
     this.interactionSceneOut.orbitPitch = 0;
     try {
-      if (time === undefined) this.renderOnce();
-      else this.seek(time);
+      if (time === undefined) {
+        // The camera is posed in seek(), which this path skips, and the orbit pair was just reset.
+        this.updateCamera(false);
+        this.renderOnce();
+      } else this.seek(time);
       const blob = await new Promise<Blob | null>((resolve) =>
         this.canvas.toBlob(resolve, mime, quality),
       );
@@ -3215,10 +3216,15 @@ export class MaterialRenderer implements Engine {
     this.dustMesh?.geometry.dispose();
     this.dustMaterial?.dispose();
     this.bloomExtract?.dispose();
-    this.bloomBlur?.dispose();
+    for (const blur of this.bloomBlurs ?? []) blur.dispose();
     this.bloomDown?.dispose();
     this.particleDown?.dispose();
     this.bloomComposite?.dispose();
+    this.envRT?.dispose();
+    this.envBake?.dispose();
+    this.envBlur?.dispose();
+    this.envCopy?.dispose();
+    this.probeBlit?.dispose();
     this.backGlass?.dispose();
     this.causticMaterial?.dispose();
     this.beamMesh?.geometry.dispose();
@@ -3235,6 +3241,15 @@ export class MaterialRenderer implements Engine {
     this.plainRT.dispose();
     this.depthRT.dispose();
     this.renderer.dispose();
-    if (this.ownsCanvas) this.renderer.domElement.remove();
+    if (this.ownsCanvas) {
+      // Release the context itself, not only what was allocated in it: browsers cap live WebGL
+      // contexts per page, and a thumbnailer or a hot-reloading host can otherwise run out.
+      try {
+        if (!this.renderer.getContext().isContextLost()) this.renderer.forceContextLoss();
+      } catch {
+        // The extension is optional; a context that cannot be released goes when the canvas does.
+      }
+      this.renderer.domElement.remove();
+    }
   }
 }

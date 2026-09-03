@@ -1,21 +1,17 @@
 /**
- * The microfacet layer, as node graphs — twins of the BRDF helpers in GLASS_FRAG.
+ * The microfacet layer, as node graphs, twins of the BRDF helpers in GLASS_FRAG.
  *
  * These are the parts of the material model that are pure functions of angle and roughness, and
  * therefore the parts most worth checking numerically rather than by eye: a wrong exponent here
  * shifts every highlight in the library by an amount that looks like a deliberate choice.
  */
 import { TSL } from "three/webgpu";
-
-type Vec = any;
+import { cos, max, mix, type Vec } from "./common";
 
 const { Fn, float, vec3 } = TSL;
-const mix = (a: Vec, b: Vec, t: Vec): Vec => TSL.mix(a, b, t);
-const max = (a: Vec, b: Vec): Vec => TSL.max(a, b);
-const cos = (v: Vec): Vec => TSL.cos(v);
 
 // NOT `Math.PI`. This mirrors GLASS_FRAG's `G3_PI` digit for digit, and the parity harness diffs
-// the two shaders at 8-bit precision — a more accurate constant here is a difference, not a fix.
+// the two shaders at 8-bit precision, a more accurate constant here is a difference, not a fix.
 // oxlint-disable-next-line approx-constant
 const PI = 3.14159265359;
 /** Schlick's own value at the F82 sample angle, and the denominator that renormalizes it. */
@@ -25,7 +21,7 @@ const F82_DENOM = 0.05665278;
 /**
  * The GGX normal distribution.
  *
- * `a` is roughness SQUARED — Disney's reparameterization, adopted because it makes the visual
+ * `a` is roughness SQUARED. Disney's reparameterization, adopted because it makes the visual
  * change per unit of the authored slider roughly even. Feeding roughness directly leaves almost
  * everything happening in the bottom fifth of the range.
  */
@@ -36,7 +32,7 @@ export const distributionGGX = Fn(([NoH, a]: [Vec, Vec]) => {
 });
 
 /**
- * Height-correlated Smith visibility — the geometry term with the 1/(4·NoL·NoV) already folded in.
+ * Height-correlated Smith visibility, the geometry term with the 1/(4·NoL·NoV) already folded in.
  *
  * Correlated rather than separable because the two shadowing terms are not independent: a
  * microfacet hidden from the light is likelier to be hidden from the eye as well, and treating them
@@ -72,7 +68,7 @@ export const fresnelF82 = Fn(([f0, edge, u]: [Vec, Vec, Vec]) => {
 /**
  * Thin-film interference over the surface.
  *
- * The phase is the optical path through the film — twice its thickness, refracted — divided by the
+ * The phase is the optical path through the film, twice its thickness, refracted, divided by the
  * wavelength, evaluated at three representative wavelengths for RGB. Sampling three points of a
  * continuous spectrum is a simplification, and the visible consequence is that very thick films
  * band rather than washing out the way a real one does.
@@ -105,14 +101,14 @@ export const jitter = Fn(([n, seed, amount]: [Vec, Vec, Vec]) => {
 });
 
 /**
- * GLITTER — a field of tiny mirrors embedded in the surface.
+ * GLITTER, a field of tiny mirrors embedded in the surface.
  *
  * Each cell gets its own normal, so only the few facets that happen to point at the key light fire,
  * and which ones those are changes as the shape turns. That flicker IS the effect; a smooth
  * highlight is not glitter.
  *
  * Two things follow Zirr & Kaplanyan's multiscale glint work rather than being invented: the facet
- * response is the microfacet NDF — a very tight GGX lobe — rather than an arbitrary exponent, and
+ * response is the microfacet NDF, a very tight GGX lobe, rather than an arbitrary exponent, and
  * the CELL DENSITY is tied to the screen-space footprint. Without that second part the cells shrink
  * below a pixel as a shape recedes and the sparkle degenerates into crawling noise, which is the
  * aliasing their paper exists to solve.

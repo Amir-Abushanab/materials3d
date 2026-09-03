@@ -31,6 +31,27 @@ describe("extractPathData", () => {
     // that silently loses part of the drawing rather than one that visibly does nothing.
     expect(extractPathData(`<svg><circle cx="5" cy="5" r="4"/></svg>`)).toBe("");
   });
+
+  it("skips the paths that shape other content rather than the drawing", () => {
+    // A clip or a mask is never drawn itself, and a definition only where it is used. Harvested
+    // anyway, each one lands as an extra body or a hole in the outline.
+    for (const hidden of ["clipPath", "mask", "defs", "symbol", "marker", "pattern"]) {
+      const svg = `<svg><${hidden} id="x"><path d="M9 9 H1 Z"/></${hidden}><path d="M0 0 H10 V10 Z"/></svg>`;
+      expect(extractPathData(svg), hidden).toBe("M0 0 H10 V10 Z");
+    }
+  });
+
+  it("skips a commented-out path, even one that comments out a hidden element's end", () => {
+    const svg = `<svg><!-- <path d="M9 9 H1 Z"/> -->
+      <defs><!-- </defs> --><path d="M8 8 H2 Z"/></defs>
+      <path d="M0 0 H10 V10 Z"/></svg>`;
+    expect(extractPathData(svg)).toBe("M0 0 H10 V10 Z");
+  });
+
+  it("keeps every path outside the hidden elements, in order", () => {
+    const svg = `<svg><path d="M0 0 H10 V10 Z"/><mask><path d="M9 9 H1 Z"/></mask><path d="M2 2 H8 V8 Z"/></svg>`;
+    expect(extractPathData(svg)).toBe("M0 0 H10 V10 Z M2 2 H8 V8 Z");
+  });
 });
 
 describe("capPathData", () => {
@@ -39,7 +60,7 @@ describe("capPathData", () => {
   });
 
   it("cuts between commands, never inside a number", () => {
-    // A blind slice turns `L45.6` into `L45.` — one truncated coordinate poisons its whole
+    // A blind slice turns `L45.6` into `L45.`, one truncated coordinate poisons its whole
     // contour, so the shape does not come out shortened, it comes out GONE.
     const capped = capPathData("M0 0 L10 10 L45.6 7", 16);
     expect(capped).toBe("M0 0 L10 10");

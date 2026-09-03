@@ -4,7 +4,7 @@
 
 ### Minor Changes
 
-- Initial release: scene-level refractive glass for the web.
+- Initial release: scene-level materials for the web.
 - A four-pass renderer (depth, plate, main, post) in which colour comes from a bounded field of
   lamps behind the glass. Glass refracts other glass through a shared plate pass with
   depth-validated sampling.

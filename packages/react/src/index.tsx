@@ -284,7 +284,7 @@ const Materials3DWithRef = forwardRef(Materials3DInner);
 Materials3DWithRef.displayName = "Materials3D";
 
 /**
- * A drop-in, self-optimizing refractive-glass scene. Renders a `<div>` (SSR-safe; pass an
+ * A drop-in, self-optimizing Materials3D scene. Renders a `<div>` (SSR-safe; pass an
  * `<img data-materials3d-poster>` child for a server-rendered poster) and, on the client, mounts the
  * shell: poster-first, lazy, WebGL/reduced-motion/save-data aware, with the engine code-split out.
  *

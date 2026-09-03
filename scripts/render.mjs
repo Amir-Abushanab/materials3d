@@ -19,13 +19,19 @@
  *   pnpm render gallery/skewer.json -o hero.png
  *   pnpm render --all -d stills/ -w 1200 -h 630
  *   pnpm render slimes -t 2.5                   → the frame 2.5s in
+ *   pnpm render skewer --clip 18.48 --fps 12    → renders/skewer.webp, an animated WebP that loops
  *   pnpm render --help
+ *
+ * `--clip` walks the scene one frame at a time through the same `captureImage` and muxes the
+ * frames with the studio's own animated-WebP muxer (from the core build), so a headless clip and a
+ * studio recording of one config are the same frames.
  */
 
 import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { basename, dirname, extname, join, resolve } from "node:path";
-import { RENDERS, launch, requireBuild, run, serve } from "./lib/harness.mjs";
+import { pathToFileURL } from "node:url";
+import { DIST, RENDERS, launch, requireBuild, run, serve } from "./lib/harness.mjs";
 
 const USAGE = `usage: pnpm render [<preset>|<config.json>]... [options]
 
@@ -36,6 +42,10 @@ const USAGE = `usage: pnpm render [<preset>|<config.json>]... [options]
   -h, --height <px>   default 1080 (-h is height here, not help)
   -t, --time <s>      scene time to capture (default 0)
   -q, --quality <q>   lossy quality 0..1 (default 0.94)
+  --clip <s>          an animated WebP of this many seconds instead of a still; sets loopSeconds
+                      to the clip length when the scene has none, so the motion closes
+  --fps <n>           frames per second for --clip (default 12; durations are whole ms)
+  --set <path>=<v>    write a dotted config path first (repeatable; prefix + to create it)
   --help              this text`;
 
 const FORMATS = {
@@ -53,6 +63,9 @@ function parseArgs(argv) {
     height: 1080,
     time: 0,
     quality: 0.94,
+    clip: 0,
+    fps: 12,
+    sets: [],
     dir: RENDERS,
     all: false,
     help: false,
@@ -68,6 +81,9 @@ function parseArgs(argv) {
     else if (a === "-h" || a === "--height") out.height = Number(next());
     else if (a === "-t" || a === "--time") out.time = Number(next());
     else if (a === "-q" || a === "--quality") out.quality = Number(next());
+    else if (a === "--clip") out.clip = Number(next());
+    else if (a === "--fps") out.fps = Number(next());
+    else if (a === "--set") out.sets.push(parseSet(next()));
     else if (a.startsWith("-")) throw new Error(`unknown option ${a} (--help for usage)`);
     else out.scenes.push(a);
   }
@@ -80,7 +96,23 @@ function parseArgs(argv) {
     throw new Error("width and height must be positive numbers");
   }
   if (!Number.isFinite(out.time)) throw new Error("time must be a number");
+  if (!Number.isFinite(out.clip) || out.clip < 0)
+    throw new Error("clip must be a number of seconds");
+  if (!Number.isFinite(out.fps) || out.fps <= 0) throw new Error("fps must be positive");
   return out;
+}
+
+/** `path=value`, the value as JSON where it parses (numbers, booleans, objects) and text otherwise. */
+function parseSet(spec) {
+  const at = spec?.indexOf("=") ?? -1;
+  if (at < 1) throw new Error(`--set wants path=value, got ${spec}`);
+  const path = spec.slice(0, at);
+  const raw = spec.slice(at + 1);
+  try {
+    return [path, JSON.parse(raw)];
+  } catch {
+    return [path, raw];
+  }
 }
 
 /** A scene argument is either a preset name or a path to a config file. */
@@ -100,6 +132,12 @@ await run(async (defer) => {
     return;
   }
   requireBuild();
+  const muxer = resolve(DIST, "studio/webpMux.js");
+  if (args.clip && !existsSync(muxer)) {
+    throw new Error(
+      `--clip needs the core build for its muxer (${muxer})\nRun: pnpm --filter @materials3d/core build`,
+    );
+  }
 
   const server = await serve();
   defer(server.close);
@@ -130,34 +168,52 @@ await run(async (defer) => {
         (args.scenes.length ? args.scenes : ["skewer"]).map((s) => loadScene(s, presetNames)),
       );
 
+  const frames = args.clip ? Math.max(1, Math.round(args.clip * args.fps)) : 1;
   for (const scene of scenes) {
     const out = resolve(
-      args.out && scenes.length === 1 ? args.out : join(args.dir, `${scene.name}.png`),
+      args.out && scenes.length === 1
+        ? args.out
+        : join(args.dir, `${scene.name}.${args.clip ? "webp" : "png"}`),
     );
     const format = FORMATS[extname(out).toLowerCase()];
     if (!format) throw new Error(`unsupported output extension on ${out}`);
+    if (args.clip && format.mime !== "image/webp") {
+      throw new Error(`--clip writes an animated WebP; use a .webp output, not ${out}`);
+    }
 
-    const base64 = await page.evaluate(
-      async ({ preset, config, width, height, time, mime, quality }) => {
-        const { MaterialRenderer, PRESETS } = globalThis.m3d;
+    const captures = await page.evaluate(
+      async ({ preset, config, sets, width, height, time, mime, quality, count, fps, clip }) => {
+        const { MaterialRenderer, PRESETS, ensureSceneConfig } = globalThis.m3d;
+        const cfg = ensureSceneConfig(preset ? PRESETS[preset]() : config);
+        for (const [path, value] of sets) globalThis.m3dHelpers.put(cfg, path, value);
+        // A clip loops, so every rate is snapped to whole cycles over its length unless the
+        // scene already names a loop of its own.
+        if (count > 1 && !(cfg.loopSeconds > 0)) cfg.loopSeconds = clip;
         const host = document.getElementById("host");
         host.replaceChildren();
-        const renderer = new MaterialRenderer(host, preset ? PRESETS[preset]() : config, {
+        const renderer = new MaterialRenderer(host, cfg, {
           // The scene must not be frozen to one pose by a headless profile's reduced-motion
           // default, or `time` would silently do nothing.
           respectReducedMotion: false,
           preserveDrawingBuffer: true,
         });
-        try {
-          renderer.setOutputSize({ width, height });
-          const blob = await renderer.captureImage(mime, quality, time);
-          return await new Promise((done) => {
+        // Runs in the browser, so it cannot live at module scope.
+        // oxlint-disable-next-line unicorn/consistent-function-scoping
+        const toBase64 = (blob) =>
+          new Promise((done) => {
             const reader = new FileReader();
             reader.addEventListener("load", () => done(String(reader.result).split(",")[1]), {
               once: true,
             });
             reader.readAsDataURL(blob);
           });
+        try {
+          renderer.setOutputSize({ width, height });
+          const list = [];
+          for (let i = 0; i < count; i++) {
+            list.push(await toBase64(await renderer.captureImage(mime, quality, time + i / fps)));
+          }
+          return list;
         } finally {
           renderer.dispose();
         }
@@ -165,17 +221,36 @@ await run(async (defer) => {
       {
         preset: scene.preset ?? null,
         config: scene.config ?? null,
+        sets: args.sets,
         width: args.width,
         height: args.height,
         time: args.time,
         mime: format.mime,
         quality: format.lossy ? args.quality : undefined,
+        count: frames,
+        fps: args.fps,
+        clip: args.clip,
       },
     );
 
     await mkdir(dirname(out), { recursive: true });
-    const bytes = Buffer.from(base64, "base64");
+    let bytes;
+    if (args.clip) {
+      const { encodeAnimatedWebp } = await import(pathToFileURL(muxer).href);
+      const durationMs = 1000 / args.fps;
+      const blob = encodeAnimatedWebp(
+        captures.map((b) => ({ file: new Uint8Array(Buffer.from(b, "base64")), durationMs })),
+        args.width,
+        args.height,
+      );
+      bytes = Buffer.from(await blob.arrayBuffer());
+    } else {
+      bytes = Buffer.from(captures[0], "base64");
+    }
     await writeFile(out, bytes);
-    console.log(`${out}  ${args.width}x${args.height}  ${(bytes.length / 1024).toFixed(0)} kB`);
+    const clipNote = args.clip ? `  ${frames} frames at ${args.fps} fps` : "";
+    console.log(
+      `${out}  ${args.width}x${args.height}${clipNote}  ${(bytes.length / 1024).toFixed(0)} kB`,
+    );
   }
 });

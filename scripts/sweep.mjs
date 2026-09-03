@@ -121,33 +121,7 @@ await run(async (defer) => {
       const cols = axes[0].values.length;
       const rows = axes[1] ? axes[1].values.length : 1;
 
-      /**
-       * Write a dotted path into a config, creating nothing: a typo should surface as an error
-       * rather than as a new field the renderer ignores in silence.
-       *
-       * Declared inside the evaluate callback and not hoisted, despite capturing nothing: this
-       * whole function is serialized and run in the browser, so anything it calls has to be
-       * defined within it.
-       */
-      // oxlint-disable-next-line unicorn/consistent-function-scoping
-      const put = (object, path, value) => {
-        // A leading `+` means CREATE. An item's `material` is a sparse override set, absent
-        // meaning "take the resolved default", so a knob that has never been authored has no path
-        // to write to, and refusing is right for a typo and wrong for adding an override.
-        const create = path.startsWith("+");
-        if (create) path = path.slice(1);
-        const keys = path.split(".");
-        let node = object;
-        for (const key of keys.slice(0, -1)) {
-          if (node?.[key] === undefined) throw new Error(`no such config path: ${path}`);
-          node = node[key];
-        }
-        const last = keys[keys.length - 1];
-        if (!create && node?.[last] === undefined) {
-          throw new Error(`no such config path: ${path} (prefix with + to create it)`);
-        }
-        node[last] = value;
-      };
+      const { put } = globalThis.m3dHelpers;
 
       const sheet = document.createElement("canvas");
       sheet.width = cell.width * cols;

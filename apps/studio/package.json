@@ -2,7 +2,7 @@
   "name": "materials-studio",
   "version": "0.1.0",
   "private": true,
-  "description": "Design refractive-glass scenes in the browser and export them as code, config, or stills",
+  "description": "Design Materials3D scenes in the browser and export them as code, config, stills, or clips",
   "license": "MIT",
   "type": "module",
   "scripts": {

@@ -76,8 +76,19 @@ pnpm render slimes -t 2.5                     # the frame 2.5 s in
 ```
 
 `render` options: `-o/--out`, `-d/--dir`, `-w/--width`, `-h/--height`, `-t/--time`,
-`-q/--quality`, `--all`, `--help`. Output goes to `renders/` unless `-o` or `-d` says otherwise. The format follows the extension (`.png`, `.webp`, `.jpg`). A scene is a
-preset name or a path to a config JSON.
+`-q/--quality`, `--all`, `--help`. Output goes to `renders/` unless `-o` or `-d` says otherwise.
+The format follows the extension (`.png`, `.webp`, `.jpg`). A scene is a preset name or a path to
+a config JSON. `--set path=value` writes a config path first (repeatable; `+path` creates one).
+
+```bash
+pnpm render skewer --clip 18.48 --fps 12 -q 0.72 -w 960 -h 540 -o docs/media/skewer.webp
+```
+
+`--clip <seconds>` records an animated WebP instead of a still, through the studio's own muxer
+(so it needs `pnpm --filter @materials3d/core build`). It sets `loopSeconds` to the clip length
+when the scene has none, so every rate snaps to whole cycles and the clip loops. The command
+above is the README clip: 18.48 s is one turn of the skewer rods at their authored rate. `--fps`
+defaults to 12; frame durations are whole milliseconds.
 
 ```bash
 pnpm sweep orb +items.0.material.magnify=0,0.5,1

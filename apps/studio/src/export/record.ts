@@ -13,7 +13,7 @@ import { GIFEncoder, applyPalette, quantize } from "gifenc";
 import { gifFrameDelayMs, MAX_GIF_EDGE, pickVideoMime, type VideoFormat } from "../output/formats";
 import { parseHex } from "@materials3d/core";
 import { download } from "../util/download";
-import { encodeAnimatedWebp, type WebpAnimFrame } from "./webpMux";
+import { encodeAnimatedWebp, type WebpAnimFrame } from "@materials3d/core/studio";
 
 export interface Recording {
   /** Stop early; the file is written either way. */

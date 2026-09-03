@@ -106,7 +106,7 @@ export async function exportWallpaperFolder(
 ): Promise<void> {
   const html = await buildEmbedHtml(config, name);
   const preview = await renderer.captureImage("image/jpeg", 0.85);
-  const description = "Refractive glass, exported from Materials Studio.";
+  const description = "A Materials3D scene, exported from Materials Studio.";
   const project = {
     title: name,
     type: "web",

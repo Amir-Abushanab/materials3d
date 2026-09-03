@@ -1,5 +1,5 @@
 /**
- * The four-pass refractive-glass renderer.
+ * The four-pass materials renderer.
  *
  *   1. depth   → depthRT   linear depth, 2-channel packed, backdrop pinned to the focal plane
  *   2. plate   → bgRT      the whole frame, glass falling back to the lamp field

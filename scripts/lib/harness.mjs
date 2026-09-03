@@ -74,6 +74,26 @@ export async function serve({ html = HOST_HTML } = {}) {
  * `globalThis.m3dHelpers` from inside any callback. They must stay self-contained.
  */
 const pageHelpers = {
+  /**
+   * Write a dotted path into a config, creating nothing: a typo surfaces as an error rather than
+   * as a field the renderer ignores. A leading `+` means CREATE, for sparse blocks such as an
+   * item's `material`, where an unauthored knob has no path to write to.
+   */
+  put: (object, path, value) => {
+    const create = path.startsWith("+");
+    if (create) path = path.slice(1);
+    const keys = path.split(".");
+    let node = object;
+    for (const key of keys.slice(0, -1)) {
+      if (node?.[key] === undefined) throw new Error(`no such config path: ${path}`);
+      node = node[key];
+    }
+    const last = keys[keys.length - 1];
+    if (!create && node?.[last] === undefined) {
+      throw new Error(`no such config path: ${path} (prefix with + to create it)`);
+    }
+    node[last] = value;
+  },
   /** Mean brightness and the share of lit pixels of an RGBA buffer: did it draw anything at all. */
   litStats: (px) => {
     let sum = 0;

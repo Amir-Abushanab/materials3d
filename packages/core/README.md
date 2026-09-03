@@ -3,8 +3,8 @@
 # @materials3d/core
 
 The renderer behind [Materials3D](https://github.com/Amir-Abushanab/materials3d): scene-level
-refractive glass, where the colour comes from bounded light sources behind the glass rather than
-from tint applied to it.
+materials, glass through plastic, where the colour comes from bounded light sources behind the
+shapes rather than from paint applied to them.
 
 ```bash
 pnpm add @materials3d/core three

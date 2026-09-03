@@ -1,7 +1,7 @@
 # Materials Studio
 
-The browser tool for designing Materials3D scenes. It runs at https://materials-studio.pages.dev;
-locally, `pnpm dev` at the repo root serves it on http://localhost:5173.
+The browser tool for designing Materials3D scenes. `pnpm dev` at the repo root serves it on
+http://localhost:5173; CI deploys it to https://materials-studio.pages.dev from `main`.
 
 One JSON config drives the preview, the panel and every export. The panel is a Tweakpane tree with
 a search box, and its sections open expanded.

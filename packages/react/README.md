@@ -2,7 +2,7 @@
 
 # @materials3d/react
 
-The `<Materials3D>` component: a drop-in refractive-glass scene for React.
+The `<Materials3D>` component: a drop-in Materials3D scene for React.
 
 ```bash
 pnpm add @materials3d/react three

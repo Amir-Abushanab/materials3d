@@ -5,8 +5,9 @@ is in the package READMEs; the studio in [apps/studio/README.md](../apps/studio/
 
 ## 1. Scope
 
-A real-time renderer for scenes of refractive glass shapes. Colour comes from bounded light
-sources behind the glass, not from tint applied to the glass. The reference behaviour: a row of
+A real-time renderer for scenes of shaped materials: glass, frosted, glitter, liquid, metal,
+ceramic and plastic. Colour comes from bounded light sources behind the shapes, not from paint
+applied to them. The reference behaviour: a row of
 flat-ended glass rods on one horizontal axis, rolling in a staggered wave, with a warm-through-
 magenta light field behind them and their bases lost in haze.
 

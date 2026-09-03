@@ -2,8 +2,7 @@
 
 # @materials3d/element
 
-The `<materials-3d>` custom element: a drop-in refractive-glass scene for Vue, Svelte or plain
-HTML.
+The `<materials-3d>` custom element: a drop-in Materials3D scene for Vue, Svelte or plain HTML.
 
 ```bash
 pnpm add @materials3d/element three

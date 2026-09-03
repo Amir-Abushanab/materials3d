@@ -1,6 +1,6 @@
 {
   "name": "@materials3d/react",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Drop-in Materials3D scene for React: the <Materials3D> component",
   "keywords": [
     "background",

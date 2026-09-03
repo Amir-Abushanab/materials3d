@@ -22,11 +22,24 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm check
+      # Build before check. `pnpm build` produces the standalone bundle, and `pnpm check`'s gallery
+      # gate then finds it newer than the sources and reuses it (scripts/ensure-standalone.mjs)
+      # instead of running the Vite build once more.
       - run: pnpm build
+      - run: pnpm check
+      # Hand the studio build to the deploy job as is, so what ships is what was checked, and no
+      # second runner installs and builds it all over again.
+      - if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@v7
+        with:
+          name: studio-dist
+          path: apps/studio/dist
+          if-no-files-found: error
+          retention-days: 1
 
-  # Gate the deploy on the Cloudflare secrets existing, so the very first push — before
-  # they've been added — still shows a green CI instead of a red "missing token" failure.
+  # Gate the deploy on both Cloudflare secrets existing, so the very first push, before they've
+  # been added, still shows a green CI instead of a red "missing token" failure. wrangler needs the
+  # account id as well as the token, and a missing id fails just as red.
   preflight:
     name: Deploy preflight
     needs: check
@@ -38,34 +51,49 @@ jobs:
       - id: gate
         env:
           CF_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CF_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
-          if [ -n "$CF_API_TOKEN" ]; then
+          if [ -n "$CF_API_TOKEN" ] && [ -n "$CF_ACCOUNT_ID" ]; then
             echo "deploy=true" >> "$GITHUB_OUTPUT"
           else
-            echo "::notice::CLOUDFLARE_API_TOKEN not set — skipping the studio deploy."
+            echo "::notice::CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID are not both set; skipping the studio deploy."
           fi
 
   deploy-studio:
-    name: Deploy studio → Cloudflare Pages
+    name: Deploy studio to Cloudflare Pages
     needs: preflight
     if: needs.preflight.outputs.deploy == 'true'
     runs-on: ubuntu-latest
     steps:
+      # A checkout only so pnpm/action-setup can read `packageManager`; nothing is installed.
       - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v7
         with:
           node-version: 24
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm --filter materials-studio build
+      - uses: actions/download-artifact@v8
+        with:
+          name: studio-dist
+          path: apps/studio/dist
       # cloudflare/wrangler-action auto-installs wrangler via `pnpm add`, which pnpm refuses at a
-      # workspace root (ERR_PNPM_ADDING_TO_ROOT). Invoke wrangler directly — `pnpm dlx` runs it
-      # from a temp store without touching the workspace, and it reads the CLOUDFLARE_* env.
+      # workspace root (ERR_PNPM_ADDING_TO_ROOT). Invoke wrangler directly: `pnpm dlx` runs it from
+      # a temp store without touching the workspace, and it reads the CLOUDFLARE_* env. Pinned to
+      # the major so a wrangler release cannot change what a deploy does.
       - name: Deploy to Cloudflare Pages
         run: |
-          pnpm dlx wrangler pages project create materials-studio --production-branch=main || true
-          pnpm dlx wrangler pages deploy apps/studio/dist --project-name=materials-studio --branch=main
+          set -euo pipefail
+          # The project has to exist before the first deploy. On every later run it does, and
+          # "already exists" is the one error to ignore; anything else (a bad token, the wrong
+          # account) must fail here rather than as a confusing failure of the deploy below.
+          if ! out=$(pnpm dlx wrangler@4 pages project create materials-studio --production-branch=main 2>&1); then
+            if printf '%s' "$out" | grep -qi "already exists"; then
+              echo "Pages project materials-studio exists"
+            else
+              printf '%s\n' "$out"
+              exit 1
+            fi
+          fi
+          pnpm dlx wrangler@4 pages deploy apps/studio/dist --project-name=materials-studio --branch=main
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

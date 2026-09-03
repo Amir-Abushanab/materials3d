@@ -1,22 +1,24 @@
 name: Release
 
 # Changesets-driven publishing. On every push to main:
-#   • pending changesets → opens/updates a "Version Packages" PR (bumps versions + changelogs)
-#   • that PR merged      → publishes the bumped @materials3d/* packages to npm, tags, GitHub Release
+#   * pending changesets: opens/updates a "Version Packages" PR (bumps versions + changelogs)
+#   * that PR merged: publishes the bumped @materials3d/* packages to npm, tags, GitHub Release
 #
 # Auth is OIDC / Trusted Publishing (`id-token: write` + NPM_CONFIG_PROVENANCE), so there is no
 # stored token. One-time prerequisites:
-#   1. Publish 0.1.0 once from a laptop (`npm login` → `pnpm release`); npm cannot do a package's
-#      FIRST publish over OIDC.
+#   1. Publish 0.1.0 once from a laptop (`npm login`, then `pnpm release`); npm cannot do a
+#      package's FIRST publish over OIDC.
 #   2. On each package's npm settings add a Trusted Publisher pointing at this repo and this
 #      workflow file. After that, CI publishes tokenlessly.
 # The preflight job skips publishing until the packages exist on npm, so runs before step 1 stay
 # green rather than failing on a package that has never been published.
 #
 # changesets/action@v2, not @v1: v1 grepped the publish output for "New tag:" lines to learn what
-# shipped, and the changesets v3 CLI doesn't always print them — Wave Studio saw a package reach
-# npm on 2026-08-24 from a green run that pushed no tags and created no GitHub releases. v2 reads
-# the CLI's CHANGESETS_OUTPUT file instead and pushes tags + releases via the GitHub API.
+# shipped, and the changesets v3 CLI doesn't always print them; a sibling project saw a package reach
+# npm on 2026-08-24 from a green run that pushed no tags and created no GitHub releases. v2 hands
+# the publish script a file path in CHANGESETS_OUTPUT and reads `{"type":"git-tag",...}` events
+# from it (scripts/publish-if-needed.mjs writes one per tag), then creates the tags and releases
+# through the GitHub API.
 
 on:
   push:
@@ -49,7 +51,7 @@ jobs:
           if npm view @materials3d/core version >/dev/null 2>&1; then
             echo "publish=pnpm release" >> "$GITHUB_OUTPUT"
           else
-            echo "::notice::@materials3d/* not on npm yet — managing Version PRs only. Publish 0.1.0 from a laptop, then enable Trusted Publishing."
+            echo "::notice::@materials3d/* not on npm yet; managing Version PRs only. Publish 0.1.0 from a laptop, then enable Trusted Publishing."
           fi
 
   release:
@@ -57,6 +59,10 @@ jobs:
     needs: preflight
     runs-on: ubuntu-latest
     steps:
+      # Taken before anything else, so that "newer than this" in the guard step means "made by
+      # this run": the previous run's branch push and PR update are minutes older at the least.
+      - id: started
+        run: echo "at=$(date -u +%s)" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
@@ -67,28 +73,30 @@ jobs:
           cache: pnpm
           registry-url: https://registry.npmjs.org
       - run: pnpm install --frozen-lockfile
-      # Gate both the version PR and the publish on the suite. ci.yml runs on these same pushes but
-      # is a SEPARATE workflow with no dependency here, so without this step a red suite could still
-      # publish to npm — the one thing this pipeline does that can't be taken back. Deliberately
-      # `test` and not `check`: it covers the code being shipped without letting a studio-only lint
-      # or typecheck failure block a package release.
-      - run: pnpm test
-      # Trusted publishing needs npm >= 11.5.1; Node 24 may ship an older npm.
-      - run: npm install -g npm@latest
+      # Gate both the version PR and the publish on the packages being sound. ci.yml runs on these
+      # same pushes but is a SEPARATE workflow with no dependency here, so without this a red suite
+      # could still publish to npm, the one thing this pipeline does that can't be taken back.
+      # Scoped to @materials3d/*: a studio-only lint or test failure must not block a package
+      # release, but a package that does not typecheck must.
+      - run: pnpm -r --filter "@materials3d/*" typecheck
+      - run: pnpm -r --filter "@materials3d/*" test
+      # Trusted publishing needs npm >= 11.5.1; Node 24 may ship an older npm. Pinned to the major
+      # so a new npm cannot change what a release run does.
+      - run: npm install -g npm@11
       - name: Version Packages PR / publish
         id: changesets
         # Soft-fail on purpose. This action manages BOTH the version PR and the publish, and it
-        # reports PR-API problems as a bare `HttpError` — an Octokit RequestError whose message is
+        # reports PR-API problems as a bare `HttpError`: an Octokit RequestError whose message is
         # empty, so `Error.toString()` degrades to just the name. That tells you nothing and kills
         # the run. The guard step below decides the real outcome and prints the actual API error.
         continue-on-error: true
         uses: changesets/action@v2
         with:
           # `pnpm run version`, NOT `pnpm version`: the latter is a pnpm BUILTIN that bumps
-          # package.json and tags, which is not what the release flow wants — it has to be the
+          # package.json and tags, which is not what the release flow wants; it has to be the
           # repo's own `version` script (`changeset version`).
           version-script: pnpm run version
-          # Empty until the packages exist on npm (see preflight) → PR-only, no publish attempt.
+          # Empty until the packages exist on npm (see preflight): PR-only, no publish attempt.
           publish-script: ${{ needs.preflight.outputs.publish }}
           commit-message: "chore: version packages"
           pr-title: "chore: version packages"
@@ -99,38 +107,67 @@ jobs:
 
       # Decide the run's real outcome, and self-heal the failure the action cannot report on.
       # Two flakes observed in the sibling repo, both leaving the version branch pushed but no PR:
-      #   • create path — empty-body HttpError, nothing opened
-      #   • update path — "State cannot be changed. The pull request cannot be reopened.", when the
+      #   * create path: empty-body HttpError, nothing opened
+      #   * update path: "State cannot be changed. The pull request cannot be reopened.", when the
       #     PR it listed as open gets merged mid-run (a race with a human merge)
-      # `gh` prints the real status, so a genuine block — e.g. the account-level "Allow GitHub
-      # Actions to create and approve pull requests" toggle — surfaces as a message, not "HttpError".
+      # `gh` prints the real status, so a genuine block (the account-level "Allow GitHub Actions to
+      # create and approve pull requests" toggle, say) surfaces as a message, not "HttpError".
+      #
+      # Two things this must NOT do: pass a run whose `changeset version` crashed just because an
+      # older PR happens to be open (that PR is stale, it lacks this run's changesets), and open a
+      # PR for a branch whose bump main already has (a squash- or rebase-merged version PR leaves
+      # its commit off main, so the branch stays "ahead" for good).
       - name: Ensure Version Packages PR
-        if: always()
+        if: steps.changesets.outcome == 'success' || steps.changesets.outcome == 'failure'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OUTCOME: ${{ steps.changesets.outcome }}
+          STARTED: ${{ steps.started.outputs.at }}
         run: |
           set -euo pipefail
           branch=changeset-release/main
-          failed='${{ steps.changesets.outcome }}'
 
-          # Ask the API rather than git: actions/checkout clones shallow, so a local
-          # `rev-list origin/main..origin/$branch` can miss the merge base and lie.
-          ahead=$(gh api "repos/$GITHUB_REPOSITORY/compare/main...$branch" --jq '.ahead_by' 2>/dev/null || echo "")
+          # The action pushes the branch during the run, after checkout, so fetch it fresh. The
+          # checkout has full history (fetch-depth 0), which is what lets local git compare it
+          # against main. The compare API is no substitute: it diffs three-dot, from the merge
+          # base, so a squash-merged branch keeps reporting its already-merged bump as new.
+          ahead=0
+          bump=""
+          tip=0
+          if git ls-remote --exit-code --heads origin "$branch" >/dev/null; then
+            git fetch --no-tags --quiet origin main "$branch"
+            ahead=$(git rev-list --count "origin/main..origin/$branch")
+            # Two-dot, against main's tree: non-empty only when the branch carries a version that
+            # main does not have.
+            bump=$(git diff --name-only origin/main "origin/$branch" -- 'packages/*/package.json')
+            tip=$(git log -1 --format=%ct "origin/$branch")
+          fi
+          pushed_here=no
+          if [ "$tip" -ge "$STARTED" ]; then pushed_here=yes; fi
 
-          # No version branch, or nothing on it: there was no PR to open, so the action's outcome
-          # is the whole story — a failure here was in the publish path and must stay red.
-          if [ -z "$ahead" ] || [ "$ahead" = "0" ]; then
-            echo "::notice::no version commits on $branch — nothing to open"
-            if [ "$failed" = "failure" ]; then exit 1; fi
+          pr=$(gh pr list --head "$branch" --base main --state open --json number,updatedAt --jq '.[0] // empty')
+          if [ -n "$pr" ]; then
+            number=$(jq -r .number <<<"$pr")
+            updated=$(date -u -d "$(jq -r .updatedAt <<<"$pr")" +%s)
+            if [ "$OUTCOME" = "failure" ] && [ "$updated" -lt "$STARTED" ] && [ "$pushed_here" = no ]; then
+              echo "::error::changesets/action failed before touching the open version PR #$number, so that PR is stale: it predates this run's changesets. See the action's log above."
+              exit 1
+            fi
+            echo "::notice::version PR #$number is open and current"
             exit 0
           fi
 
-          if [ "$(gh pr list --head "$branch" --base main --state open --json number --jq 'length')" != "0" ]; then
-            echo "::notice::version PR already open"
+          if [ "$ahead" = "0" ] || [ -z "$bump" ]; then
+            echo "::notice::$branch carries no version bump that main lacks; nothing to open"
+            if [ "$OUTCOME" = "failure" ]; then exit 1; fi
             exit 0
           fi
+          if [ "$OUTCOME" = "failure" ] && [ "$pushed_here" = no ]; then
+            echo "::error::changesets/action failed before pushing $branch; the branch on origin is from an earlier run, not this run's version bump. See the action's log above."
+            exit 1
+          fi
 
-          echo "No open version PR but $branch is $ahead commit(s) ahead — opening it here."
+          echo "No open version PR but $branch is $ahead commit(s) ahead, bumping $(printf '%s' "$bump" | tr '\n' ' '). Opening it here."
           gh pr create --base main --head "$branch" \
             --title "chore: version packages" \
             --body "Automated version bump from changesets. Merging this publishes the bumped \`@materials3d/*\` packages to npm. Opened by the release workflow's self-heal step because \`changesets/action\` could not create it."

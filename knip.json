@@ -5,6 +5,7 @@
       "ignoreDependencies": ["@tweakpane/core"]
     },
     "packages/core": {
+      "entry": ["src/core-loader.ts", "src/core-loader-webgpu.ts"],
       "project": ["src/**/*.ts"]
     },
     "packages/react": {
@@ -24,7 +25,14 @@
     "optionalPeerDependencies",
     "unlisted",
     "binaries",
-    "unresolved"
+    "unresolved",
+    "exports",
+    "types",
+    "nsExports",
+    "duplicates"
   ],
-  "ignore": ["packages/core/src/shell/__typetest/**"]
+  "ignore": ["packages/core/src/shell/__typetest/**"],
+  "rules": {
+    "duplicates": "warn"
+  }
 }

@@ -4,7 +4,9 @@ dist-embed/
 *.local
 .DS_Store
 .vite/
+.wrangler/
 *.log
-scratchpad/
+*.tgz
 *.tsbuildinfo
-__pycache__/
+scratchpad/
+renders/

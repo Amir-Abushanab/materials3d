@@ -3,12 +3,16 @@ packages:
   - "packages/*"
 
 # pnpm reads package settings from here (not the package.json "pnpm" field).
-# Allow esbuild (a Vite dependency) to run its install script so its native binary is
-# set up; pnpm blocks dependency build scripts by default.
-# Playwright's install script places the browser it needs; without it `pnpm render` has nothing
-# to drive. It is a no-op when a matching revision is already in ~/Library/Caches/ms-playwright.
+#
+# pnpm 11 refuses to install (ERR_PNPM_IGNORED_BUILDS, from its default strict-dep-builds) until
+# every dependency it records as having a build step is listed here as true or false, and it
+# records playwright as one. playwright 1.62 ships no install script, so allowing it runs nothing;
+# in particular no browser is fetched at install time. The browser comes from a one-time
+# `pnpm exec playwright install chromium`, which `pnpm render`, `pnpm sweep` and the headless tsl
+# scripts need; `tsl:perf`, `tsl:live` and `tsl:chrome` drive an installed Google Chrome instead.
+# No esbuild entry: Vite 8 bundles with rolldown, and esbuild is only an optional peer of it that
+# is never installed here.
 allowBuilds:
-  esbuild: true
   playwright: true
 
 # tweakpane 4 ships types that re-export @tweakpane/core but doesn't declare it as a

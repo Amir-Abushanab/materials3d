@@ -52,11 +52,21 @@ module.exports = {
         dependencyTypesNot: ["type-only"],
       },
     },
+    {
+      name: "scripts-read-built-output",
+      severity: "error",
+      comment:
+        "Tooling under scripts/ runs on plain node against the BUILT packages (dist and the " +
+        "standalone bundle). Importing package sources would need a TypeScript loader and would " +
+        "exercise code that is not what ships.",
+      from: { path: "^scripts/" },
+      to: { path: "^packages/[^/]+/src/" },
+    },
   ],
   options: {
     doNotFollow: { path: "node_modules" },
     // Cruise the sources only: not the build output (which duplicates every module), not tests,
-    // and not build configs — those import root devDependencies (tsdown, vite) by design, which
+    // and not build configs. Those import root devDependencies (tsdown, vite) by design, which
     // no-undeclared-dependencies would otherwise flag.
     exclude: { path: "(?:/dist/|(?:\\.(?:test|spec)\\.[cm]?[jt]sx?|\\.config\\.[cm]?[jt]s)$)" },
     tsPreCompilationDeps: true,

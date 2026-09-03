@@ -8,8 +8,8 @@
   "scripts": {
     "build": "tsc --noEmit && vite build",
     "dev": "vite",
-    "prebuild": "pnpm --filter @materials3d/core build:standalone",
-    "predev": "pnpm --filter @materials3d/core build:standalone",
+    "prebuild": "node ../../scripts/ensure-standalone.mjs",
+    "predev": "node ../../scripts/ensure-standalone.mjs",
     "preview": "vite preview",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"

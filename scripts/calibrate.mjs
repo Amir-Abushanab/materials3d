@@ -1,29 +1,30 @@
 /**
- * `pnpm calibrate <reference.png> [render.png]`
+ * `pnpm calibrate <reference.png> [render.png] [--box x0,y0,x1,y1] [--step n]`
  *
  * Art-directing this renderer by eye repeatedly overshot. Measuring against a reference frame was
  * faster and more reliable, so the measurement ships as a tool rather than living in a notebook.
  *
  * Two numbers matter:
  *
- *   CLEAR-GLASS RATIO — the fraction of pixels that are near-neutral but bright (saturation < 0.18,
+ *   CLEAR-GLASS RATIO, the fraction of pixels that are near-neutral but bright (saturation < 0.18,
  *   lightness > 0.72), i.e. reading as *clear glass* rather than tinted. This is the metric that
  *   catches the failure the eye forgives: successive builds measured 27% → 34% → 37% → 44% against
  *   a 43% reference, and every one of them had looked "about right".
  *
- *   HUE HISTOGRAM — where the saturated pixels actually sit. This is how the palette was derived
+ *   HUE HISTOGRAM, where the saturated pixels actually sit. This is how the palette was derived
  *   instead of guessed. The reference is warm (~39%), pink/magenta (~36%) and blue-violet (~21%),
- *   with green near zero and NO CYAN AT ALL — which is why a cosine palette sweeping full hue was
+ *   with green near zero and NO CYAN AT ALL, which is why a cosine palette sweeping full hue was
  *   wrong on the evidence.
  *
  * PNG only, and only the 8-bit non-interlaced flavour a browser's `canvas.toBlob("image/png")`
- * produces — decoded here with node:zlib so the tool has no dependencies. In Materials Studio,
+ * produces, decoded here with node:zlib so the tool has no dependencies. In Materials Studio,
  * shift-click "Save still" to get a PNG.
  */
 
 import { readFileSync } from "node:fs";
 import { inflateSync } from "node:zlib";
 import { basename } from "node:path";
+import { parseArgs, run } from "./lib/cli.mjs";
 
 // --------------------------------------------------------------- PNG decode --
 
@@ -204,24 +205,19 @@ function compare(reference, render) {
     console.log(`  ${name.padEnd(24)} ${(d >= 0 ? "+" : "") + d.toFixed(1)} pts`);
   }
   console.log(
-    `\n${Math.abs(delta) <= 3 ? "within 3 pts of the reference" : "off the reference — the clear-glass ratio is the knob to chase (lamp gate, then density)"}`,
+    `\n${Math.abs(delta) <= 3 ? "within 3 pts of the reference" : "off the reference, the clear-glass ratio is the knob to chase (lamp gate, then density)"}`,
   );
 }
 
 // ---------------------------------------------------------------------- CLI --
 
-function parseArgs(argv) {
-  const files = [];
-  const options = { step: 5, box: undefined };
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i];
-    if (arg === "--step") options.step = Number(argv[++i]);
-    else if (arg === "--box") options.box = argv[++i].split(",").map(Number);
-    else if (arg.startsWith("-")) throw new Error(`unknown option ${arg}`);
-    else files.push(arg);
-  }
-  return { files, options };
-}
+const USAGE = `usage: pnpm calibrate <reference.png> [render.png] [--box x0,y0,x1,y1] [--step n]
+
+Measures the clear-glass ratio and hue histogram of a PNG (8-bit, non-interlaced, as a browser's
+canvas.toBlob produces), and with a second file the delta between them.
+
+  --box x0,y0,x1,y1   the region to sample (default: the middle 70% band)
+  --step n            sample every n-th pixel (default 5)`;
 
 function boxFor(image, box) {
   if (!box) {
@@ -233,39 +229,33 @@ function boxFor(image, box) {
   return [Math.max(0, x0), Math.max(0, y0), Math.min(image.width, x1), Math.min(image.height, y1)];
 }
 
-function main() {
-  let parsed;
-  try {
-    parsed = parseArgs(process.argv.slice(2));
-  } catch (error) {
-    console.error(error.message);
-    process.exit(2);
+await run(() => {
+  const args = parseArgs(process.argv.slice(2), { step: 5, box: "" });
+  if (args.help) {
+    console.log(USAGE);
+    return;
   }
-  const { files, options } = parsed;
-  if (files.length === 0) {
-    console.error(
-      "usage: pnpm calibrate <reference.png> [render.png] [--box x0,y0,x1,y1] [--step n]",
-    );
-    process.exit(2);
+  const files = args.positionals;
+  if (files.length === 0) throw new Error(USAGE);
+  const box = args.box ? args.box.split(",").map(Number) : undefined;
+  if (box && (box.length !== 4 || box.some((n) => !Number.isFinite(n)))) {
+    throw new Error("--box needs four numbers: x0,y0,x1,y1");
   }
 
   const images = files.map((file) => {
     try {
       return { file, image: decodePng(readFileSync(file)) };
     } catch (error) {
-      console.error(`${file}: ${error.message}`);
-      process.exit(1);
+      throw new Error(`${file}: ${error.message}`, { cause: error });
     }
   });
 
   const measured = images.map(({ file, image }) => ({
     file,
-    m: measure(image, boxFor(image, options.box), Math.max(1, options.step)),
+    m: measure(image, boxFor(image, box), Math.max(1, args.step)),
   }));
 
   for (const { file, m } of measured) report(basename(file), m);
   if (measured.length >= 2) compare(measured[0].m, measured[1].m);
   console.log();
-}
-
-main();
+});

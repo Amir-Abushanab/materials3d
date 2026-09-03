@@ -1,3 +1,26 @@
 #!/bin/sh
+# Format and lint what is being committed, and nothing else.
+#
+# `pnpm check` stays the gate in CI. Here it made every commit wait on a typecheck, the test
+# suites, two dependency audits and a Vite build of the standalone bundle, which is the kind of
+# hook people skip with --no-verify. Checking only the staged files takes about a second.
+set -eu
 
-exec pnpm check
+files=$(git diff --cached --name-only --diff-filter=ACMR -- . ':!gallery/' ':!pnpm-lock.yaml')
+[ -n "$files" ] || exit 0
+
+# Only the file types oxfmt formats; anything else (LICENSE, images, this hook) is left alone.
+formatted=$(printf '%s\n' "$files" | grep -E '\.(m?[jt]sx?|c[jt]s|jsonc?|md|ya?ml|css|html)$' || true)
+if [ -n "$formatted" ]; then
+  # shellcheck disable=SC2086
+  pnpm exec oxfmt --check $formatted || {
+    echo "pre-commit: run \`pnpm format\` (or \`pnpm exec oxfmt <file>\`) and stage the result." >&2
+    exit 1
+  }
+fi
+
+code=$(printf '%s\n' "$files" | grep -E '\.(m?[jt]sx?|c[jt]s)$' || true)
+if [ -n "$code" ]; then
+  # shellcheck disable=SC2086
+  pnpm exec oxlint $code
+fi

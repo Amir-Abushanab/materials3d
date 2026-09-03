@@ -3,7 +3,7 @@
 CI lives in [`.github/workflows`](.github/workflows):
 
 - **`ci.yml`**: on every push and pull request to `main`, `pnpm build` then `pnpm check` (format,
-  lint, typecheck, tests, depcruise, knip, license notices, gallery validate). On a push to `main` it deploys the
+  lint, typecheck, tests, depcruise, knip, license notices, agent skill, gallery validate). On a push to `main` it deploys the
   studio to Cloudflare Pages if the Cloudflare secrets are set.
 - **`release.yml`**: on a push to `main` that touches `packages/**` or `.changeset/**`,
   [Changesets](https://github.com/changesets/changesets) opens a "Version Packages" PR from any
@@ -105,7 +105,7 @@ that exists CI will try to publish the newcomer, and fails on it until you boots
 
 1. Merge PRs that include changesets into `main`.
 2. Changesets opens or updates a **"Version Packages"** PR (bumps the shared version, writes
-   `CHANGELOG.md`).
+   `CHANGELOG.md`, and syncs the agent skill's `library_version`).
 3. Merge that PR. CI publishes the new version, tags it and cuts a GitHub Release.
 
 `pnpm release` runs [`scripts/publish-if-needed.mjs`](scripts/publish-if-needed.mjs) rather than

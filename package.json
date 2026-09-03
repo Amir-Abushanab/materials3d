@@ -9,7 +9,7 @@
     "build": "pnpm -r build",
     "build:packages": "pnpm -r --filter \"@materials3d/*\" build",
     "calibrate": "node scripts/calibrate.mjs",
-    "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm depcruise && pnpm knip && pnpm licenses:check && pnpm gallery:validate",
+    "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm depcruise && pnpm knip && pnpm licenses:check && pnpm skill:validate && pnpm gallery:validate",
     "depcruise": "dependency-cruiser apps packages scripts",
     "dev": "pnpm --filter materials-studio dev",
     "format": "oxfmt . '!gallery/**'",
@@ -27,6 +27,8 @@
     "release": "pnpm build:packages && node scripts/publish-if-needed.mjs",
     "prerender": "node scripts/ensure-standalone.mjs",
     "render": "node scripts/render.mjs",
+    "skill:stale": "pnpm --filter @materials3d/core skill:stale",
+    "skill:validate": "pnpm --filter @materials3d/core skill:validate",
     "presweep": "node scripts/ensure-standalone.mjs",
     "sweep": "node scripts/sweep.mjs",
     "test": "pnpm -r test",
@@ -37,7 +39,7 @@
     "tsl:parity": "pnpm --filter @materials3d/core build && node scripts/tsl-parity.mjs",
     "tsl:perf": "pnpm --filter @materials3d/core build && node scripts/tsl-perf.mjs",
     "typecheck": "pnpm -r typecheck",
-    "version": "changeset version"
+    "version": "changeset version && node scripts/sync-skill-version.mjs"
   },
   "devDependencies": {
     "@changesets/changelog-github": "^0.7.0",

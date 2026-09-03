@@ -30,8 +30,8 @@
 pnpm check
 ```
 
-Runs `format:check`, `lint`, `typecheck`, `test`, `depcruise`, `knip`, `licenses:check` and
-`gallery:validate`. CI runs `pnpm build` and then the gate on every push and pull request. Each step is its own script
+Runs `format:check`, `lint`, `typecheck`, `test`, `depcruise`, `knip`, `licenses:check`,
+`skill:validate` and `gallery:validate`. CI runs `pnpm build` and then the gate on every push and pull request. Each step is its own script
 (`pnpm lint`, `pnpm typecheck`, `pnpm test`, ...). `pnpm format` and `pnpm lint:fix` write fixes.
 
 The pre-commit hook in `.githooks/pre-commit` formats and lints the staged files. CI runs the full
@@ -123,6 +123,16 @@ Community scenes live in `gallery/community/` as `{ title, author, config }`. Th
 Publish to gallery button opens GitHub's new-file page for that directory with the scene
 prefilled, so a submission arrives as a pull request. `gallery:validate` checks that each one is a
 runnable config and carries no embedded image or video data.
+
+## The agent skill
+
+`packages/core/skills/materials3d/SKILL.md` is a [TanStack Intent](https://github.com/TanStack/intent)
+skill that ships inside `@materials3d/core` (it is in the package's `files`). It tells a coding
+agent which entry to use, the config model, the poster recipe and the pitfalls. Keep it in step
+with the READMEs it lists as `sources`: `pnpm skill:validate` checks its shape (part of
+`pnpm check`), `pnpm skill:stale` reports when a source has changed on GitHub since the skill was
+written, and `pnpm run version` syncs its `library_version` with the package version. Consumers
+run `npx @tanstack/intent@latest install` once in their project and their agent loads the skill.
 
 ## Changesets
 

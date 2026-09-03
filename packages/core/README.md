@@ -100,6 +100,12 @@ for it. The look was calibrated in display space; moving Beer-Lambert and the de
 bloom gathers into linear changes their character. Pass colours as hex strings. A
 `new THREE.Color(hex)` handed to a Materials3D uniform is linear and reads washed out.
 
+## Agent skill
+
+The package ships a [TanStack Intent](https://github.com/TanStack/intent) skill in
+`skills/materials3d/SKILL.md`. Run `npx @tanstack/intent@latest install` once in your project and
+your coding agent loads it when it works with `@materials3d/*`.
+
 ## Peer dependencies
 
 `three >= 0.180 < 1`. `@types/three >= 0.180` is an optional peer.

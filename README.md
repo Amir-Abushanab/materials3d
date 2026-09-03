@@ -3,14 +3,18 @@
   <img src="brand/logo.svg" alt="Materials3D" width="330">
 </picture>
 
+<img src="docs/media/skewer.webp" alt="The skewer preset: glass rods rolling in a wave over a warm lamp field" width="960">
+
+---
+
+[Live Studio](materials-studio.pages.dev)
+
 Scene-level materials for the web, on three.js. A small four-pass renderer draws glass, frosted,
 glitter, liquid, metal, ceramic and plastic shapes lit by soft lamps behind them: glass refracts
 the scene behind it, a prism splits a traced beam, and the whole frame runs through one calibrated
 post stack. Built for hero sections and product visuals. Ships as a React component, a custom
 element and a plain TypeScript core, plus Materials Studio, a browser tool for designing scenes
 and exporting them.
-
-<img src="docs/media/skewer.webp" alt="The skewer preset: glass rods rolling in a wave over a warm lamp field" width="960">
 
 ## Install
 

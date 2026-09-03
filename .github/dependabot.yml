@@ -1,0 +1,19 @@
+# Keeps the SHA-pinned actions in .github/workflows current.
+#
+# Pinning by commit is what stops a compromised or force-pushed major tag from running in a job
+# that can publish to npm, but a pin that nobody moves is just an old action. Dependabot reads the
+# `# v7.0.1` comment beside each SHA, so its PRs bump both together and stay reviewable as
+# versions rather than as forty hex characters.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: "chore"
+    groups:
+      # One PR a month for the lot. These move together and are reviewed the same way; separate
+      # PRs per action would be noise on a repo with two workflows.
+      actions:
+        patterns: ["*"]

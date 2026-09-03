@@ -3,13 +3,15 @@
  * Guarded publish: publishes only the package versions npm does not already have, driving
  * `pnpm publish` directly rather than `changeset publish`.
  *
- * WHY NOT `changeset publish`. @changesets/cli 2.31 is broken against the npm 11 the release
- * workflow installs for OIDC trusted publishing: its pre-publish check misreads npm 11, thinks an
- * already-published package is unpublished, tries to publish over it and crashes on npm 11's E403
- * JSON (`Cannot read properties of undefined (reading 'includes')`), after the packages reach npm
- * and before it reports what shipped. The job goes red with no git tags and no GitHub Releases.
- * (Observed repeatedly in a sibling project; the failure is in changesets + npm, not in anything
- * repo-specific.)
+ * WHY NOT `changeset publish`. @changesets/cli 2.31 was broken against the npm 11 the release
+ * workflow installs for OIDC trusted publishing: its pre-publish check misread npm 11, thought an
+ * already-published package was unpublished, tried to publish over it and crashed on npm 11's E403
+ * JSON (`Cannot read properties of undefined (reading 'includes')`), after the packages reached npm
+ * and before it reported what shipped. The job went red with no git tags and no GitHub Releases.
+ * (Observed repeatedly in a sibling project; the failure was in changesets + npm, not in anything
+ * repo-specific.) The workspace has since moved to CLI v3, which changesets/action@v2 requires;
+ * whether v3 fixed that crash is untested here, and it does not matter, because the reason below
+ * is on its own sufficient and does not expire.
  *
  * WHAT changesets/action READS. v2 does not scan stdout. It hands the publish script a file path
  * in `CHANGESETS_OUTPUT` and reads one JSON object per line from it,

@@ -10,3 +10,8 @@ dist-embed/
 *.tsbuildinfo
 scratchpad/
 renders/
+
+# Local secrets (the Cloudflare deploy values live in GitHub Actions secrets)
+.env
+.env.*
+!.env.example

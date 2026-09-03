@@ -19,6 +19,12 @@ name: Release
 # the publish script a file path in CHANGESETS_OUTPUT and reads `{"type":"git-tag",...}` events
 # from it (scripts/publish-if-needed.mjs writes one per tag), then creates the tags and releases
 # through the GitHub API.
+#
+# That choice pins the CLI too: v2 of the action refuses to run against Changesets CLI v2 outright
+# ("designed to work with Changesets CLI v3 ... use Changesets action v1 instead"), and it refuses
+# before doing anything, so the run leaves no version branch and no PR to show for itself. The
+# workspace therefore tracks @changesets/cli v3 and @changesets/changelog-github v1 (its matching
+# major, both on @changesets/types v7). Keep the two majors moving together.
 
 on:
   push:
@@ -100,10 +106,15 @@ jobs:
           publish-script: ${{ needs.preflight.outputs.publish }}
           commit-message: "chore: version packages"
           pr-title: "chore: version packages"
-        # No GITHUB_TOKEN env: v2 only reads its github-token input, which already defaults to
-        # this workflow's token.
         env:
           NPM_CONFIG_PROVENANCE: "true"
+          # For the VERSION-SCRIPT, not for the action. v2 takes its own credential from the
+          # github-token input, which already defaults to this workflow's token — but the script
+          # it spawns runs `changeset version`, and @changesets/changelog-github resolves every
+          # commit to a PR and author through the GitHub API to write the changelog. That reads
+          # process.env.GITHUB_TOKEN and nothing else, and without it `changeset version` exits 1
+          # with "Please create a GitHub personal access token", having applied nothing.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       # Decide the run's real outcome, and self-heal the failure the action cannot report on.
       # Two flakes observed in the sibling repo, both leaving the version branch pushed but no PR:

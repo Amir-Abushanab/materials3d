@@ -122,7 +122,10 @@ shape's folder; a scatter scene has one shared list under **All shapes**.
 
 ## Performance
 
-`quality` scales the depth, plate and main passes (0.35 to 1; the post pass runs at full
-resolution). `max DPR` caps devicePixelRatio. `measured thickness` adds a back-face depth pass.
+`quality` scales the depth, plate and main passes (0.35 to 2; the post pass runs at full
+resolution). Above 1 it supersamples, which is the one setting that antialiases everything at
+once, the depth included, so it is what cleans up a defocused edge that still stairsteps; it costs
+the square, so reach for it on a small canvas rather than a full-bleed hero. `max DPR` caps
+devicePixelRatio. `measured thickness` adds a back-face depth pass.
 `engine` switches between the WebGL engine and the experimental WebGPU/TSL engine in place; see
 [WEBGPU.md](../../WEBGPU.md).

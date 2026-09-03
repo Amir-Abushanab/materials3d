@@ -102,6 +102,14 @@ private setPass(pass: 0 | 1): void {
 0.6, 10 below; 10 caustic taps at 0.6 and above, 6 below. The post shader is recompiled when the
 count changes, which is why `quality` is a structural change in `setConfig`.
 
+It also scales the scene passes' render targets, and above 1 that is supersampling: they render
+larger than the canvas and the post pass resolves them back down. That is worth knowing about for
+edge quality specifically. The main pass is multisampled, but the depth of field derives its blur
+radius from the DEPTH target, which is packed into two channels and sampled nearest — it cannot be
+multisampled, because interpolating the low byte of two depths decodes to a distance that is in
+neither. The radius is pre-filtered over a 3x3 to take the worst of that off, but only rendering
+the depth larger antialiases it outright.
+
 ## 4. The lamp field
 
 ```glsl

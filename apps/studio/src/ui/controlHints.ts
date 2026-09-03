@@ -270,7 +270,7 @@ const CONTROL_HINTS: Record<string, string> = {
 const FOLDER_HINTS: Record<string, string> = {
   // "quality": render-target scale vs export compression.
   "Performance quality":
-    "Render-target scale (0.5 to 1) for the depth/plate/main passes. The post pass always runs at full resolution, so lowering this softens the glass without softening the grain.",
+    "Render-target scale (0.35 to 2) for the depth/plate/main passes. The post pass always runs at full resolution, so lowering this softens the glass without softening the grain. Above 1 it supersamples instead: everything is antialiased, depth included, so a defocused edge stops stairstepping. Costs the square.",
   "Output quality":
     "Compression quality for the exported image. Higher looks better but weighs more.",
   // "grain": film grain vs glitter grain.

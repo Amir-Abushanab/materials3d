@@ -1450,6 +1450,12 @@ export const POST_FRAG = /* glsl */ `
   ${SATURATION_CHUNK}
   ${ACES_CHUNK}
 
+  /** Circle of confusion at one depth sample, in scene-target pixels. */
+  float coc(vec2 uv){
+    float d = dec(texture2D(tDepth, uv).rg) * FAR;
+    return pow(clamp(abs(d - uFocus) / uRange, 0.0, 1.0), 1.2) * uAperture * uScale;
+  }
+
   /**
    * Khronos PBR "neutral" tone map, adapted from Vercel's vgpu (MIT), see THIRD-PARTY-NOTICES.
    *
@@ -1482,7 +1488,40 @@ export const POST_FRAG = /* glsl */ `
     vec2 vUv = mix(vUvIn, vec2(1.0) - vUvIn, step(0.5, uMirror));
 
     float dC = dec(texture2D(tDepth, vUv).rg) * FAR;
-    float r0 = pow(clamp(abs(dC - uFocus) / uRange, 0.0, 1.0), 1.2) * uAperture * uScale;
+
+    /*
+     * The gather radius, PRE-FILTERED over a 3x3 of its own.
+     *
+     * The depth target is packed into two channels and sampled NEAREST, because interpolating the
+     * low byte of two different depths decodes to a distance that is in neither. So the depth a
+     * fragment reads steps binary across a silhouette, and a radius derived from it steps with
+     * it: one pixel inside the shape this gather reaches across many pixels, one pixel outside it
+     * reaches across none. The depth pass also clears to the FOCAL depth, so "outside" is always
+     * perfectly sharp and the step is as large as it can be. THAT is what read as a staircase
+     * along every out-of-focus edge, and multisampling the colour cannot touch it, because what
+     * aliases is the radius, not the coverage.
+     *
+     * Averaging the RADII of a 3x3 is safe where averaging the depths is not: each tap decodes
+     * its own valid depth first and only the scalar radius is blended.
+     *
+     * This softens the step; it does not abolish it. A defocused shape should also reach OUT past
+     * its own silhouette, and a pure gather cannot express that: the background beside it has no
+     * circle of confusion of its own, so it never reaches in. Fixing that properly means a
+     * scatter-as-gather with an energy-normalised weight (each tap worth ~1/r2 squared over the
+     * disc it covers), which redistributes light and would re-calibrate every preset. Dilating
+     * the radius WITHOUT that normalisation was tried and is much worse than the staircase: every
+     * background pixel within the aperture picks up full-weight colour and the shapes smear.
+     */
+    float r0 = 0.0;
+    if (uAperture > 0.0){
+      vec2 px = 1.0 / uRes;
+      for (int y = -1; y <= 1; y++){
+        for (int x = -1; x <= 1; x++){
+          r0 += coc(vUv + vec2(float(x), float(y)) * px);
+        }
+      }
+      r0 /= 9.0;
+    }
 
     // RGBA, not RGB: alpha is the main pass's coverage, and it has to be blurred by exactly the
     // same kernel as the colour or the depth of field would soften a shape's colour while leaving

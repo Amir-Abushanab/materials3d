@@ -1400,12 +1400,25 @@ export class MaterialRenderer implements Engine {
    * beam's real radiance alive until there is a curve to compress it with. Byte targets stay the
    * default because every preset built before tone mapping existed was calibrated against them.
    *
-   * The same switch turns on MULTISAMPLING, for a related reason. `antialias: true` on the
-   * renderer applies to the DEFAULT framebuffer only; a render target gets none unless it asks.
-   * That is invisible for glass, whose silhouettes are large and smooth, and ruinous for a beam:
-   * near the exit face adjacent wavelengths are a fraction of a unit apart, so every quad in the
-   * fan is a long sub-pixel wedge, and two dozen staggered slice-fans alias against each other
-   * into a comb of streaks. Four samples resolves them into one continuous sheet.
+   * MULTISAMPLING is separate, and unconditional. `antialias: true` on the renderer applies to
+   * the DEFAULT framebuffer only, and the scene never draws there: every pass lands in a render
+   * target, and a target gets no multisampling unless it asks. So the flag bought nothing and
+   * every silhouette in the frame was a hard staircase.
+   *
+   * It was first turned on for the beam alone, where the aliasing is spectacular: near the exit
+   * face adjacent wavelengths are a fraction of a unit apart, so every quad in the fan is a long
+   * sub-pixel wedge, and two dozen staggered slice-fans alias against each other into a comb of
+   * streaks. The judgement that came with it, that glass silhouettes are "large and smooth"
+   * enough not to need it, does not survive contact with a rod: a capsule cap is a tight curve,
+   * and against a pale backdrop at small sizes it stairs visibly. Four samples on the MAIN pass
+   * fixes it, and the cost is one resolve of one target per frame.
+   *
+   * Only `colorRT` is multisampled on the byte path. `bgRT` and `plainRT` are the plate, and the
+   * plate stores a linear DEPTH in its alpha that the main pass rejects samples against; an MSAA
+   * resolve averages that alpha across a silhouette and yields a depth belonging to neither side,
+   * which is the same trap `depthRT`'s NearestFilter exists to avoid. They are only ever seen
+   * through refraction, so their edges are not what reads as jagged anyway. (The HDR branch has
+   * multisampled all three since the beam work; left as-is rather than changed blind.)
    */
   private syncColorTargets(): void {
     const hdr = this.config.post.toneMap !== "none";
@@ -1422,7 +1435,7 @@ export class MaterialRenderer implements Engine {
     const options: THREE.RenderTargetOptions = hdr
       ? { ...this.byteTarget, type: THREE.HalfFloatType, samples: 4 }
       : this.byteTarget;
-    this.colorRT = new THREE.WebGLRenderTarget(width, height, options);
+    this.colorRT = new THREE.WebGLRenderTarget(width, height, { ...options, samples: 4 });
     this.bgRT = new THREE.WebGLRenderTarget(width, height, options);
     // The plate WITHOUT the glass in it; see the plain plate in renderOnce().
     this.plainRT = new THREE.WebGLRenderTarget(width, height, options);

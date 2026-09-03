@@ -5,11 +5,27 @@ name: Release
 #   * that PR merged: publishes the bumped @materials3d/* packages to npm, tags, GitHub Release
 #
 # Auth is OIDC / Trusted Publishing (`id-token: write` + NPM_CONFIG_PROVENANCE), so there is no
-# stored token. One-time prerequisites:
-#   1. Publish 0.1.0 once from a laptop (`npm login`, then `pnpm release`); npm cannot do a
+# stored token.
+#
+# Every action here is pinned to a commit SHA, not a major tag, and that matters more in this file
+# than in ci.yml: this job can publish to npm unattended, because each package's trusted publisher
+# allows `npm publish` directly rather than only `npm stage publish`. npm warns against that, and
+# the warning is fair — the alternative is `npm stage publish` plus a human running
+# `npm stage approve --otp`, which is deliberately not automatable, and this pipeline exists to
+# release on a push. So the risk moves to whatever code the job runs, and a major tag is mutable:
+# `changesets/action@v2` is a BRANCH, force-pushable at will, and the `actions/*` majors are tags
+# that get re-pointed on every release. A SHA cannot be re-pointed. .github/dependabot.yml keeps
+# them fresh.
+#
+# One-time prerequisites, all three of which have to be done or the publish 403s:
+#   1. Publish the first version from a laptop (`npm login`, then `pnpm release`); npm cannot do a
 #      package's FIRST publish over OIDC.
-#   2. On each package's npm settings add a Trusted Publisher pointing at this repo and this
-#      workflow file. After that, CI publishes tokenlessly.
+#   2. On each package's npm settings add a Trusted Publisher: GitHub Actions, this owner, this
+#      repo, workflow filename `release.yml`, environment BLANK (no job here declares one).
+#   3. On that same form tick "Allow `npm publish`" under Allowed actions. Without it the
+#      connection can only STAGE, and this pipeline's direct publish comes back as
+#      `403 ... OIDC permission denied for this action` — which reads like a missing publisher
+#      but is not one. That checkbox is the concession described above.
 # The preflight job skips publishing until the packages exist on npm, so runs before step 1 stay
 # green rather than failing on a package that has never been published.
 #
@@ -69,11 +85,11 @@ jobs:
       # this run": the previous run's branch push and PR update are minutes older at the least.
       - id: started
         run: echo "at=$(date -u +%s)" >> "$GITHUB_OUTPUT"
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v7
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
           cache: pnpm
@@ -96,7 +112,7 @@ jobs:
         # empty, so `Error.toString()` degrades to just the name. That tells you nothing and kills
         # the run. The guard step below decides the real outcome and prints the actual API error.
         continue-on-error: true
-        uses: changesets/action@v2
+        uses: changesets/action@8488615a623b1b9c987934bb89eae8af6a946ac1 # v2.1.1
         with:
           # `pnpm run version`, NOT `pnpm version`: the latter is a pnpm BUILTIN that bumps
           # package.json and tags, which is not what the release flow wants; it has to be the

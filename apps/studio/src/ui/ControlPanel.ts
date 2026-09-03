@@ -2384,7 +2384,7 @@ export class ControlPanel {
   private addPerformance(pane: Pane): void {
     const f = pane.addFolder({ title: "Performance", expanded: true });
     // Four passes per frame is a real cost; these two are the knobs that matter on a phone.
-    this.structural(f.addBinding(this.config, "quality", { min: 0.35, max: 1, step: 0.05 }));
+    this.structural(f.addBinding(this.config, "quality", { min: 0.35, max: 2, step: 0.05 }));
     f.addBinding(this.config, "dprMax", { label: "max DPR", min: 0.5, max: 3, step: 0.25 });
     // Structural: it adds a whole render pass, so the renderer rebuilds rather than refreshes.
     this.structural(

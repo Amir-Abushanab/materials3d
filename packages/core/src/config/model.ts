@@ -1347,8 +1347,18 @@ export interface SceneConfig {
    *  lives on each ItemConfig.interaction, per-lamp on LampConfig.bindings. ABSENT = off unless a
    *  shape or lamp carries bindings; `enabled: false` disables the whole layer. */
   interaction?: SceneInteractionConfig;
-  /** Render-target scale (0.5–1) for the depth/plate/main passes. The post pass always runs at
-   *  full canvas resolution, so dropping this softens the glass without softening the grain. */
+  /**
+   * Render-target scale (0.35–2) for the depth/plate/main passes. The post pass always runs at
+   * full canvas resolution, so dropping this softens the glass without softening the grain.
+   *
+   * Above 1 it SUPERSAMPLES: the scene passes render larger than the canvas and the post pass
+   * resolves them back down. That is the one setting that antialiases everything at once, the
+   * depth included, and depth is what the depth of field derives its blur radius from — so it is
+   * the answer to a defocused edge that still reads as a staircase after multisampling. Costs the
+   * square: 1.5 is a bit over twice the fragment work of 1, and 2 is four times. Worth it for a
+   * small canvas at a large display density, where the scene passes are cheap in absolute terms
+   * and every edge is only a few pixels long.
+   */
   quality: number;
   /** Ceiling on devicePixelRatio. Four passes per frame is a real cost, this is the main knob. */
   dprMax: number;
@@ -2209,7 +2219,7 @@ export function ensureSceneConfig(input: SceneConfigInput): SceneConfig {
     ...(input.interaction && typeof input.interaction === "object"
       ? { interaction: normalizeSceneInteraction(input.interaction) }
       : {}),
-    quality: clamp(num(input.quality, d.quality), 0.35, 1),
+    quality: clamp(num(input.quality, d.quality), 0.35, 2),
     dprMax: clamp(num(input.dprMax, d.dprMax), 0.5, 4),
     paused: bool(input.paused, d.paused),
     timeOffset: num(input.timeOffset, d.timeOffset),

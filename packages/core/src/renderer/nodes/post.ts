@@ -96,7 +96,47 @@ export const postPass = (u: PostUniforms) =>
     const near = (o: Vec): Vec => vUv.add(vec2(o.x, mix(o.y, o.y.negate(), u.sourceInverted)));
 
     const dC = decodeDepth(texture(u.depth, vUv)).mul(u.far);
-    const r0 = dC.sub(u.focus).abs().div(u.range).clamp(0, 1).pow(1.2).mul(u.aperture).mul(u.scale);
+
+    /** Circle of confusion at one depth sample, in scene-target pixels. */
+    const coc = (at: Vec): Vec =>
+      decodeDepth(texture(u.depth, at))
+        .mul(u.far)
+        .sub(u.focus)
+        .abs()
+        .div(u.range)
+        .clamp(0, 1)
+        .pow(1.2)
+        .mul(u.aperture)
+        .mul(u.scale);
+
+    /*
+     * The gather radius, PRE-FILTERED over a 3x3 of its own; the WebGL pass does the same, for the
+     * same reason. The depth target is packed into two channels and sampled NEAREST, because
+     * interpolating the low byte of two different depths decodes to a distance that is in neither.
+     * So the depth a fragment reads steps binary across a silhouette, and a radius derived from it
+     * steps with it: one pixel inside the shape this gather reaches across many pixels, one pixel
+     * outside it reaches across none. The depth pass also clears to the FOCAL depth, so "outside"
+     * is always perfectly sharp and the step is as large as it can be. That is what read as a
+     * staircase along every out-of-focus edge, and multisampling the colour cannot touch it,
+     * because what aliases is the radius, not the coverage.
+     *
+     * Averaging the RADII of a 3x3 is safe where averaging the depths is not: each tap decodes its
+     * own valid depth first and only the scalar radius is blended.
+     */
+    let cocSum = coc(vUv);
+    for (const [x, y] of [
+      [-1, -1],
+      [0, -1],
+      [1, -1],
+      [-1, 0],
+      [1, 0],
+      [-1, 1],
+      [0, 1],
+      [1, 1],
+    ]) {
+      cocSum = cocSum.add(coc(near(vec2(x, y).div(u.res))));
+    }
+    const r0 = cocSum.div(9);
 
     // RGBA, not RGB: alpha is the main pass's coverage and has to be blurred by exactly the same
     // kernel as the colour, or the depth of field softens a shape's colour and leaves its

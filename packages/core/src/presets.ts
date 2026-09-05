@@ -1516,6 +1516,108 @@ export function knot(): SceneConfig {
   };
 }
 
+/** Nested optical rings, with enough tilt to show their thickness and a brass focal point.
+ *  Four primitives keep the scene light; a closed aperture preserves the fine inner rims. */
+export function aperture(): SceneConfig {
+  const base = createDefaultConfig();
+  const glass: Partial<MaterialConfig> = {
+    kind: "glass",
+    density: 1.1,
+    ior: 1.46,
+    lens: 0.012,
+    dispersion: 0.006,
+    rim: 0.3,
+    specular: 0.5,
+    emission: 0,
+    saturation: 1,
+  };
+  const items = [
+    piece(
+      { kind: "ring", r: 3.25, hole: 2.58, thickness: 0.72, sides: 128 },
+      [-0.2, 0.15, -0.6],
+      [0.86, 0.2, -0.32],
+      "#5dafa0",
+      glass,
+    ),
+    piece(
+      { kind: "ring", r: 2.42, hole: 1.88, thickness: 0.62, sides: 128 },
+      [0.12, 0.08, 0.2],
+      [2.22, -0.25, -0.35],
+      "#c4e6df",
+      { ...glass, density: 0.6, iridescence: 0.12, filmNm: 420 },
+    ),
+    piece(
+      { kind: "ring", r: 1.58, hole: 1.2, thickness: 0.48, sides: 128 },
+      [0.33, -0.02, 0.65],
+      [1.1, 0.1, -0.48],
+      "#e8b974",
+      { ...glass, density: 0.9 },
+    ),
+    piece({ kind: "sphere", r: 0.68, sides: 96 }, [0.42, 0, 1], [0, 0, 0], "", {
+      kind: "metal",
+      albedo: "#e0ba78",
+      roughness: 0.32,
+      specular: 0.65,
+      emission: 0,
+    }),
+  ];
+  const names = ["Jade outer lens", "Opal middle lens", "Amber inner lens", "Brass core"];
+  return {
+    ...base,
+    background: "#eeeae2",
+    backgroundMode: "gradient",
+    backgroundGradientType: "linear",
+    backgroundGradientAngle: Math.PI / 2,
+    backgroundPalette: [
+      { color: "#dce7e2", position: 0 },
+      { color: "#faf4e9", position: 1 },
+    ],
+    clearGlass: "#f3f3e9",
+    studio: "gradient",
+    studioGain: 1.1,
+    lamps: [
+      { x: 0.28, y: 0.58, r: 0.24, color: "#69bcae", intensity: 1 },
+      { x: 0.72, y: 0.4, r: 0.22, color: "#edb66b", intensity: 1 },
+      { x: 0.5, y: 0.78, r: 0.16, color: "#d5e9e0", intensity: 0.65 },
+    ],
+    lampGain: 1.05,
+    lampGate: { lo: 0.04, hi: 0.96 },
+    backdropLamps: 0.04,
+    plate: { z: -5, scale: { x: 18, y: 12 }, offset: { x: 0.5, y: 0.5 } },
+    camera: {
+      ...base.camera,
+      fov: 20,
+      distance: 25,
+      height: 0,
+      lookAt: { x: 0, y: 0, z: 0 },
+      fit: "cover",
+      // Preserve only the sculpture's width on portrait canvases, rather than the empty wings
+      // of the 16:9 frame. Keeping the full frame makes the rings thumbnail-sized on a phone.
+      minVisibleWidth: 0.52,
+    },
+    measuredThickness: true,
+    post: {
+      ...base.post,
+      focus: 25,
+      range: 10,
+      aperture: 0,
+      bloom: 0.025,
+      caustics: 0,
+      haze: 0,
+      vignette: 0.12,
+      grain: 0.006,
+      toneMap: "neutral",
+    },
+    scatter: undefined,
+    items: items.map((item, index) => ({
+      ...item,
+      name: names[index],
+      motion: { kind: "drift", axis: "y", rate: 0.22, amount: 0.06 },
+      phase: index * 1.35,
+    })),
+  };
+}
+
 const PRESET_TABLE = {
   skewer,
   assembly,
@@ -1525,6 +1627,7 @@ const PRESET_TABLE = {
   materials,
   prism,
   knot,
+  aperture,
 } satisfies Record<string, () => SceneConfig>;
 
 /** The name of a shipped preset. */

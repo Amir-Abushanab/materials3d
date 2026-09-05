@@ -20,6 +20,9 @@ gesture sit in the panel header.
 first paint. **Reset to preset** returns to the selected one. A scene opened from a share link
 selects no preset.
 
+**Aperture** layers jade, opal and amber glass rings around a brass core. Its four shapes drift
+gently, stay in focus, and preserve enough width to keep the outer ring visible on narrow screens.
+
 ## Editing in the viewport
 
 Double-click a shape to select it. Its folder in the panel expands, scrolls into view and flashes.

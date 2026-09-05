@@ -19,7 +19,7 @@ import {
   type Vec,
 } from "./common";
 
-const { Fn, float, vec2, vec3, vec4, texture, uv } = TSL;
+const { Fn, If, float, vec2, vec3, vec4, texture, uv } = TSL;
 
 export interface PostUniforms {
   color: Texture;
@@ -95,8 +95,6 @@ export const postPass = (u: PostUniforms) =>
      */
     const near = (o: Vec): Vec => vUv.add(vec2(o.x, mix(o.y, o.y.negate(), u.sourceInverted)));
 
-    const dC = decodeDepth(texture(u.depth, vUv)).mul(u.far);
-
     /** Circle of confusion at one depth sample, in scene-target pixels. */
     const coc = (at: Vec): Vec =>
       decodeDepth(texture(u.depth, at))
@@ -123,21 +121,6 @@ export const postPass = (u: PostUniforms) =>
      * Averaging the RADII of a 3x3 is safe where averaging the depths is not: each tap decodes its
      * own valid depth first and only the scalar radius is blended.
      */
-    let cocSum = coc(vUv);
-    for (const [x, y] of [
-      [-1, -1],
-      [0, -1],
-      [1, -1],
-      [-1, 0],
-      [1, 0],
-      [-1, 1],
-      [0, 1],
-      [1, 1],
-    ]) {
-      cocSum = cocSum.add(coc(near(vec2(x, y).div(u.res))));
-    }
-    const r0 = cocSum.div(9);
-
     // RGBA, not RGB: alpha is the main pass's coverage and has to be blurred by exactly the same
     // kernel as the colour, or the depth of field softens a shape's colour and leaves its
     // silhouette crisp.
@@ -145,27 +128,51 @@ export const postPass = (u: PostUniforms) =>
     const wsum = float(1).toVar();
     const glow = vec3(0).toVar();
 
-    for (let k = 0; k < u.dofTaps; k++) {
-      const fi = k + 1;
-      const a = fi * GOLDEN_ANGLE;
-      const dir = vec2(Math.cos(a), Math.sin(a));
-      const rad = r0.mul(Math.sqrt(fi / u.dofTaps));
-      const uv2 = near(dir.mul(rad).div(u.res));
+    // Uniform branches match WebGL: a closed aperture is the centre sample, and pyramid bloom
+    // replaces the saturation gather. `select` alone still builds both expensive branches.
+    If(u.aperture.greaterThan(0), () => {
+      const dC = decodeDepth(texture(u.depth, vUv)).mul(u.far).toVar();
+      let cocSum = coc(vUv);
+      for (const [x, y] of [
+        [-1, -1],
+        [0, -1],
+        [1, -1],
+        [-1, 0],
+        [1, 0],
+        [-1, 1],
+        [0, 1],
+        [1, 1],
+      ]) {
+        cocSum = cocSum.add(coc(near(vec2(x, y).div(u.res))));
+      }
+      const r0 = cocSum.div(9).toVar();
+      for (let k = 0; k < u.dofTaps; k++) {
+        const fi = k + 1;
+        const a = fi * GOLDEN_ANGLE;
+        const dir = vec2(Math.cos(a), Math.sin(a));
+        const rad = r0.mul(Math.sqrt(fi / u.dofTaps));
+        const uv2 = near(dir.mul(rad).div(u.res));
 
-      // Occlusion guard: a sample in FRONT of this fragment contributes only in proportion to its
-      // own circle of confusion, so a sharp foreground shape does not smear over a blurred one.
-      const d2 = decodeDepth(texture(u.depth, uv2)).mul(u.far);
-      const r2 = d2.sub(u.focus).abs().div(u.range).clamp(0, 1).mul(u.aperture).mul(u.scale);
-      const w = select(d2.lessThan(dC.sub(0.4)), r2.smoothstep(0, rad.add(0.001)), float(1));
-      sum.addAssign(texture(u.color, uv2).mul(w));
-      wsum.addAssign(w);
-
-      const g = texture(
-        u.color,
-        near(dir.mul(u.bloomRadius.mul(u.scale).mul(Math.sqrt(fi / u.dofTaps))).div(u.res)),
-      ).rgb;
-      glow.addAssign(g.mul(saturation(g).sub(u.bloomThresh).max(0)));
-    }
+        // A sharp foreground sample must not smear over a blurred surface behind it.
+        const d2 = decodeDepth(texture(u.depth, uv2)).mul(u.far);
+        const r2 = d2.sub(u.focus).abs().div(u.range).clamp(0, 1).mul(u.aperture).mul(u.scale);
+        const w = select(d2.lessThan(dC.sub(0.4)), r2.smoothstep(0, rad.add(0.001)), float(1));
+        sum.addAssign(texture(u.color, uv2).mul(w));
+        wsum.addAssign(w);
+      }
+    });
+    If(u.bloomMode.lessThan(0.5).and(u.bloomAmount.greaterThan(0)), () => {
+      for (let k = 0; k < u.dofTaps; k++) {
+        const fi = k + 1;
+        const a = fi * GOLDEN_ANGLE;
+        const dir = vec2(Math.cos(a), Math.sin(a));
+        const g = texture(
+          u.color,
+          near(dir.mul(u.bloomRadius.mul(u.scale).mul(Math.sqrt(fi / u.dofTaps))).div(u.res)),
+        ).rgb;
+        glow.addAssign(g.mul(saturation(g).sub(u.bloomThresh).max(0)));
+      }
+    });
 
     // The gather is over PREMULTIPLIED colour, the only form that can be blurred across an alpha
     // edge without bleeding: three premultiplies the clear colour, so a transparent background
@@ -195,15 +202,21 @@ export const postPass = (u: PostUniforms) =>
 
     // A downward saturation-weighted gather: a screen-space approximation of light pooling under
     // the glass, not refracted photons.
-    const caus = vec3(0).toVar();
-    for (let k = 0; k < u.causticTaps; k++) {
-      const o = (k + 1) / u.causticTaps;
-      const c = texture(u.color, near(vec2(Math.sin(o * 9) * 0.012, o * 0.2))).rgb;
-      caus.addAssign(c.mul(saturation(c)).mul(1 - o));
-    }
-    const pool = caus.div(u.causticTaps).mul(screen.y.smoothstep(0.46, 0)).mul(u.caustics).mul(3.2);
-    col.addAssign(pool);
-    alpha.assign(alpha.add(pool.r.max(pool.g).max(pool.b)).min(1));
+    If(u.caustics.greaterThan(0.001), () => {
+      const caus = vec3(0).toVar();
+      for (let k = 0; k < u.causticTaps; k++) {
+        const o = (k + 1) / u.causticTaps;
+        const c = texture(u.color, near(vec2(Math.sin(o * 9) * 0.012, o * 0.2))).rgb;
+        caus.addAssign(c.mul(saturation(c)).mul(1 - o));
+      }
+      const pool = caus
+        .div(u.causticTaps)
+        .mul(screen.y.smoothstep(0.46, 0))
+        .mul(u.caustics)
+        .mul(3.2);
+      col.addAssign(pool);
+      alpha.assign(alpha.add(pool.r.max(pool.g).max(pool.b)).min(1));
+    });
 
     const haze = screen.y.smoothstep(u.hazeTop, -0.02).mul(u.haze);
     col.assign(mix(col, u.hazeColor, haze));

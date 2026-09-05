@@ -101,7 +101,9 @@ export function createTargets(
     }),
     plate: makeTarget(width, height, scene),
     plain: makeTarget(width, height, scene),
-    color: makeTarget(width, height, scene),
+    // Match WebGL's main target on the byte path too: silhouettes need coverage antialiasing
+    // even when tone mapping is off. Leave the plate's depth-bearing alpha unaveraged there.
+    color: makeTarget(width, height, { ...scene, samples: 4 }),
     finish: makeTarget(outWidth, outHeight, scene),
     // ROUND, not floor, and not the bare quotient: the reference rounds, and at 900x540 flooring
     // gives level 2 a 112x67 target where it has 113x68. That is a different sampling grid for the

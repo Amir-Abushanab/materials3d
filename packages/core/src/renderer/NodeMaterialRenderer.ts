@@ -2494,23 +2494,27 @@ export class NodeMaterialRenderer implements Engine {
    */
   private renderBloom(t: PassTargets, withDust: boolean): void {
     if (!this.passes) return;
+    const wantBloom = this.config.post.bloomMode === "pyramid" && this.bloomAmount.value > 0;
+    if (!wantBloom && !withDust) return;
     this.quad.blit(this.renderer, this.passes.extract, t.bloom[0].a);
-    for (let i = 0; i < BLOOM_DIVISORS.length; i++) {
+    // Bloom consumes levels 0–2; dust consumes level 1 and its separate unthresholded field.
+    // Level 3's thresholded blur has no reader and is overwritten by renderParticleField.
+    const last = wantBloom ? 2 : 1;
+    for (let i = 0; i <= last; i++) {
       if (i > 0) this.quad.blit(this.renderer, this.passes.down[i - 1], t.bloom[i].a);
       this.quad.blit(this.renderer, this.passes.blur[i].h, t.bloom[i].b);
       this.quad.blit(this.renderer, this.passes.blur[i].v, t.bloom[i].a);
     }
-    this.quad.blit(this.renderer, this.passes.composite, t.bloom[0].b);
+    if (wantBloom) this.quad.blit(this.renderer, this.passes.composite, t.bloom[0].b);
     if (withDust) this.renderParticleField(t);
   }
 
   /**
    * The dust light field: the last pyramid level, rebuilt UNTHRESHOLDED and blurred wide.
    *
-   * It overwrites what the pyramid put there, and that is the point. The composite only reads the
-   * top three levels, so the last one is free to answer a different question: not "what glows"
-   * but "does any light reach this point at all". A thresholded level cannot answer it, a grain
-   * sitting in dim light would be told there is none.
+   * The composite only reads the top three levels, so the last one is free to answer a different
+   * question: not "what glows" but "does any light reach this point at all". A thresholded level
+   * cannot answer it: a grain sitting in dim light would be told there is none.
    */
   private renderParticleField(t: PassTargets): void {
     if (!this.passes?.particle) return;
@@ -3287,10 +3291,13 @@ export class NodeMaterialRenderer implements Engine {
     const focalLow = (focal * 255) % 1;
     this.depthClear.setRGB(focal - focalLow / 255, focalLow, 0);
     this.showLayers(false, false);
-    this.scene.overrideMaterial = this.frontDepthMaterial;
-    this.renderer.setClearColor(this.depthClear, 1);
-    this.renderer.setRenderTarget(t.front);
-    this.renderer.render(this.scene, this.camera);
+    // Bindings update this uniform before drawing; a newly opened aperture needs current depth.
+    if (this.aperture.value > 0 || this.probe === "front") {
+      this.scene.overrideMaterial = this.frontDepthMaterial;
+      this.renderer.setClearColor(this.depthClear, 1);
+      this.renderer.setRenderTarget(t.front);
+      this.renderer.render(this.scene, this.camera);
+    }
 
     // 2. BACK depth, as linear depth. The main pass measures the optical path against this, and
     //    without it every fragment reads depth zero and comes back at maximum defocus.

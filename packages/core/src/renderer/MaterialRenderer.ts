@@ -2274,7 +2274,9 @@ export class MaterialRenderer implements Engine {
     const composite = this.bloomComposite;
     const down = this.bloomDown;
     if (!levels || !extract || !blurs || !composite || !down) return;
-    const wantBloom = this.config.post.bloomMode === "pyramid";
+    // Read the resolved uniform: an interaction can turn bloom on or off without a refresh.
+    const wantBloom =
+      this.config.post.bloomMode === "pyramid" && this.postMaterial.uniforms.uBloom.value > 0;
     const wantDust = this.dustMesh !== undefined;
     if (!wantBloom && !wantDust) return;
 
@@ -2716,10 +2718,14 @@ export class MaterialRenderer implements Engine {
     // the prism's Z would hand every pixel it covers a false near depth.
     if (this.beamMesh) this.beamMesh.visible = false;
     if (this.causticMesh) this.causticMesh.visible = false;
-    renderer.setRenderTarget(this.depthRT);
-    renderer.setClearColor(this.depthClearColor, 1);
-    renderer.clear();
-    renderer.render(this.scene, this.camera);
+    // Only post reads front depth. Keep the diagnostic available even with a closed aperture.
+    // Use the live uniform so aperture bindings can enable the pass on the very same frame.
+    if (this.postMaterial.uniforms.uAperture.value > 0 || this.probeName === "front") {
+      renderer.setRenderTarget(this.depthRT);
+      renderer.setClearColor(this.depthClearColor, 1);
+      renderer.clear();
+      renderer.render(this.scene, this.camera);
+    }
 
     // 1b. Back faces, the exit surface, encoded exactly like the depth pass. Subtracting this
     //     from the front depth gives each fragment its real optical path, which is what the glass

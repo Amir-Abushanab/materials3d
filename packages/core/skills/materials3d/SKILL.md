@@ -94,7 +94,7 @@ const handle = createMaterials(
 // handle: { state, renderer, snapshot({ time }), set(partial), play(), pause(), destroy() }
 ```
 
-Presets: `skewer`, `assembly`, `staircase`, `slimes`, `reactions`, `materials`, `prism`,
+Presets: `skewer`, `assembly`, `staircase`, `slimes`, `reactions`, `materials`, `prism`, `aperture`,
 `knot` (a `.glb` in glass; carries its mesh inline, so it needs no hosting). In
 React a string preset lazy-loads the presets chunk; a function (`preset={() => PRESETS.knot()}`) is
 tree-shakeable. Core and element: `createMaterials(el, PRESETS.knot())`, `<materials-3d preset="knot">`.

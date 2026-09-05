@@ -25,7 +25,7 @@ pnpm add @materials3d/react three     # or @materials3d/element, or @materials3d
 ## Quickstart
 
 React (`preset` is one of `skewer`, `assembly`, `staircase`, `slimes`, `reactions`, `materials`,
-`prism`, `knot`):
+`prism`, `knot`, `aperture`):
 
 ```tsx
 import { Materials3D } from "@materials3d/react";

@@ -4,3 +4,6 @@
 // scene actually upgrades. The standalone/CDN build imports this statically instead.
 export { MaterialRenderer } from "./renderer/MaterialRenderer";
 export { createDefaultConfig } from "./config/model";
+// Reached through the same dynamic import as the renderer, because it lives beside it and pulls
+// in three; the shell must not name it statically. See `preloadMeshes` for why the shell waits.
+export { preloadMeshes } from "./renderer/glb";

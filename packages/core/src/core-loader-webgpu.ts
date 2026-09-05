@@ -26,3 +26,5 @@ import type { MaterialRenderer as WebGLRenderer } from "./renderer/MaterialRende
  */
 export const MaterialRenderer = NodeMaterialRenderer as unknown as typeof WebGLRenderer;
 export { createDefaultConfig } from "./config/model";
+// The shell awaits this on both engines, so both loaders have to offer it; see `createMaterials`.
+export { preloadMeshes } from "./renderer/glb";

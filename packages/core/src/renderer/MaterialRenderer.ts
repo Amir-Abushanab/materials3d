@@ -101,6 +101,7 @@ import {
   DUST_FRAG,
 } from "./shaders";
 import { buildShape, defaultPath } from "./shapes";
+import { loadModels } from "./glb";
 import {
   aimBeam,
   aimBeamAtAngle,
@@ -360,6 +361,24 @@ export class MaterialRenderer implements Engine {
   private reducedMotion = false;
   private capturing = false;
   private disposed = false;
+
+  /**
+   * Resolves once every model this scene names has loaded AND been built into geometry.
+   *
+   * Awaited by {@link captureImage}, and that is what it is for: a still is taken on one explicit
+   * frame with no loop running, so without this a capture races the fetch and photographs the
+   * placeholder sphere. That failure is invisible in the output, which is the worst kind, a poster
+   * or a headless render that is simply of the wrong shape, with nothing to say so.
+   *
+   * One await is enough. The rebuild the load triggers calls {@link syncModels} again, but by then
+   * every URL is cached, so the second call has nothing to fetch and resolves without work.
+   */
+  private modelsPending: Promise<void> = Promise.resolve();
+
+  /** Bumped per model batch, so a load that lands late or after dispose() is thrown away. */
+  private modelLoadId = 0;
+  /** Model URLs this renderer has already tried; see {@link loadModels}. */
+  private readonly modelAttempted = new Set<string>();
 
   // ---- Interaction layer (optional; created only when some binding list exists) ----
   /** Created by syncInteraction() when interaction turns on, disposed when it turns off. */
@@ -845,6 +864,18 @@ export class MaterialRenderer implements Engine {
       this.items.push(built);
       this.baseMaterials.set(built, resolved);
     }
+    this.syncModels();
+  }
+
+  /** Load this scene's models, then repaint with them. See {@link loadModels}. */
+  private syncModels(): void {
+    const loadId = ++this.modelLoadId;
+    this.modelsPending = loadModels(this.resolvedItems, this.modelAttempted).then((arrived) => {
+      // Only the newest batch may land, and nothing may land after dispose(); the same guard the
+      // backdrop media load carries, for the same reason.
+      if (this.disposed || loadId !== this.modelLoadId || !arrived) return;
+      this.rebuild();
+    });
   }
 
   // ----------------------------------------------------------- uniform push ---
@@ -1879,10 +1910,16 @@ export class MaterialRenderer implements Engine {
     // `ring` in the list simply is not in the light's way.
     const sections = this.beamTargets(beam)
       .map((c) => ({
-        polygon: crossSectionFor(c.shape, beam.rotation, c.rotation.z, {
-          x: c.position.x,
-          y: c.position.y,
-        }),
+        polygon: crossSectionFor(
+          c.shape,
+          beam.rotation,
+          c.rotation.z,
+          { x: c.position.x, y: c.position.y },
+          // Only a `model` reads this, and it is why the whole item is threaded through rather
+          // than the two numbers a lathe needed: a mesh's slice depends on the sheet's height and
+          // on every axis of the item's pose. See SlicePose.
+          { z: beam.z, position: c.position, rotation: c.rotation, scale: c.scale },
+        ),
         ior: c.material.ior,
       }))
       .filter((s): s is { polygon: THREE.Vector2[]; ior: number } => s.polygon !== undefined);
@@ -3159,12 +3196,20 @@ export class MaterialRenderer implements Engine {
     this.updateRunning();
   }
 
+  /** See {@link Engine.whenModelsReady}. */
+  whenModelsReady(): Promise<void> {
+    return this.modelsPending;
+  }
+
   /**
    * Capture the current frame as an image Blob, the poster path.
    * Pass `time` for a reproducible frame (0 = the frame the scene opens on) so a poster
    * regenerated later is byte-comparable instead of whatever happened to be on screen.
    */
   async captureImage(mime = "image/webp", quality?: number, time?: number): Promise<Blob> {
+    // FIRST, before any camera or time state is touched: a model landing mid-capture rebuilds the
+    // scene, which would undo the pose set up below. See {@link modelsPending}.
+    await this.modelsPending;
     const previousTime = this.time;
     this.capturing = true;
     // Strip the live interaction state BEFORE the camera is posed for the capture frame;

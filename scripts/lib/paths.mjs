@@ -12,6 +12,12 @@ export const DIST = resolve(CORE, "dist");
 export const BUNDLE = resolve(DIST, "standalone/materials3d.standalone.js");
 /** Default home for every image a script writes. Gitignored. */
 export const RENDERS = resolve(ROOT, "renders");
+/**
+ * What the studio serves at `/`: the standalone bundle (copied in, gitignored) and the committed
+ * demo meshes a `model` scene links to. The browser scripts serve it too, so a config naming
+ * `/knot.glb` renders headless exactly as it does in the studio.
+ */
+export const STUDIO_PUBLIC = resolve(ROOT, "apps/studio/public");
 
 /**
  * three's build directory, resolved from packages/core so the served copy is the one the package

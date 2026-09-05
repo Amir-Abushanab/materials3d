@@ -14,7 +14,7 @@
  * a gesture becomes one step.
  */
 
-import type { SceneConfig } from "@materials3d/core";
+import type { SceneConfig, ShapeConfig } from "@materials3d/core";
 
 /** One committed version in the timeline. */
 interface Entry {
@@ -56,40 +56,76 @@ export interface HistoryDeps {
 /** How long a cleared timeline can be brought back, in ms. The toast offering it lives as long. */
 export const CLEAR_UNDO_MS = 4000;
 
-/** The config fields that can hold a data URI the size of a file. */
+/** The scene-level fields that can hold a data URI the size of a file. */
 const MEDIA_KEYS = ["backgroundImageUrl", "backgroundVideoUrl"] as const;
+
+/** Every shape in a config whose `model` can hold one: the items' and the scatter template's. */
+function modelShapes(config: SceneConfig): ShapeConfig[] {
+  const shapes = config.items.map((item) => item.shape);
+  if (config.scatter?.shape) shapes.push(config.scatter.shape);
+  return shapes;
+}
 /** Strings shorter than this travel inside the clone; longer ones are held once, out of line. A
  *  hosted URL is well under it and the data URI of any real image or video is megabytes over. */
 const INLINE_LIMIT = 2048;
 const REF_PREFIX = "m3d-media#";
 
 /**
- * Out-of-line storage for a backdrop picked from disk.
+ * Out-of-line storage for a backdrop or a `.glb` picked from disk.
  *
  * A 20 MB video as a data URI would otherwise be deep-cloned into every entry, serialized for
  * every fingerprint and diff label, and retained eighty times over. Held once here and keyed by a
  * short reference that the entries carry instead; strings are immutable, so handing the same
  * payload back out on a restore copies nothing.
+ *
+ * A picked model is the same problem one level down: it hangs off a shape rather than off the
+ * config, so it needs a walk where the backdrop needs a key list. Everything else about it is
+ * identical, which is why it shares this store rather than getting one of its own.
  */
 class MediaStore {
   private readonly payloads = new Map<string, string>();
   private readonly refs = new Map<string, string>();
   private next = 1;
 
-  /** A shallow copy of `config` with any large media swapped for a reference. Shallow on purpose:
-   *  the payload itself must never be copied on the way in. */
+  /** The short reference standing in for one payload, minting it on first sight. */
+  private ref(payload: string): string {
+    let ref = this.refs.get(payload);
+    if (!ref) {
+      ref = `${REF_PREFIX}${this.next++}`;
+      this.refs.set(payload, ref);
+      this.payloads.set(ref, payload);
+    }
+    return ref;
+  }
+
+  /**
+   * A copy of `config` with any large media swapped for a reference.
+   *
+   * Copies only the SPINE, never a payload: the top level, and, for a shape carrying a picked
+   * model, the items array and that shape. Copying a payload on the way in is the one thing this
+   * class exists to avoid, and the caller's live config must come back unmodified either way.
+   */
   intern(config: SceneConfig): SceneConfig {
     const out = { ...config };
     for (const key of MEDIA_KEYS) {
       const value = out[key];
       if (typeof value !== "string" || value.length < INLINE_LIMIT) continue;
-      let ref = this.refs.get(value);
-      if (!ref) {
-        ref = `${REF_PREFIX}${this.next++}`;
-        this.refs.set(value, ref);
-        this.payloads.set(ref, value);
+      out[key] = this.ref(value);
+    }
+    const big = (shape: ShapeConfig): boolean =>
+      typeof shape.model === "string" && shape.model.length >= INLINE_LIMIT;
+    if (modelShapes(config).some(big)) {
+      out.items = config.items.map((item) =>
+        big(item.shape)
+          ? { ...item, shape: { ...item.shape, model: this.ref(item.shape.model as string) } }
+          : item,
+      );
+      if (config.scatter && big(config.scatter.shape)) {
+        out.scatter = {
+          ...config.scatter,
+          shape: { ...config.scatter.shape, model: this.ref(config.scatter.shape.model as string) },
+        };
       }
-      out[key] = ref;
     }
     return out;
   }
@@ -102,6 +138,9 @@ class MediaStore {
         config[key] = this.payloads.get(value);
       }
     }
+    for (const shape of modelShapes(config)) {
+      if (shape.model?.startsWith(REF_PREFIX)) shape.model = this.payloads.get(shape.model);
+    }
     return config;
   }
 
@@ -112,6 +151,9 @@ class MediaStore {
       for (const key of MEDIA_KEYS) {
         const value = config[key];
         if (value?.startsWith(REF_PREFIX)) used.add(value);
+      }
+      for (const shape of modelShapes(config)) {
+        if (shape.model?.startsWith(REF_PREFIX)) used.add(shape.model);
       }
     }
     for (const [ref, payload] of this.payloads) {

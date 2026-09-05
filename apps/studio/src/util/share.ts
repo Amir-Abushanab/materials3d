@@ -11,7 +11,7 @@ const SHARE_VERSION = 1;
  *  it outright; the config download is the right vehicle for a scene that big. */
 const MAX_SHARE_URL_LENGTH = 8000;
 
-/** The config fields that can hold a data URI the size of a file. */
+/** The scene-level fields that can hold a data URI the size of a file. */
 const MEDIA_KEYS = ["backgroundImageUrl", "backgroundVideoUrl"] as const;
 
 interface Envelope {
@@ -21,9 +21,28 @@ interface Envelope {
 
 interface ShareLink {
   url: string;
-  /** A backdrop picked from disk was left out: it lives in the config as a data URI, which no
-   *  link can carry. A hosted URL travels fine. */
+  /** A backdrop or model picked from disk was left out: it lives in the config as a data URI,
+   *  which no link can carry. A hosted URL travels fine. */
   strippedMedia: boolean;
+}
+
+/**
+ * Drop `.glb` data URIs from a scene's shapes, leaving hosted ones alone.
+ *
+ * The per-item counterpart to {@link MEDIA_KEYS}, and it needs a walk rather than a key list
+ * because a model hangs off every item and off the scatter template. The shape KEEPS its kind
+ * and its radius, so a stripped link still opens the scene with the model's placeholder standing
+ * where it belongs, which reads as "point this at your file" rather than as a shape that vanished.
+ */
+function stripModels(payload: Partial<SceneConfig>): boolean {
+  let stripped = false;
+  const shapes = [...(payload.items ?? []).map((item) => item.shape), payload.scatter?.shape];
+  for (const shape of shapes) {
+    if (!shape?.model?.startsWith("data:")) continue;
+    delete shape.model;
+    stripped = true;
+  }
+  return stripped;
 }
 
 /** URL-safe base64 of the UTF-8 JSON. Configs are small (a few hundred bytes for a scatter
@@ -50,7 +69,10 @@ function decode(b64: string): string {
  * should offer the config download instead.
  */
 export function toShareUrl(config: Partial<SceneConfig>): ShareLink | null {
-  const payload: Partial<SceneConfig> = { ...config };
+  // A DEEP copy, unlike the shallow spread this used to take. `stripModels` deletes a field on a
+  // shape several levels down, and doing that to the caller's own object would delete the model
+  // out of the live scene: asking for a share link would erase the file you just picked.
+  const payload: Partial<SceneConfig> = structuredClone(config);
   let strippedMedia = false;
   for (const key of MEDIA_KEYS) {
     if (payload[key]?.startsWith("data:")) {
@@ -58,6 +80,7 @@ export function toShareUrl(config: Partial<SceneConfig>): ShareLink | null {
       strippedMedia = true;
     }
   }
+  if (stripModels(payload)) strippedMedia = true;
   const envelope: Envelope = { v: SHARE_VERSION, c: payload };
   const url = `${location.origin}${location.pathname}#c=${encode(JSON.stringify(envelope))}`;
   return url.length > MAX_SHARE_URL_LENGTH ? null : { url, strippedMedia };

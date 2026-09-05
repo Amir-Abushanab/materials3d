@@ -40,16 +40,21 @@ export function prepThumbConfig(cfg: SceneConfig): void {
 /**
  * Render the current config to a fresh 2D canvas (null if the WebGL canvas is missing).
  *
+ * Async only because of `whenModelsReady`: a thumbnail is a single frame with no loop behind it,
+ * so a scene with a `model` shape would otherwise be photographed as its placeholder sphere. That
+ * is precisely the picture a preset picker must not show.
+ *
  * Exactly one render. The constructor or the caller's `setConfig` has already sized the targets to
  * the host and the config's `quality`, and a shader that needs recompiling is compiled inside the
  * render that first uses it, so a second pass adds nothing. `seek()` rather than `renderOnce()`
  * because it positions the camera and applies the motion pose first; a bare render would use
  * whatever pose the previous thumbnail left.
  */
-export function renderThumbFrame(
+export async function renderThumbFrame(
   renderer: MaterialRenderer,
   host: HTMLElement,
-): HTMLCanvasElement | null {
+): Promise<HTMLCanvasElement | null> {
+  await renderer.whenModelsReady();
   renderer.seek(renderer.getConfig().timeOffset);
   const gl = host.querySelector("canvas");
   if (!gl) return null;

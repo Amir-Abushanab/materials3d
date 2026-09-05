@@ -72,6 +72,9 @@ const UI_STATE_RECEIVERS = new Set([
   // serialized into config.interaction / item.interaction / lamp.bindings by their sync functions.
   "uiInputs",
   "slot",
+  // The `model` field's display value. A picked `.glb` lives in the config as a megabyte of
+  // base64, so the field binds a stand-in string and writes back only what someone types.
+  "modelField",
 ]);
 
 const BINDING_RE = /addBinding\(\s*([A-Za-z_][\w.]*)\s*,\s*["'](\w+)["']/g;

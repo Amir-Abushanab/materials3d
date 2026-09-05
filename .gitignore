@@ -11,6 +11,10 @@ dist-embed/
 scratchpad/
 renders/
 
+# The studio serves the standalone bundle out of its public dir; the copy is build output, the
+# demo meshes beside it are not. See scripts/ensure-standalone.mjs.
+apps/studio/public/materials3d.standalone.js
+
 # Local secrets (the Cloudflare deploy values live in GitHub Actions secrets)
 .env
 .env.*

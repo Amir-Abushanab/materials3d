@@ -3,10 +3,14 @@
  * profile and you get rods, discs, cones, spheres and rings; change the *segment count* and you
  * get prisms, since a hexagon is a lathe with `sides: 6`. That one observation covers most of the
  * geometry in this visual language. `arrow`/`extrude` are the exceptions: swept 2D paths.
+ *
+ * `model` is outside the scheme entirely. It builds nothing, it hands back a `.glb` someone else
+ * authored, scaled to `r`. See {@link modelShape} and the reader in `glb.ts`.
  */
 
 import * as THREE from "three";
 import { fbmSimplex3d } from "../util/noise";
+import { cachedMesh } from "./glb";
 import { DEFAULT_OUTLINE, type CutConfig, type ShapeConfig } from "../config/model";
 import { prismCrossSection } from "./lightSheet";
 import { fitOutline, narrowestFeature } from "./svgPath";
@@ -90,6 +94,13 @@ export interface PathOptions {
    *  NEGATIVE turns the bevel off, the one kind here that can refuse one. */
   fillet?: number;
   cuts?: readonly CutConfig[];
+}
+
+export interface ModelOptions {
+  /** The `.glb` to draw, as a URL or `data:` URI. See {@link ShapeConfig.model}. */
+  url?: string;
+  /** Half-extent the mesh is fitted to, on its LONGEST axis. */
+  r?: number;
 }
 
 export interface ArrowOptions {
@@ -608,6 +619,28 @@ function carvedPlate(
   return geometry;
 }
 
+/**
+ * A loaded `.glb`, scaled to `r`, or a placeholder while it is still on its way.
+ *
+ * READS THE CACHE, never the network. `buildShape` has to return geometry synchronously, the
+ * same constraint that makes an unparseable outline fall back rather than throw, and a `.glb`
+ * arrives over a fetch. So the layer that knows how to wait, the renderer, loads the file and
+ * rebuilds; this function only ever answers "here it is" or "not yet".
+ *
+ * The placeholder is a low-poly sphere at the right radius rather than nothing: it holds the
+ * shape's place in the composition, it is obviously not a designed object, and if the file never
+ * loads the scene reads as unfinished instead of as broken.
+ *
+ * The cached geometry is CLONED. The renderer disposes each item's geometry when it rebuilds,
+ * and the cache hands the same copy to every item naming this file, so returning it directly
+ * would free a buffer several live meshes are still drawing from.
+ */
+export function modelShape({ url, r = 1 }: ModelOptions = {}): THREE.BufferGeometry {
+  const entry = url ? cachedMesh(url) : undefined;
+  if (!entry) return sphere({ r, sides: 32 });
+  return entry.geometry.clone().scale(r, r, r);
+}
+
 /** Build the geometry a {@link ShapeConfig} describes. */
 export function buildShape(shape: ShapeConfig): THREE.BufferGeometry {
   const { kind, r, len, thickness, fillet, bevel, sides, hole, shaft, head, depth, seed, bump } =
@@ -629,6 +662,8 @@ export function buildShape(shape: ShapeConfig): THREE.BufferGeometry {
       return slab({ w: len, h: thickness, depth, r, fillet, cuts });
     case "path":
       return pathShape({ outline: shape.outline, r, depth, fillet, cuts });
+    case "model":
+      return modelShape({ url: shape.model, r });
     case "droplet":
       return droplet({ r, len, sides });
     case "blob":
@@ -687,6 +722,16 @@ export function defaultPath(shape: ShapeConfig): number {
       return shape.r * 0.8;
     case "blob":
       return shape.r;
+    case "model": {
+      // The one kind whose chord is MEASURED rather than reasoned about, because it is the one
+      // whose geometry is not known until it loads. Half the shortest bounding-box extent, which
+      // is not a new rule so much as the rule the cases above are each a special case of: it
+      // reproduces this switch exactly for `rod`, `sphere`, `disc`, `ring`, `slab` and `prism`.
+      // Falls back to the sphere answer while the file is still loading, which is what the
+      // placeholder actually is. See MeshEntry.chord.
+      const entry = shape.model ? cachedMesh(shape.model) : undefined;
+      return entry ? entry.chord * shape.r : shape.r;
+    }
     case "sphere":
     case "rod":
     default:

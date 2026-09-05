@@ -57,7 +57,10 @@ export function generatePresetThumbs(
     renderer?.dispose();
     host?.remove();
   };
-  const step = (): void => {
+  // Async since `renderThumbFrame` became so: a preset naming a `.glb` has to have it before its
+  // thumbnail is worth taking. The queue is still driven one entry per idle callback, so the wait
+  // costs the page nothing it was not already spending.
+  const step = async (): Promise<void> => {
     const next = queue.shift();
     if (!next) {
       finish();
@@ -71,7 +74,7 @@ export function generatePresetThumbs(
       // Reduced motion must not freeze the offscreen renderer at a blank first frame.
       if (!renderer) renderer = new MaterialRenderer(host, config, { respectReducedMotion: false });
       else renderer.setConfig(config);
-      const canvas = renderThumbFrame(renderer, host);
+      const canvas = await renderThumbFrame(renderer, host);
       if (canvas) presetCache.set(name, canvas.toDataURL("image/webp", 0.9));
       onReady();
     } catch (error) {
@@ -80,9 +83,9 @@ export function generatePresetThumbs(
       finish();
       return;
     }
-    whenIdle(step);
+    whenIdle(() => void step());
   };
-  whenIdle(step);
+  whenIdle(() => void step());
 }
 
 /** Lazy, queued thumbnails for history rows, keyed by entry id. */
@@ -128,7 +131,7 @@ export class HistoryThumbnailer {
         if (id === undefined) break;
         let url: string | null = null;
         try {
-          url = this.renderOne(id);
+          url = await this.renderOne(id);
         } catch (error) {
           console.warn("History thumbnail render failed:", error);
         }
@@ -151,7 +154,7 @@ export class HistoryThumbnailer {
     }
   }
 
-  private renderOne(id: number): string | null {
+  private async renderOne(id: number): Promise<string | null> {
     const config = this.getConfig(id);
     if (!config) return null;
     prepThumbConfig(config);
@@ -161,7 +164,7 @@ export class HistoryThumbnailer {
     } else {
       this.renderer.setConfig(config);
     }
-    const out = renderThumbFrame(this.renderer, this.host);
+    const out = await renderThumbFrame(this.renderer, this.host);
     return out ? out.toDataURL("image/webp", 0.8) : null;
   }
 }

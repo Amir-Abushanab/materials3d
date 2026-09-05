@@ -51,6 +51,7 @@ export * from "./config/groups";
 export * from "./config/palettes";
 export { parseHex, toHex, rgbToHsl } from "./util/color";
 export { outlineFromSvg } from "./util/svg";
+export { parseGlb, loadMesh, preloadMeshes } from "./renderer/glb";
 export type { RGB } from "./util/color";
 export type {
   MaterialOptions,

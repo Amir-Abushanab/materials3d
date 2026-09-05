@@ -23,7 +23,7 @@ import {
   type ShapeConfig,
   ungroupItems,
 } from "@materials3d/core";
-import { bakeScatter, MaterialRenderer } from "@materials3d/core/renderer";
+import { bakeScatter, loadMesh, MaterialRenderer } from "@materials3d/core/renderer";
 import type { RendererKind } from "@materials3d/core";
 import type { MaterialItem } from "@materials3d/core";
 import { PRESETS } from "@materials3d/core/presets";
@@ -73,6 +73,16 @@ const JSON_HINT = "Linted as you type; Apply runs the same validator the rendere
 
 /** A backdrop bigger than this makes every save, share and undo step carry it; refuse it. */
 const MAX_MEDIA_BYTES = 25 * 1024 * 1024;
+
+/**
+ * Same idea as {@link MAX_MEDIA_BYTES}, lower, because a `.glb` costs more than its bytes.
+ *
+ * A backdrop is one texture however big the file is. A model is geometry the renderer walks four
+ * times a frame, so a file at the backdrop's ceiling is not a slow load, it is a scene that never
+ * runs. The parser has its own triangle cap for the same reason and states it in triangles, which
+ * is the honest unit; this is the cheap check that happens before a 25 MB read.
+ */
+const MAX_MODEL_BYTES = 8 * 1024 * 1024;
 
 const ENGINE_OPTIONS = { respectReducedMotion: false };
 
@@ -601,6 +611,60 @@ function pickOutlineSvg(shape: ShapeConfig): void {
   input.click();
 }
 
+/**
+ * Load a shape's geometry from a `.glb` on disk.
+ *
+ * Read as a data URI, like the backdrop and unlike the outline, because this is an ASSET and not
+ * a description: an object URL would not survive a save and reload, and the bytes cannot be
+ * folded into the config's own text the way a `d` string can.
+ *
+ * PARSED BEFORE IT IS APPLIED, which is the difference that matters here. The renderer would load
+ * it on the next rebuild anyway and fall back to a placeholder sphere if it could not, but a
+ * placeholder is indistinguishable from a mesh that legitimately looks like a sphere. Parsing
+ * first means a `.gltf`, a Draco file or a 2-million-triangle scan comes back as the sentence
+ * explaining it, with the shape left exactly as it was.
+ *
+ * `loadMesh` and not `parseGlb`: it caches by URL, so the parse done for validation is the same
+ * one the renderer then finds already waiting, and the shape appears without a placeholder frame.
+ */
+function pickModelGlb(shape: ShapeConfig): void {
+  const input = document.createElement("input");
+  input.type = "file";
+  input.accept = ".glb,model/gltf-binary";
+  input.addEventListener("change", () => {
+    const file = input.files?.[0];
+    if (!file) return;
+    if (file.size > MAX_MODEL_BYTES) {
+      toast(
+        `${file.name} is over ${Math.round(MAX_MODEL_BYTES / 1024 / 1024)} MB; decimate it first`,
+      );
+      return;
+    }
+    const reader = new FileReader();
+    reader.addEventListener("error", () => toast(`Could not read ${file.name}`));
+    reader.addEventListener("load", () => {
+      const url = typeof reader.result === "string" ? reader.result : undefined;
+      if (!url) return;
+      void loadMesh(url).then(
+        () => {
+          shape.model = url;
+          // The kind switches for you, the same courtesy the SVG picker does: picking a file is a
+          // statement of what the shape is meant to BE, and leaving a rod as a rod would read as
+          // a failed upload.
+          shape.kind = "model";
+          applyChange(true);
+          // setConfig, not refresh(): becoming a `model` changes which controls the panel shows.
+          panel.setConfig(config(), presetName);
+          history.commit(config(), presetName, `shape from ${file.name}`);
+        },
+        (error: unknown) => toast(`${file.name}: ${(error as Error).message}`, 5000),
+      );
+    });
+    reader.readAsDataURL(file);
+  });
+  input.click();
+}
+
 /** The badge under the frame. `withWarning` is skipped mid-drag: the size is still changing. */
 function exportAreaLabel(withWarning: boolean): string {
   const width = Math.round(size.width);
@@ -880,7 +944,7 @@ async function shareLink(): Promise<boolean> {
     toast("Too big for a link. Save the config (.json) instead", 4000);
     return false;
   }
-  if (link.strippedMedia) toast("Backdrop media stays out of links; the rest is in", 4000);
+  if (link.strippedMedia) toast("Files picked from disk stay out of links; the rest is in", 4000);
   return copy(link.url);
 }
 
@@ -949,6 +1013,7 @@ function panelHooks(): PanelHooks {
     onOutputSizeChange: refitPreview,
     onPickBackgroundMedia: pickBackgroundMedia,
     onPickOutline: pickOutlineSvg,
+    onPickModel: pickModelGlb,
     onScrollPreview: (value) => renderer.setScrollPreview(value),
     onOpenScrollTest: () => scrollTest.toggle(),
     onRendererChange: (kind) =>
@@ -1223,7 +1288,7 @@ function needsRebuild(path: string): boolean {
  *
  *   m3d.patch({ "beam.incidence": -20, "post.bloom": 0.4 })
  *   m3d.patch({ "items.0.material.ior": 1.6 })
- *   m3d.get("post.bloom")   m3d.config()   m3d.preset("orb")
+ *   m3d.get("post.bloom")   m3d.config()   m3d.preset("knot")
  */
 function exposeDevBridge(): void {
   if (!import.meta.env.DEV) return;

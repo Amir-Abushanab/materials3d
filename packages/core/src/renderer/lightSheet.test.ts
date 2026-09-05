@@ -17,6 +17,8 @@ import {
 } from "./lightSheet";
 import { PRESETS } from "../presets";
 import { ensureSceneConfig } from "../config/model";
+import { KNOT_GLB } from "../knotMesh";
+import { loadMesh } from "./glb";
 
 /** The beam options the `prism` preset resolves to, so these check the SHIPPED numbers rather
  *  than a set invented here that could drift away from them. */
@@ -759,5 +761,77 @@ describe("re-entrant cross-sections", () => {
     }
     expect(viaScan.direction.x).toBeCloseTo(viaHalfPlanes.direction.x, 3);
     expect(viaScan.direction.y).toBeCloseTo(viaHalfPlanes.direction.y, 3);
+  });
+});
+
+/** Bounding-box size of a traced outline. */
+function extent(poly: readonly THREE.Vector2[]): { w: number; h: number } {
+  return {
+    w: Math.max(...poly.map((p) => p.x)) - Math.min(...poly.map((p) => p.x)),
+    h: Math.max(...poly.map((p) => p.y)) - Math.min(...poly.map((p) => p.y)),
+  };
+}
+
+describe("crossSectionFor on a model", () => {
+  const REST = {
+    position: { x: 0, y: 0, z: 0 },
+    rotation: { x: 0, y: 0, z: 0 },
+    scale: { x: 1, y: 1, z: 1 },
+  };
+  const shape = { kind: "model" as const, r: 2.7, sides: 72, model: KNOT_GLB };
+
+  it("is skipped without a pose, since there is nothing to cut", () => {
+    // The two numbers that place a drawn outline cannot place a solid: `roll` and `centre` say
+    // nothing about where the sheet meets it. Better skipped than cut at a guessed height.
+    expect(crossSectionFor(shape, 0, 0)).toBeUndefined();
+  });
+
+  it("is skipped while the mesh is still loading", () => {
+    expect(
+      crossSectionFor({ ...shape, model: "/not-loaded.glb" }, 0, 0, undefined, { z: 0, ...REST }),
+    ).toBeUndefined();
+  });
+
+  it("cuts a loaded mesh into a traceable outline", async () => {
+    await loadMesh(KNOT_GLB);
+    const section = crossSectionFor(shape, 0, 0, undefined, { z: 0, ...REST });
+    expect(section).toBeDefined();
+    expect(section!.length).toBeGreaterThan(3);
+    // A trefoil crosses the sheet in four separate places, so the largest contour is one lobe of
+    // the tube rather than a silhouette of the whole knot. That is the documented bargain: aim
+    // through solid material and the traced path and the drawn solid agree.
+    expect(extent(section!).h).toBeGreaterThan(1);
+  });
+
+  it("follows the sheet up the shape", async () => {
+    await loadMesh(KNOT_GLB);
+    const middle = crossSectionFor(shape, 0, 0, undefined, { z: 0, ...REST })!;
+    const higher = crossSectionFor(shape, 0, 0, undefined, { z: 0.9, ...REST })!;
+    // Different heights cut different material; a section that ignored `z` would be identical.
+    expect(extent(higher)).not.toEqual(extent(middle));
+  });
+
+  it("follows the item, not just the geometry", async () => {
+    await loadMesh(KNOT_GLB);
+    const home = crossSectionFor(shape, 0, 0, undefined, { z: 0, ...REST })!;
+    const moved = crossSectionFor(shape, 0, 0, undefined, {
+      z: 0,
+      ...REST,
+      position: { x: 6, y: 0, z: 0 },
+    })!;
+    const shift = Math.min(...moved.map((p) => p.x)) - Math.min(...home.map((p) => p.x));
+    expect(shift).toBeCloseTo(6, 5);
+  });
+
+  it("grows with the shape radius", async () => {
+    await loadMesh(KNOT_GLB);
+    const small = crossSectionFor({ ...shape, r: 1 }, 0, 0, undefined, { z: 0, ...REST })!;
+    const large = crossSectionFor({ ...shape, r: 2 }, 0, 0, undefined, { z: 0, ...REST })!;
+    expect(extent(large).h / extent(small).h).toBeCloseTo(2, 1);
+  });
+
+  it("misses cleanly when the sheet is off the shape", async () => {
+    await loadMesh(KNOT_GLB);
+    expect(crossSectionFor(shape, 0, 0, undefined, { z: 40, ...REST })).toBeUndefined();
   });
 });

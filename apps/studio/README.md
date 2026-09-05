@@ -22,6 +22,8 @@ selects no preset.
 
 **Aperture** layers jade, opal and amber glass rings around a brass core. Its four shapes drift
 gently, stay in focus, and preserve enough width to keep the outer ring visible on narrow screens.
+Move the pointer to tilt the sculpture; hovering a ring brightens its reflection and adds an
+iridescent sheen. The brass core catches a brighter highlight. Leaving the scene restores its pose.
 
 ## Editing in the viewport
 

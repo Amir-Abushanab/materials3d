@@ -187,7 +187,23 @@
         "rate": 0.22,
         "amount": 0.06
       },
-      "phase": 0
+      "phase": 0,
+      "interaction": {
+        "bindings": [
+          {
+            "source": "hoverSelf",
+            "target": "specular",
+            "to": 0.85,
+            "smoothing": 0.22
+          },
+          {
+            "source": "hoverSelf",
+            "target": "iridescence",
+            "to": 0.5,
+            "smoothing": 0.22
+          }
+        ]
+      }
     },
     {
       "shape": {
@@ -241,7 +257,23 @@
         "rate": 0.22,
         "amount": 0.06
       },
-      "phase": 1.35
+      "phase": 1.35,
+      "interaction": {
+        "bindings": [
+          {
+            "source": "hoverSelf",
+            "target": "specular",
+            "to": 0.85,
+            "smoothing": 0.22
+          },
+          {
+            "source": "hoverSelf",
+            "target": "iridescence",
+            "to": 0.5,
+            "smoothing": 0.22
+          }
+        ]
+      }
     },
     {
       "shape": {
@@ -293,7 +325,23 @@
         "rate": 0.22,
         "amount": 0.06
       },
-      "phase": 2.7
+      "phase": 2.7,
+      "interaction": {
+        "bindings": [
+          {
+            "source": "hoverSelf",
+            "target": "specular",
+            "to": 0.85,
+            "smoothing": 0.22
+          },
+          {
+            "source": "hoverSelf",
+            "target": "iridescence",
+            "to": 0.5,
+            "smoothing": 0.22
+          }
+        ]
+      }
     },
     {
       "shape": {
@@ -347,10 +395,45 @@
         "rate": 0.22,
         "amount": 0.06
       },
-      "phase": 4.050000000000001
+      "phase": 4.050000000000001,
+      "interaction": {
+        "bindings": [
+          {
+            "source": "hoverSelf",
+            "target": "specular",
+            "to": 1.1,
+            "smoothing": 0.22
+          }
+        ]
+      }
     }
   ],
   "groups": [],
+  "interaction": {
+    "bindings": [
+      {
+        "source": "pointerX",
+        "target": "cameraYaw",
+        "to": 4.5,
+        "from": -4.5,
+        "smoothing": 0.24
+      },
+      {
+        "source": "pointerY",
+        "target": "cameraPitch",
+        "to": -3,
+        "from": 3,
+        "smoothing": 0.24
+      },
+      {
+        "source": "hover",
+        "target": "cameraZoom",
+        "to": 1.035,
+        "from": 1,
+        "smoothing": 0.24
+      }
+    ]
+  },
   "quality": 1,
   "dprMax": 1.75,
   "paused": false,

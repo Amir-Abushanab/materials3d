@@ -52,6 +52,12 @@ and slow drift moves reflections without pulling the composition apart. Depth of
 caustics are disabled. A minimum visible width keeps the outer ring inside phone-sized canvases
 without retaining all the empty space of the desktop frame.
 
+Pointer movement adds a small camera tilt and a gentle zoom on entry. Each hovered ring gains
+iridescence and brighter reflections; the brass core catches a brighter highlight. The scene
+settles back on pointer leave. These use existing interaction bindings, so they add no render
+passes or geometry rebuilds. Exported stills retain the authored pose, and the renderer's existing
+reduced-motion and touch policies apply.
+
 Available through `PRESETS.aperture()`, `preset="aperture"`, the studio picker, and
 `gallery/aperture.json`. It uses no external models or textures.
 

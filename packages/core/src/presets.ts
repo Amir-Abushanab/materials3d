@@ -1614,7 +1614,29 @@ export function aperture(): SceneConfig {
       name: names[index],
       motion: { kind: "drift", axis: "y", rate: 0.22, amount: 0.06 },
       phase: index * 1.35,
+      interaction: {
+        bindings: [
+          {
+            source: "hoverSelf",
+            target: "specular",
+            to: index === 3 ? 1.1 : 0.85,
+            smoothing: 0.22,
+          },
+          ...(index < 3
+            ? [{ source: "hoverSelf", target: "iridescence", to: 0.5, smoothing: 0.22 } as const]
+            : []),
+        ],
+      },
     })),
+    interaction: {
+      // Symmetric ranges leave the camera at its authored pose when the pointer relaxes to 0.5.
+      // These bindings update existing uniforms/camera state without rebuilding the rings.
+      bindings: [
+        { source: "pointerX", target: "cameraYaw", from: -4.5, to: 4.5, smoothing: 0.24 },
+        { source: "pointerY", target: "cameraPitch", from: 3, to: -3, smoothing: 0.24 },
+        { source: "hover", target: "cameraZoom", from: 1, to: 1.035, smoothing: 0.24 },
+      ],
+    },
   };
 }
 

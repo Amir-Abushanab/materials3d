@@ -8,12 +8,8 @@ import {
   type SceneConfig,
   type SceneInteractionBinding,
 } from "../config/model";
-import {
-  InteractionController,
-  interactionActive,
-  ITEM_APPLIERS,
-  SCENE_APPLIERS,
-} from "./interaction";
+import { InteractionController, ITEM_APPLIERS, SCENE_APPLIERS } from "./interaction";
+import { interactionActive, tiltActive } from "./interactionGates";
 import { expandScatter } from "./shared";
 
 /**
@@ -41,12 +37,19 @@ function stubContainer() {
   return { el, fire, listeners, counts };
 }
 
-/** A stand-in window, for the release listeners the controller adds while a press is held. */
+/**
+ * A stand-in window, for the release listeners the controller adds while a press is held, and for
+ * the orientation sensor behind the tilt sources. It carries a DeviceOrientationEvent with no
+ * `requestPermission`, i.e. the Android/Chrome shape where tilt needs no gesture — the iOS gate
+ * itself is covered in tilt.test.ts.
+ */
 function stubWindow() {
   const listeners = new Map<string, Set<(e: unknown) => void>>();
   const counts = { added: 0, removed: 0 };
   const win = {
     innerHeight: 800,
+    DeviceOrientationEvent: {},
+    screen: { orientation: { angle: 0 } },
     addEventListener: (type: string, fn: (e: unknown) => void) => {
       counts.added++;
       let set = listeners.get(type);
@@ -510,5 +513,153 @@ describe("ensureSceneConfig, the binding contract the controller relies on", () 
     ]);
     const roundTripped = ensureSceneConfig(JSON.parse(JSON.stringify(config)));
     expect(roundTripped.scatter?.interaction).toEqual(config.scatter?.interaction);
+  });
+});
+
+/** Deliver one orientation reading to whatever the controller attached at the window. */
+function emit(win: ReturnType<typeof stubWindow>, beta: number, gamma: number): void {
+  win.fire("deviceorientation", { beta, gamma });
+}
+
+describe("tilt", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  describe("tiltActive", () => {
+    it("is off until something actually reads tilt", () => {
+      // The whole point of a separate predicate: a cursor-only scene must attach no sensor.
+      expect(tiltActive(createDefaultConfig())).toBe(false);
+      expect(tiltActive(sceneWith([{ source: "hover", target: "bloom", to: 0.2 }]))).toBe(false);
+      expect(tiltActive(sceneWith([{ source: "tiltX", target: "bloom", to: 0.2 }]))).toBe(true);
+
+      const lampScene = createDefaultConfig();
+      lampScene.lamps[0].bindings = [{ source: "tiltY", target: "y", to: 0.9 }];
+      expect(tiltActive(lampScene)).toBe(true);
+
+      const itemScene = createDefaultConfig();
+      itemScene.scatter = undefined;
+      const item = createItem();
+      item.interaction = { bindings: [{ source: "tiltX", target: "hueShift", to: 0.5 }] };
+      itemScene.items = [item];
+      expect(tiltActive(itemScene)).toBe(true);
+
+      const scatterScene = createDefaultConfig();
+      scatterScene.scatter!.interaction = {
+        bindings: [{ source: "tiltY", target: "emission", to: 0.4 }],
+      };
+      expect(tiltActive(scatterScene)).toBe(true);
+    });
+
+    it("counts the cursor stand-in, and yields to the master switch", () => {
+      const config = createDefaultConfig();
+      config.interaction = { tilt: { pointer: true } };
+      expect(tiltActive(config)).toBe(true);
+      config.interaction.enabled = false;
+      expect(tiltActive(config)).toBe(false);
+    });
+
+    it("does not arm the sensor for a tilt block nobody reads", () => {
+      // `tilt` is tuning, not a switch: a range with no tilt binding still reads nothing.
+      const config = createDefaultConfig();
+      config.interaction = { tilt: { range: 10 } };
+      expect(tiltActive(config)).toBe(false);
+    });
+  });
+
+  it("attaches the orientation listener only for a scene that reads tilt", () => {
+    const win = stubWindow();
+    vi.stubGlobal("window", win.win);
+
+    const cursorOnly = stubContainer();
+    const plain = new InteractionController(cursorOnly.el, () =>
+      sceneWith([{ source: "hover", target: "bloom", to: 1 }]),
+    );
+    plain.update(1 / 60);
+    expect(win.counts.added).toBe(0);
+
+    const tilted = stubContainer();
+    const ic = new InteractionController(tilted.el, () =>
+      sceneWith([{ source: "tiltX", target: "bloom", to: 1 }]),
+    );
+    ic.update(1 / 60);
+    expect(win.counts.added).toBe(1);
+    ic.dispose();
+    expect(win.counts.removed).toBe(1);
+  });
+
+  it("drives a binding from the sensor, measured against the pose it started in", () => {
+    const win = stubWindow();
+    vi.stubGlobal("window", win.win);
+    const { el } = stubContainer();
+    const binding: SceneInteractionBinding = { source: "tiltX", target: "bloom", to: 1 };
+    const config = sceneWith([binding]);
+    config.interaction!.tilt = { range: 20 };
+    const ic = new InteractionController(el, () => config);
+
+    ic.update(1 / 60);
+    emit(win, 55, 0); // a phone held at a normal 55°: this is centre, not one end
+    converge(ic);
+    expect(ic.bindingValue(binding)).toBeCloseTo(0.5, 2);
+
+    emit(win, 55, 20); // a full 20° range to the right
+    converge(ic);
+    expect(ic.bindingValue(binding)).toBeGreaterThan(0.98);
+  });
+
+  it("stands in for the cursor when asked, and yields the moment a real pointer arrives", () => {
+    const win = stubWindow();
+    vi.stubGlobal("window", win.win);
+    const { el, fire } = stubContainer();
+    const binding: SceneInteractionBinding = { source: "pointerX", target: "bloom", to: 1 };
+    const config = sceneWith([binding]);
+    config.interaction!.tilt = { range: 20, pointer: true };
+    const ic = new InteractionController(el, () => config);
+
+    ic.update(1 / 60);
+    emit(win, 0, 0);
+    emit(win, 0, 20); // tilted fully right — the cursor-authored binding should follow
+    converge(ic);
+    expect(ic.bindingValue(binding)).toBeGreaterThan(0.98);
+
+    // A finger lands at the middle of the 100x100 stub: the sensor stops writing the cursor.
+    fire("pointermove", { clientX: 50, clientY: 50 });
+    converge(ic);
+    expect(ic.bindingValue(binding)).toBeCloseTo(0.5, 2);
+
+    // ...and gives it back on leave, rather than stranding the scene at centre.
+    fire("pointerleave", { buttons: 0 });
+    converge(ic);
+    expect(ic.bindingValue(binding)).toBeGreaterThan(0.98);
+  });
+
+  it("settles to the neutral pose for the one paused frame", () => {
+    const win = stubWindow();
+    vi.stubGlobal("window", win.win);
+    const { el } = stubContainer();
+    const binding: SceneInteractionBinding = { source: "tiltY", target: "bloom", to: 1 };
+    const config = sceneWith([binding]);
+    const ic = new InteractionController(el, () => config);
+
+    ic.update(1 / 60);
+    emit(win, 0, 0);
+    emit(win, 25, 0);
+    converge(ic);
+    expect(ic.bindingValue(binding)).toBeGreaterThan(0.98);
+    ic.settle();
+    expect(ic.bindingValue(binding)).toBeCloseTo(0.5, 6);
+  });
+
+  it("drops the sensor when the last tilt binding goes away", () => {
+    // A studio edit can remove the binding mid-session; the listener must not outlive it.
+    const win = stubWindow();
+    vi.stubGlobal("window", win.win);
+    const { el } = stubContainer();
+    const config = sceneWith([{ source: "tiltX", target: "bloom", to: 1 }]);
+    const ic = new InteractionController(el, () => config);
+
+    ic.update(1 / 60);
+    expect(win.counts.added).toBe(1);
+    config.interaction!.bindings = [{ source: "hover", target: "bloom", to: 1 }];
+    ic.update(1 / 60);
+    expect(win.counts.removed).toBe(1);
   });
 });

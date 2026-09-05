@@ -20,6 +20,9 @@ export * as shapes from "./shapes";
 export * as motions from "./motions";
 export { buildShape, defaultPath } from "./shapes";
 export { applyMotion, applyMotions, isAnimated } from "./motions";
-export { InteractionController, interactionActive } from "./interaction";
+export { interactionActive } from "./interactionGates";
+// Type-only: the class itself lives in the lazily-fetched interaction chunk (see interactionGates.ts),
+// and a value re-export here would drag that chunk back into every bundle of this entry.
+export type { InteractionController } from "./interaction";
 export { parseGlb, loadMesh, cachedMesh, preloadMeshes, MAX_MESH_TRIANGLES } from "./glb";
 export type { MeshEntry } from "./glb";

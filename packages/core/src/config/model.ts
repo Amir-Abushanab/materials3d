@@ -1045,6 +1045,10 @@ export const INTERACTION_SOURCE_NAMES = [
   "scrollVelocity",
   /** One-shot 0 to 1 latch on first visibility, for entrance choreography. */
   "appear",
+  /** Device tilt, the way a ball would roll on the screen: 1 = right edge down. 0.5 = neutral pose. */
+  "tiltX",
+  /** Device tilt, the way a ball would roll on the screen: 1 = bottom edge down. 0.5 = neutral pose. */
+  "tiltY",
 ] as const;
 
 /**
@@ -1143,8 +1147,58 @@ export interface SceneInteractionConfig {
   enabled?: boolean;
   /** Follow coarse (touch) pointers. Default false, touch is ignored unless this is true. */
   touch?: boolean;
+  /** Tuning for the device-tilt input. OPTIONAL even on a scene that uses tilt: a `tiltX` / `tiltY`
+   *  binding is what arms the sensor, and this only shapes how it reads. */
+  tilt?: TiltConfig;
   /** Input→param bindings driving SCENE params (time / camera / post / lamp gain). */
   bindings?: SceneInteractionBinding[];
+}
+
+/**
+ * Device tilt (a phone or tablet's orientation sensor) as an interaction input, feeding the `tiltX`
+ * and `tiltY` sources. It is the one input a phone has that a cursor-authored scene doesn't: a page
+ * whose lamp and optics bindings all read `pointerX` / `pointerY` is completely inert on a phone,
+ * and a couple of tilt bindings — or `pointer: true` below — is what brings it back. On these
+ * shapes it is also the most literal reading of the material: tilt the device and the specular
+ * highlight travels across the glass the way it would on a real object in your hand.
+ *
+ * Both axes read the way a ball would roll on the screen: `tiltX` → 1 as the right edge drops,
+ * `tiltY` → 1 as the bottom edge drops, and both rest at 0.5 in whatever pose the reader was
+ * already holding the device in when the first reading landed.
+ *
+ * This block is TUNING, not the on-switch: binding anything to `tiltX` / `tiltY` arms the sensor by
+ * itself, the same way `pointerX` needs no "pointer" block. A scene that binds neither (and doesn't
+ * set `pointer` below) attaches no `deviceorientation` listener at all.
+ *
+ * ARMED is not the same as LIVE, and on iOS it never becomes live on its own. Safari gates the
+ * sensor behind a modal permission dialog, and nothing here opens one: a tilt-bound scene on an
+ * iPhone reads 0.5 on both axes and renders exactly as it would with no tilt block at all. That is
+ * deliberate — a background effect is not worth interrupting a reader to ask for a sensor. Design
+ * for tilt as an enhancement that some phones simply don't get, the way you would a hover state.
+ *
+ * `renderer.enableTilt()` (or the element's / React handle's) is the explicit opt-in for a page
+ * that has decided otherwise — an interactive piece a reader came to play with, where a tap that
+ * opens the dialog is part of the deal. `renderer.tiltStatus()` reports `"prompt"` on a gated
+ * platform, which is information, not an instruction to build a permission button.
+ */
+export interface TiltConfig {
+  /** Degrees away from the neutral pose that reach the 0 / 1 ends. Default 25 — about the range of
+   *  a wrist, not of a whole arm. Smaller = a twitchier scene that reacts to a nudge. */
+  range?: number;
+  /** Follow smoothing, seconds. Default 0.18: sensor data is noisy and a still hand still jitters,
+   *  so this is slower than the pointer's 0.12. */
+  smoothing?: number;
+  /** Flip the horizontal / vertical direction (which way is "up" is a property of the scene). */
+  invertX?: boolean;
+  invertY?: boolean;
+  /**
+   * Also drive the shared CURSOR from tilt, so a scene authored for `pointerX` / `pointerY` comes
+   * alive on a phone that has no cursor at all, without authoring a second set of bindings. A real
+   * pointer always wins: this only fills in while none is on the element. `hoverSelf` / `pressSelf`
+   * are unaffected — those raycast a real pointer at a shape, which tilt cannot stand in for.
+   * Default false.
+   */
+  pointer?: boolean;
 }
 
 /** True for a valid interaction source string: a built-in name or a non-empty `custom:<name>`. */
@@ -1201,6 +1255,15 @@ export function normalizeSceneInteraction(raw: SceneInteractionConfig): SceneInt
   const out: SceneInteractionConfig = {};
   if (raw.enabled !== undefined) out.enabled = raw.enabled !== false;
   if (raw.touch !== undefined) out.touch = raw.touch === true;
+  if (raw.tilt) {
+    const t: TiltConfig = {};
+    if (raw.tilt.range !== undefined) t.range = clamp(num(raw.tilt.range, 25), 1, 90);
+    if (raw.tilt.smoothing !== undefined) t.smoothing = clamp(num(raw.tilt.smoothing, 0.18), 0, 2);
+    if (raw.tilt.invertX !== undefined) t.invertX = bool(raw.tilt.invertX, false);
+    if (raw.tilt.invertY !== undefined) t.invertY = bool(raw.tilt.invertY, false);
+    if (raw.tilt.pointer !== undefined) t.pointer = bool(raw.tilt.pointer, false);
+    out.tilt = t;
+  }
   if (raw.bindings !== undefined) {
     out.bindings = cleanBindings<SceneInteractionTarget>(raw.bindings, SCENE_TARGET_NAMES);
   }

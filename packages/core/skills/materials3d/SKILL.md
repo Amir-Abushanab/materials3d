@@ -151,8 +151,8 @@ replace whole.
 Bindings map a normalised 0 to 1 input onto a parameter and write uniforms, never the config:
 `value = mix(from ?? authored, to, smoothedSource)`. Sources: `scroll`, `hover`, `hoverSelf` (the
 cursor over this shape), `pointerX`, `pointerY`, `pointerSpeed`, `press`, `pressSelf`,
-`scrollVelocity`, `appear` (a one-shot entrance latch), `custom:<name>` fed by
-`renderer.setInteractionInput(name, value)`.
+`scrollVelocity`, `appear` (a one-shot entrance latch), `tiltX` / `tiltY` (device tilt, see below),
+`custom:<name>` fed by `renderer.setInteractionInput(name, value)`.
 
 - Scene bindings in `interaction.bindings`: `timeOffset`, `cameraZoom`, `lampGain`, `aperture`,
   `bloom`, `haze`, `beamIncidence`, and more.
@@ -172,6 +172,33 @@ lamps: [{ x: 0.35, y: 0.4, r: 0.2, color: "#f0803a", intensity: 1,
 
 Touch is ignored unless `interaction: { touch: true }`. Reduced motion, pauses and captures settle
 to the authored rest state, so exports stay deterministic.
+
+### Tilt (the input a phone has and a desktop doesn't)
+
+`tiltX` / `tiltY` read the device's orientation sensor, normalized 0..1 the way a ball would roll on
+the screen (`tiltX` → 1 as the right edge drops, `tiltY` → 1 as the bottom edge drops) and resting at
+0.5 in whatever pose the reader was already holding — the first reading becomes the neutral centre,
+so a phone held at the usual 50° doesn't peg every binding at one end. On these materials it is the
+most literal reading of the surface: tilt the device and the highlight travels across the glass the
+way it would on a real object in your hand.
+
+Binding either source arms the sensor; a scene that mentions neither attaches no `deviceorientation`
+listener. `interaction.tilt` is optional tuning on top: `range` (degrees to the 0/1 ends, default
+25), `smoothing` (default 0.18), `invertX` / `invertY`, and `pointer: true` — which lets tilt drive
+the shared CURSOR, so the lamp-follows-the-cursor scene above works on a phone with no second set of
+bindings (a real finger always wins; `hoverSelf` / `pressSelf` still need a real pointer).
+
+**iOS gets no tilt, on purpose.** Safari gates the sensor behind a modal permission dialog, and
+nothing in this library opens one — a tilt-bound scene on an iPhone reads 0.5 on both axes and looks
+exactly like a scene with no tilt. Treat tilt as an enhancement some phones don't get, the way you
+would a hover state; don't build a fallback for it and don't build a permission button for it.
+
+If a page genuinely warrants asking — an interactive piece a reader came to play with, not a
+background — `enableTilt()` on the renderer / handle / element is the explicit opt-in. Call it from
+a tap handler, directly, without awaiting anything first or the gesture is spent. `tiltStatus()`
+reports `"unsupported"` (no sensor), `"prompt"` (gated, inert unless you ask), `"denied"`,
+`"listening"` or `"live"`. Everywhere but iOS tilt is live as soon as it is bound and `enableTilt()`
+is a no-op that resolves true. `recenterTilt()` re-takes the neutral pose after a change of grip.
 
 ## Poster and fallback
 

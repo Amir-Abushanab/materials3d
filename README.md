@@ -149,11 +149,20 @@ so a recorded clip loops.
 
 A binding maps a normalised input to a parameter: `value = mix(from ?? authored, to, smoothedSource)`.
 Sources: `scroll`, `hover`, `hoverSelf`, `pointerX`, `pointerY`, `pointerSpeed`, `press`,
-`pressSelf`, `scrollVelocity`, `appear`, `custom:<name>`. Scene bindings go in
+`pressSelf`, `scrollVelocity`, `appear`, `tiltX` / `tiltY`, `custom:<name>`. Scene bindings go in
 `interaction.bindings` (`cameraZoom`, `lampGain`, `bloom`, `beamIncidence`, ...), shape bindings in
 `items[i].interaction.bindings` (optics, `hueShift`, `positionX`, `positionY`), lamp bindings in
 `lamps[i].bindings` (`x`, `y`, `radius`, `intensity`). They write uniforms, never the config. Touch
 is ignored unless `interaction.touch` is true.
+
+`tiltX` / `tiltY` are the device's orientation sensor, normalized the way a ball would roll on the
+screen and resting at 0.5 in whatever pose the reader was already holding. Binding either one arms
+the sensor (no listener is attached otherwise); `interaction.tilt` tunes it — `range`, `smoothing`,
+`invertX` / `invertY`, and `pointer: true` to let tilt stand in for the cursor a phone doesn't have,
+which is what makes the lamp above follow a phone. iOS gets no tilt on purpose: Safari gates the sensor behind a modal
+permission dialog and nothing here opens one, so a tilt-bound scene on an iPhone reads 0.5 on both
+axes and looks exactly like one with no tilt. Treat it as an enhancement some phones don't get. A
+page that genuinely warrants asking can call `handle.enableTilt()` from a tap.
 
 ```ts
 lamps: [{ x: 0.35, y: 0.4, r: 0.2, color: "#f0803a", intensity: 1,

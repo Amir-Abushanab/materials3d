@@ -1,6 +1,6 @@
 {
   "name": "@materials3d/element",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Drop-in Materials3D scene for Vue, Svelte, or plain HTML: the <materials-3d> custom element",
   "keywords": [
     "custom-elements",

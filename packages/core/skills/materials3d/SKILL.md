@@ -11,7 +11,7 @@ description: >
 metadata:
   type: core
   library: "@materials3d/core"
-  library_version: "0.2.0"
+  library_version: "0.3.0"
 sources:
   - "Amir-Abushanab/materials3d:README.md"
   - "Amir-Abushanab/materials3d:packages/core/README.md"

@@ -1,6 +1,6 @@
 {
   "name": "@materials3d/core",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Scene-level materials for the web: the four-pass renderer, shapes, motions and config model behind Materials Studio",
   "keywords": [
     "background",

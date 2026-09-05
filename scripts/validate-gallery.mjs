@@ -69,6 +69,18 @@ await run(async () => {
       fail(`gallery/community/${file}: embedded image/video data; use a hosted URL`);
       continue;
     }
+    // A `model` shape carries a `.glb` the same way the backdrop carries an image, so it needs the
+    // same rule and for the same reason: the studio's picker writes a data URI, and one megabytes
+    // long is a config nobody can review in a diff. It hangs off every shape rather than off the
+    // config, so this is a walk where the two above are field reads.
+    const shapes = [
+      ...(entry.config.items ?? []).map((item) => item?.shape),
+      entry.config.scatter?.shape,
+    ];
+    if (shapes.some((shape) => /^data:/i.test(shape?.model ?? ""))) {
+      fail(`gallery/community/${file}: embedded .glb data; host the file and link it`);
+      continue;
+    }
     try {
       core.ensureSceneConfig(entry.config);
     } catch (error) {

@@ -9,15 +9,16 @@
  * a bundle older than any of them, or no bundle, means build.
  */
 import { spawnSync } from "node:child_process";
-import { existsSync, readdirSync, statSync } from "node:fs";
-import { relative, resolve } from "node:path";
+import { copyFileSync, existsSync, mkdirSync, readdirSync, statSync } from "node:fs";
+import { basename, relative, resolve } from "node:path";
 import { parseArgs, run } from "./lib/cli.mjs";
-import { BUNDLE, CORE, ROOT } from "./lib/paths.mjs";
+import { BUNDLE, CORE, ROOT, STUDIO_PUBLIC } from "./lib/paths.mjs";
 
 const USAGE = `usage: node scripts/ensure-standalone.mjs [--force]
 
 Builds packages/core/dist/standalone/materials3d.standalone.js unless it is newer than every input
-(packages/core/src, vite.standalone.config.ts, package.json, tsconfig.json and pnpm-lock.yaml).
+(packages/core/src, vite.standalone.config.ts, package.json, tsconfig.json and pnpm-lock.yaml),
+then copies it into apps/studio/public/ where the studio serves it from.
 
   --force   build even when the bundle is up to date`;
 
@@ -28,6 +29,13 @@ const INPUTS = [
   resolve(CORE, "tsconfig.json"),
   resolve(ROOT, "pnpm-lock.yaml"),
 ];
+
+/** Put the built bundle where the studio can serve it. Gitignored at the destination: it is build
+ *  output that happens to live beside committed files. */
+function publish() {
+  mkdirSync(STUDIO_PUBLIC, { recursive: true });
+  copyFileSync(BUNDLE, resolve(STUDIO_PUBLIC, basename(BUNDLE)));
+}
 
 /** The newest file under a path, with its mtime. A directory's own mtime ignores edits inside it. */
 function newest(path) {
@@ -60,6 +68,9 @@ await run(() => {
     if (changed) reason = `${relative(ROOT, changed.path)} is newer than the bundle`;
   }
   if (!reason) {
+    // Still copy: the bundle can be current while the studio's copy is missing, which is what a
+    // fresh clone plus a `pnpm build` in the core package alone looks like.
+    publish();
     console.log("standalone bundle is up to date");
     return;
   }
@@ -72,4 +83,5 @@ await run(() => {
   if (result.status !== 0) {
     throw new Error(`build:standalone exited with ${result.status ?? result.signal}`);
   }
+  publish();
 });

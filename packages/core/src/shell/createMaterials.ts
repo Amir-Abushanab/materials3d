@@ -216,6 +216,13 @@ export function createMaterialsImpl<R extends RendererKind = "webgl">(
     if (aborted) return;
 
     const full: Partial<SceneConfig> = { ...core.createDefaultConfig(), ...staged };
+    // Before the renderer exists, not after. A `model` shape draws a placeholder sphere until its
+    // `.glb` arrives and the renderer rebuilds itself, which is the right behaviour for an editor
+    // and the wrong one for a hero: the poster would cross-fade to a sphere and then pop to the
+    // real shape. Waiting here folds that into the load the poster is already covering.
+    // Never rejects, so a mesh that will not load costs a frame of placeholder, not the scene.
+    await core.preloadMeshes(full);
+    if (aborted) return;
     const rendererOptions: MaterialRendererOptions = { respectReducedMotion };
     renderer = new core.MaterialRenderer(container, full, rendererOptions);
     const canvas = renderer.canvas;

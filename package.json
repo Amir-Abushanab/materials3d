@@ -19,6 +19,7 @@
     "knip": "knip",
     "licenses:check": "node scripts/check-licenses.mjs",
     "lint": "oxlint .",
+    "make:glb": "node scripts/make-glb.mjs",
     "lint:fix": "oxlint . --fix",
     "pack:all": "pnpm -r --filter \"@materials3d/*\" exec pnpm pack",
     "prepare": "git config core.hooksPath .githooks || true",

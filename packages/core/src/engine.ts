@@ -49,6 +49,17 @@ export interface Engine {
   refreshPlayback(): void;
   seek(time: number): void;
   renderOnce(): void;
+  /**
+   * Resolves once every `.glb` this scene names has loaded and been built into geometry.
+   *
+   * Anything that draws EXACTLY ONE frame has to wait on this, because a `model` shape draws a
+   * placeholder sphere until its file arrives and the scene rebuilds. A running loop picks the
+   * rebuild up on its next frame and needs nothing; a single-shot render has no next frame, so it
+   * captures the placeholder and the output says nothing about it. {@link captureImage} awaits it
+   * for you. `seek` and `renderOnce` cannot, being synchronous, so a caller pairing them with a
+   * pixel read (the studio's thumbnails) awaits this first.
+   */
+  whenModelsReady(): Promise<void>;
   getConfig(): SceneConfig;
   setConfig(config: Partial<SceneConfig>): void;
   setLamps(lamps: LampConfig[]): unknown;

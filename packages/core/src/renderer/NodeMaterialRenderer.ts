@@ -58,6 +58,7 @@ import {
 } from "../config/model";
 import type { ItemConfig } from "../config/model";
 import { buildShape, defaultPath } from "./shapes";
+import { loadModels } from "./glb";
 import type { AddOptions } from "./MaterialRenderer";
 import {
   backdropLayout,
@@ -307,6 +308,24 @@ export class NodeMaterialRenderer implements Engine {
   /** Set by `dispose()`. Every continuation chained on `ready` and every async callback checks it:
    *  the device negotiation and the media loads outlive a renderer torn down mid-flight. */
   private disposed = false;
+
+  /**
+   * Resolves once every model this scene names has loaded AND been built into geometry.
+   *
+   * Awaited by {@link captureImage}, and that is what it is for: a still is taken on one explicit
+   * frame with no loop running, so without this a capture races the fetch and photographs the
+   * placeholder sphere. That failure is invisible in the output, which is the worst kind, a poster
+   * or a headless render that is simply of the wrong shape, with nothing to say so.
+   *
+   * One await is enough. The rebuild the load triggers calls {@link syncModels} again, but by then
+   * every URL is cached, so the second call has nothing to fetch and resolves without work.
+   */
+  private modelsPending: Promise<void> = Promise.resolve();
+
+  /** Bumped per model batch, so a load that lands late or after dispose() is thrown away. */
+  private modelLoadId = 0;
+  /** Model URLs this renderer has already tried; see {@link loadModels}. */
+  private readonly modelAttempted = new Set<string>();
   /** The dev probe, read once per build and refresh rather than per frame; see `devProbe`. */
   private probe = devProbe();
   /** Coalesces observer callbacks into one `resize` per animation frame. */
@@ -1779,10 +1798,14 @@ export class NodeMaterialRenderer implements Engine {
       .filter((c): c is NonNullable<typeof c> => c !== undefined);
     const sections = targets
       .map((c) =>
-        crossSectionFor(c.shape, beam.rotation, c.rotation.z, {
-          x: c.position.x,
-          y: c.position.y,
-        }),
+        crossSectionFor(
+          c.shape,
+          beam.rotation,
+          c.rotation.z,
+          { x: c.position.x, y: c.position.y },
+          // See the note in MaterialRenderer: only a `model` reads the pose, and it needs all of it.
+          { z: beam.z, position: c.position, rotation: c.rotation, scale: c.scale },
+        ),
       )
       .filter((p): p is NonNullable<typeof p> => p !== undefined);
     const polygon = sections[0] ?? prismCrossSection(beam.radius, beam.sides, beam.rotation);
@@ -1939,6 +1962,17 @@ export class NodeMaterialRenderer implements Engine {
       return entry;
     });
     this.items.push(...kept);
+    this.syncModels();
+  }
+
+  /** Load this scene's models, then repaint with them. See {@link loadModels}. */
+  private syncModels(): void {
+    const loadId = ++this.modelLoadId;
+    this.modelsPending = loadModels(this.resolvedItems, this.modelAttempted).then((arrived) => {
+      // Only the newest batch may land, and nothing may land after dispose().
+      if (this.disposed || loadId !== this.modelLoadId || !arrived) return;
+      this.rebuild();
+    });
   }
 
   /** The item entry for a posed mesh, with the applier arguments built once. */
@@ -3530,6 +3564,11 @@ export class NodeMaterialRenderer implements Engine {
     return this.config;
   }
 
+  /** See {@link Engine.whenModelsReady}. */
+  whenModelsReady(): Promise<void> {
+    return this.modelsPending;
+  }
+
   /**
    * Adopt a new scene.
    *
@@ -3602,6 +3641,9 @@ export class NodeMaterialRenderer implements Engine {
   }
 
   async captureImage(mime = "image/webp", quality?: number, time?: number): Promise<Blob> {
+    // FIRST, before any camera or time state is touched: a model landing mid-capture rebuilds the
+    // scene, which would undo the pose set up below. See {@link modelsPending}.
+    await this.modelsPending;
     if (time !== undefined) this.time = time;
     // Strip the live interaction state, exactly as the WebGL engine does. `applyBindings` already
     // writes the REST values while `capturing`, see `draw`, but the CAMERA is posed from these

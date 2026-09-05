@@ -7,13 +7,24 @@
  * a single import.
  */
 import { createServer } from "node:http";
+import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { extname, relative, resolve } from "node:path";
 import { chromium } from "playwright";
-import { BUNDLE, DIST, RENDERS, threeBuildDir } from "./paths.mjs";
+import { BUNDLE, DIST, RENDERS, STUDIO_PUBLIC, threeBuildDir } from "./paths.mjs";
 
 export * from "./paths.mjs";
 export * from "./cli.mjs";
+
+/** Content types for what the studio's public dir actually holds. */
+const ASSET_TYPES = {
+  ".glb": "model/gltf-binary",
+  ".json": "application/json",
+  ".png": "image/png",
+  ".webp": "image/webp",
+  ".jpg": "image/jpeg",
+  ".svg": "image/svg+xml",
+};
 
 /** One full-window host, which is what the single-renderer scripts want. */
 const HOST_HTML = `<!doctype html><meta charset=utf-8><style>html,body{margin:0}#host{position:fixed;inset:0}</style><div id=host></div>`;
@@ -35,13 +46,27 @@ export const sideBySideHtml = (width, height) =>
  *   /bundle.js       the standalone bundle, served as is
  *   /dist/<path>.js  packages/core/dist
  *   /<file>.js       three's build directory
+ *   /<asset>         apps/studio/public, when the file is there
  *   anything else    `html`
+ *
+ * The asset case is what lets a scene naming `/knot.glb` render here as it does in the studio.
+ * Without it every non-`.js` request answered with the host HTML, so a `model` shape fetched a
+ * page, failed to parse it, and drew the placeholder sphere: a still of the wrong scene with
+ * nothing on the image to say so.
  */
 export async function serve({ html = HOST_HTML } = {}) {
   const threeBuild = threeBuildDir();
   const server = createServer(async (req, res) => {
     const name = (req.url ?? "/").split("?")[0];
     if (!name.endsWith(".js")) {
+      const asset = resolve(STUDIO_PUBLIC, name.slice(1));
+      // Inside the public dir and actually there, or it is a page request. The containment check
+      // is what stops a `..` in the path from serving the repo.
+      const contained = !relative(STUDIO_PUBLIC, asset).startsWith("..");
+      if (name.length > 1 && contained && existsSync(asset)) {
+        const type = ASSET_TYPES[extname(asset)] ?? "application/octet-stream";
+        return res.writeHead(200, { "content-type": type }).end(await readFile(asset));
+      }
       return res.writeHead(200, { "content-type": "text/html" }).end(html);
     }
     const bundle = name === "/bundle.js";

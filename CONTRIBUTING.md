@@ -55,7 +55,7 @@ Dev builds expose `window.m3d`, a handle on the live scene:
 | `m3d.get("post.bloom")`                                   | read one dotted path                                                 |
 | `m3d.patch({ "post.bloom": 0.4, "beam.incidence": -20 })` | write dotted paths and apply them; a path that does not exist throws |
 | `m3d.set({ "items.0.material.iridescence": 0.3 })`        | like `patch`, but creates a missing path                             |
-| `m3d.preset("orb")`                                       | load a preset                                                        |
+| `m3d.preset("knot")`                                      | load a preset                                                        |
 | `m3d.presets()`                                           | the preset names                                                     |
 | `m3d.still()`                                             | a PNG of the current frame, as an object URL                         |
 
@@ -91,8 +91,8 @@ above is the README clip: 18.48 s is one turn of the skewer rods at their author
 defaults to 12; frame durations are whole milliseconds.
 
 ```bash
-pnpm sweep orb +items.0.material.magnify=0,0.5,1
-pnpm sweep orb plate.z=-2,-6,-14 +items.0.material.magnify=0,1
+pnpm sweep knot +items.0.material.magnify=0,0.5,1
+pnpm sweep knot plate.z=-2,-6,-14 +items.0.material.magnify=0,1
 ```
 
 `sweep` renders one labelled contact sheet: one `path=v,v,v` axis is a row, two make a grid. A
@@ -113,6 +113,23 @@ pnpm calibrate reference.png render.png [--box x0,y0,x1,y1] [--step n]
 `calibrate` measures the clear-glass ratio and hue histogram of one or two PNGs. See
 [docs/technique.md](docs/technique.md#14-calibration).
 
+## Test meshes
+
+`pnpm make:glb` writes a `.glb` to point a `model` shape at. It exists because the encodings worth
+testing are the ones no exporter hands you on request: nothing emits a sparse accessor because you
+asked, and quantization is a checkbox some pipelines have and others do not.
+
+```bash
+pnpm make:glb                                   # renders/test.glb, plain float positions
+pnpm make:glb --encode quantized                # normalized shorts + the node scale that undoes them
+pnpm make:glb --encode quantized --sparse       # one vertex displaced through a sparse override
+pnpm make:glb --tubes 400 --sides 40            # denser, for pushing at the 250k triangle cap
+```
+
+The shape is a torus knot: it passes through itself and has a hole, so if it renders correctly the
+reader handled the node walk and the winding. `--sparse` puts a visible spike on it, which is what
+makes the override something you can see rather than arithmetic you have to trust.
+
 ## Gallery
 
 `gallery/*.json` is generated from the presets by `pnpm gallery:build` and checked by
@@ -122,7 +139,19 @@ match its preset. After changing a preset, run `gallery:build` and commit the JS
 Community scenes live in `gallery/community/` as `{ title, author, config }`. The studio's
 Publish to gallery button opens GitHub's new-file page for that directory with the scene
 prefilled, so a submission arrives as a pull request. `gallery:validate` checks that each one is a
-runnable config and carries no embedded image or video data.
+runnable config and carries no embedded image or video data, and no embedded `.glb`.
+
+There are two ways a scene can name a mesh, and the repo has one of each on purpose. The `knot`
+preset carries its `.glb` inline as a data URI, because a preset ships to other people's
+applications and cannot assume a URL resolves there; see `src/knotMesh.ts` for the reasoning and
+why it should stay the only one. Everything else links a hosted file, which is what you should do
+with your own model.
+
+A linked `model` scene needs its mesh somewhere both the studio and the headless scripts can serve
+it: `apps/studio/public/`. That directory is Vite's `publicDir`, it
+ships with the deployed studio, and `scripts/lib/harness.mjs` serves it too, so
+`pnpm render gallery/community/knot.json` draws the same scene the browser does. The standalone
+bundle is copied in there by `ensure-standalone` and is gitignored; the meshes beside it are not.
 
 ## The agent skill
 

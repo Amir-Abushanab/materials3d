@@ -729,8 +729,10 @@ export interface MaterialConfig {
  * hexagon is just a lathe with `sides: 6`. `arrow` (a swept 2D path) and `blob` (a sphere with
  * seeded low-frequency lumps baked into its vertices) are the exceptions.
  *
- * `path` is the escape hatch: an arbitrary outline given as SVG path data and extruded, for the
- * silhouettes none of the above can reach. See {@link ShapeConfig.outline}.
+ * The last two are the escape hatches, and they are a pair: `path` takes an arbitrary outline as
+ * SVG path data and extrudes it, for the silhouettes none of the above can reach, and `model`
+ * takes a whole `.glb`, for the solids no outline can describe. See {@link ShapeConfig.outline}
+ * and {@link ShapeConfig.model}.
  */
 export type ShapeKind = (typeof SHAPE_KINDS)[number];
 
@@ -747,6 +749,7 @@ export const SHAPE_KINDS = [
   "blob",
   "slab",
   "path",
+  "model",
 ] as const;
 
 /**
@@ -881,6 +884,36 @@ export interface ShapeConfig {
    * to show before anything has been typed into it.
    */
   outline?: string;
+  /**
+   * The `.glb` a `model` shape draws, as a URL or a `data:` URI.
+   *
+   * The other escape hatch. `outline` reaches every silhouette that can be drawn flat and
+   * extruded, which is a large family and still only a family: a faceted gem, a bottle, a
+   * moulded part and anything a designer built in Blender have interior form that no outline
+   * carries. This is the field that says "whatever they made", and it is why the shape list
+   * stops at twelve primitives instead of growing a thirteenth every time one is not enough.
+   *
+   * A URL and not the geometry itself, unlike `outline`, and the difference is not arbitrary. A
+   * `d` string is a DESCRIPTION: compact, diffable, and small enough that a whole scene still
+   * fits in a share link. A `.glb` is an ASSET, megabytes of vertex data, and belongs alongside
+   * {@link SceneConfig.backgroundImageUrl} rather than inside the config's own text. A hosted
+   * URL travels everywhere a config goes; a `data:` URI is what the studio writes when a file is
+   * picked off disk, and like a picked backdrop it is dropped from share links.
+   *
+   * Read as `.glb` only, the single-file form. A `.gltf` names its buffers as sibling files, so
+   * one dropped in here would load its JSON and then fail on data it cannot reach; the parser
+   * says so rather than half-loading it.
+   *
+   * The mesh is fitted the same way an outline is: centred on its own bounding box and scaled
+   * until its LARGEST half-extent is {@link r}. A file authored in millimetres and one authored
+   * in metres therefore render at the same size, with `r` as the handle that resizes either.
+   *
+   * ABSENT ⇒ a placeholder sphere. There is no default `.glb` the way there is a
+   * {@link DEFAULT_OUTLINE}: shipping one would mean shipping a mesh in the bundle for the sake
+   * of a preview. The placeholder is the honest version of the same idea, it shows the shape's
+   * position and size while making it obvious nothing has been loaded yet.
+   */
+  model?: string;
   /**
    * Through-cuts in the profile plane. ABSENT ⇒ solid (the common case), which is also why this
    * is optional rather than an empty array: every scene ever exported stays byte-identical.
@@ -1714,6 +1747,12 @@ export function normalizeShape(shape: ShapeInput | undefined): ShapeConfig {
     typeof shape?.outline === "string" ? outlineFromSvg(shape.outline, MAX_OUTLINE) : "";
   if (outline) out.outline = outline;
   else if (out.kind === "path") out.outline = DEFAULT_OUTLINE;
+  // Kept on every kind, for the same reason `outline` is: the studio edits one shape object and
+  // lets the kind decide what it reads, so a trip through `rod` and back must not lose the file
+  // someone picked. Uncapped, unlike the outline, because this is a URL rather than geometry:
+  // the thing whose size has to be governed is the asset it points at, and that is the picker's
+  // job (see MAX_MODEL_BYTES), not the normalizer's.
+  if (typeof shape?.model === "string" && shape.model) out.model = shape.model;
   const cuts = normalizeCuts(shape?.cuts);
   if (cuts.length > 0) out.cuts = cuts;
   return out;

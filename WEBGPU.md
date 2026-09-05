@@ -42,6 +42,16 @@ Measured at 640x380 on 2 September 2026. Headless Chromium has no WebGPU adapter
 harness exercises this engine's WebGL backend; check a real GPU with `pnpm tsl:chrome`. The
 term-by-term parity suite passes 53 of 53 cases.
 
+The `orb` row is the scene that preset drew; it was replaced by `knot`, measured on 5 September
+2026 at the same size: **mean abs diff 2.60, worst 140, 16.4% of pixels over 4**. The rows above
+are left as the record of that earlier run rather than restated for a scene they did not measure.
+
+That 2.60 is well above every other preset and it is not the `model` kind. The difference is
+localized to silhouette edges and shows just as strongly on the rod and the disc beside the knot,
+which are primitives; a trefoil is a thin tube folded through itself, so it carries several times
+the silhouette per unit area and an edge-localized difference lands in far more pixels. The same
+engine gap on a sphere reads as 0.46 because a sphere is nearly all interior.
+
 ## Performance
 
 `pnpm tsl:perf` times `captureImage` on both engines in a real Chrome and subtracts the same

@@ -94,9 +94,10 @@ const handle = createMaterials(
 // handle: { state, renderer, snapshot({ time }), set(partial), play(), pause(), destroy() }
 ```
 
-Presets: `skewer`, `assembly`, `staircase`, `slimes`, `reactions`, `materials`, `prism`, `orb`. In
-React a string preset lazy-loads the presets chunk; a function (`preset={() => PRESETS.orb()}`) is
-tree-shakeable. Core and element: `createMaterials(el, PRESETS.orb())`, `<materials-3d preset="orb">`.
+Presets: `skewer`, `assembly`, `staircase`, `slimes`, `reactions`, `materials`, `prism`,
+`knot` (a `.glb` in glass; carries its mesh inline, so it needs no hosting). In
+React a string preset lazy-loads the presets chunk; a function (`preset={() => PRESETS.knot()}`) is
+tree-shakeable. Core and element: `createMaterials(el, PRESETS.knot())`, `<materials-3d preset="knot">`.
 
 ## Config model
 
@@ -114,7 +115,8 @@ fall back to `createDefaultConfig()`; `ensureSceneConfig(partial)` fills and cla
   `transparentBackground: true` (or `background: "transparent"`) to composite over the page.
 - Shapes: `items[]` of `{ shape, position, rotation, scale, material, motion, phase, interaction }`.
   Shape kinds: `rod`, `disc`, `prism`, `hex`, `cone`, `sphere`, `ring`, `arrow`, `droplet`,
-  `blob`, `slab`, `path` (an SVG outline or whole `.svg`, extruded). Flat-profile shapes take
+  `blob`, `slab`, `path` (an SVG outline or whole `.svg`, extruded), `model` (a `.glb` named in
+  `shape.model`, as a URL or `data:` URI; fitted so its longest half-extent is `r`). Flat-profile shapes take
   through `cuts` (`rect`, `circle`). Or `scatter` (`count`, `seed`, `shape`, `material`,
   `motion`, `stagger`, `spanX`, `spread`, ...) generates a row deterministically instead of `items`.
 - Material (all optional): `kind` (`glass`, `frosted`, `glitter`, `liquid`, `metal`, `ceramic`,
@@ -132,7 +134,9 @@ fall back to `createDefaultConfig()`; `ensureSceneConfig(partial)` fills and cla
 - Optics: `measuredThickness` (a back-face depth pass), `tracedRefraction` (exact paths through
   faceted solids), `transmission` (`simple` | `cone`), `environment` (`analytic` | `baked`),
   `studio` (`gradient` | `softbox`), `beam` (a traced spectral beam through the scene's solids:
-  `targets`, `incidence`, `entryAngle`, `ior`, `dispersion`, `revealSeconds`, ...).
+  `targets`, `incidence`, `entryAngle`, `ior`, `dispersion`, `revealSeconds`, ...). A `beam.targets`
+  entry can name a `model`: the mesh is cut at `beam.z` and the largest contour is traced, so aim
+  through solid material rather than through an opening the slice also found.
 - Budget: `quality` (0.35 to 1 scales the scene passes), `dprMax`, `paused`, `timeOffset`.
 
 React flat props map onto the scene: `lamps`, `lampGain`, `background`, `transparentBackground`,
@@ -212,7 +216,12 @@ poster.
 - Colours are hex strings in display space. Do not hand a `THREE.Color` to a uniform; it is
   linear and reads washed out.
 - `material.path` is half the optical path (a rod's radius, half a disc's thickness), not a size.
-  Leave it unset to derive it from the shape.
+  Leave it unset to derive it from the shape; for `model` it is measured off the loaded mesh.
+- `model` is `.glb` only, geometry only. A `.gltf` (which names sibling `.bin` files) and the
+  compressed forms (Draco, meshopt) are refused with a message, not half-read; quantized meshes
+  and sparse accessors load fine. Its materials, textures, rigs and animation are ignored: the look
+  comes from `material`, the movement from `motion`. Cap is 250k triangles, since every shape is
+  drawn four times a frame.
 - A transparent background does not refract the page: the gaps go transparent and the glass still
   bends the lamp field. Set `clearGlass` to suit the surface behind it.
 - Up to 12 lamps. Motion belongs to shapes, not the scene; spread `phase` across a full turn or the

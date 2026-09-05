@@ -122,7 +122,12 @@ async function loadScene(scene, presetNames) {
   if (!existsSync(path)) {
     throw new Error(`no preset or file called "${scene}"; presets are: ${presetNames.join(", ")}`);
   }
-  return { name: basename(path, extname(path)), config: JSON.parse(await readFile(path, "utf8")) };
+  const parsed = JSON.parse(await readFile(path, "utf8"));
+  // A gallery/community file wraps its scene as { title, author, config }; a plain export is the
+  // config itself. Unwrapping here means `pnpm render gallery/community/<name>.json` works, which
+  // is how anyone would first try to look at one.
+  const config = parsed?.config ?? parsed;
+  return { name: basename(path, extname(path)), config };
 }
 
 await run(async (defer) => {

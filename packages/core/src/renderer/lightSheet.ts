@@ -35,6 +35,8 @@
 import * as THREE from "three";
 import type { ShapeKind } from "../config/model";
 import { fitOutline, isConvex, traceableOutline } from "./svgPath";
+import { cachedMesh } from "./glb";
+import { sliceGeometry } from "./meshSlice";
 
 /** Visible range, in nanometres. */
 const LAMBDA_MIN = 400;
@@ -218,22 +220,33 @@ export function wavelengthToBeamRgb(nm: number, target = new THREE.Color()): THR
  * are extrusions whose cross-section is their outline rather than anything lathed, and a `blob` is
  * bumpy by construction.
  *
- * `path` is the one kind that answers per SHAPE rather than per kind, because its outline is
- * authored. It does not have to be convex, `clipEntry` scans a re-entrant outline edge by edge,
- * only SIMPLE. A self-crossing contour is refused, and that is the one gate worth keeping: a
- * figure-of-eight has no inside for the tracer's entering-and-leaving bookkeeping to be right
- * about, so it would not look approximate, it would look random.
+ * Two kinds answer per SHAPE rather than per kind, and they are the two that carry their own
+ * geometry. `path` reads the outline someone authored. `model` MEASURES one, by cutting the loaded
+ * mesh at the sheet, which is the only way to answer for geometry that has no parameters: see
+ * {@link SlicePose} for what that needs and why a lathe never needed it.
+ *
+ * Neither has to be convex, `clipEntry` scans a re-entrant outline edge by edge, only SIMPLE. A
+ * self-crossing contour is refused, and that is the one gate worth keeping: a figure-of-eight has
+ * no inside for the tracer's entering-and-leaving bookkeeping to be right about, so it would not
+ * look approximate, it would look random.
  */
 export function crossSectionFor(
-  shape: { kind: ShapeKind; r: number; sides: number; outline?: string },
+  shape: { kind: ShapeKind; r: number; sides: number; outline?: string; model?: string },
   beamRotation: number,
   roll: number,
   centre?: { x: number; y: number },
+  pose?: SlicePose,
 ): THREE.Vector2[] | undefined {
   const { kind, r, sides } = shape;
   if (kind === "path") {
     const traceable = shape.outline ? traceablePath(shape.outline, r) : undefined;
     return traceable && posePolygon(traceable, roll, centre);
+  }
+  if (kind === "model") {
+    // `roll` and `centre` are ignored here, and that is not an oversight: they are the flattened
+    // stand-in a drawn outline needs because it is authored in its own frame, and a pose carries
+    // the real thing. Without one there is nothing to cut, so the target is skipped as before.
+    return shape.model && pose ? modelSection(shape.model, r, pose) : undefined;
   }
   const segments = Math.max(3, Math.round(sides));
   const radius =
@@ -251,6 +264,79 @@ export function crossSectionFor(
   if (radius <= 0) return undefined;
   return prismCrossSection(radius, kind === "hex" ? 6 : segments, beamRotation + roll, centre);
 }
+
+/**
+ * What cutting a mesh needs and cutting a lathe never did.
+ *
+ * A lathe's cross-section is the same at every height, so `crossSectionFor` could answer from `r`
+ * and `sides` and place it with a roll and a centre. A `path` extrudes along Z, so its slice is
+ * likewise constant and the same two numbers place it. A mesh has neither property: the contour
+ * changes with where the sheet sits AND with how the item is turned out of the sheet's plane, so
+ * the full transform is the only honest input.
+ */
+export interface SlicePose {
+  /** The sheet's world Z: the plane the mesh is cut by. */
+  z: number;
+  position: { x: number; y: number; z: number };
+  rotation: { x: number; y: number; z: number };
+  scale: { x: number; y: number; z: number };
+}
+
+/**
+ * The outline of a loaded `.glb` where the sheet cuts it.
+ *
+ * THE LARGEST CONTOUR ONLY, which is the same bargain `path` strikes when it reads the first
+ * subpath and leaves the counters to the renderer. A plane through a pair of glasses returns the
+ * frame and both lens openings; the tracer's bookkeeping is a single inside, so handing it three
+ * loops would not make it right about the holes, it would make it wrong about the frame. Aim
+ * through solid material and the traced path and the drawn solid agree.
+ *
+ * Undefined when the mesh has not loaded, when the sheet misses it, or when the slice is not
+ * simple. The first is temporary and fixes itself on the rebuild the load triggers.
+ */
+function modelSection(url: string, r: number, pose: SlicePose): THREE.Vector2[] | undefined {
+  const key =
+    `${url}|${r}|${pose.z}|${pose.position.x},${pose.position.y},${pose.position.z}` +
+    `|${pose.rotation.x},${pose.rotation.y},${pose.rotation.z}` +
+    `|${pose.scale.x},${pose.scale.y},${pose.scale.z}`;
+  if (modelSections.has(key)) {
+    const hit = modelSections.get(key);
+    modelSections.delete(key);
+    modelSections.set(key, hit);
+    return hit;
+  }
+  const entry = cachedMesh(url);
+  let traceable: THREE.Vector2[] | undefined;
+  if (entry) {
+    // The cached mesh is fitted to a unit half-extent, so `r` scales it exactly as `buildShape`
+    // does before the item's own scale applies. Same composition, same solid.
+    const matrix = new THREE.Matrix4().compose(
+      new THREE.Vector3(pose.position.x, pose.position.y, pose.position.z),
+      new THREE.Quaternion().setFromEuler(
+        new THREE.Euler(pose.rotation.x, pose.rotation.y, pose.rotation.z),
+      ),
+      new THREE.Vector3(pose.scale.x * r, pose.scale.y * r, pose.scale.z * r),
+    );
+    const [outer] = sliceGeometry(entry.geometry, matrix, pose.z);
+    traceable = outer ? traceableOutline(outer, r) : undefined;
+  }
+  // A mesh still loading is NOT cached as a miss: the rebuild its arrival triggers retraces, and
+  // an entry saying "no section" would outlive the reason for it.
+  if (entry) {
+    modelSections.set(key, traceable);
+    if (modelSections.size > TRACEABLE_PATHS_MAX) {
+      for (const oldest of modelSections.keys()) {
+        modelSections.delete(oldest);
+        break;
+      }
+    }
+  }
+  return traceable;
+}
+
+/** Slices already cut, simplified and checked, keyed by the mesh and the pose that cut it. A
+ *  pointer binding retraces on every move and the cut is the expensive half. */
+const modelSections = new Map<string, THREE.Vector2[] | undefined>();
 
 /**
  * Drawn outlines already fitted, simplified and checked, keyed by the outline and the radius it

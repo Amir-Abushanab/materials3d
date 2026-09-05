@@ -8,17 +8,20 @@
 import {
   BEAM_DISPERSION,
   createDefaultConfig,
+  createMaterial,
   createShape,
   MATERIAL_KINDS,
   MATERIAL_PRESETS,
   SHAPE_KINDS,
   type CutConfig,
   type ItemInteractionBinding,
+  type MaterialConfig,
   type SceneConfig,
   type ShapeConfig,
   type ShapeKind,
   type ItemConfig,
 } from "./config/model";
+import { KNOT_GLB } from "./knotMesh";
 
 // Lives in the model now, next to `createBeam`, so the default beam and the named glasses cannot
 // disagree. Re-exported here because this is where consumers have always found it.
@@ -1252,7 +1255,23 @@ const SWATCH: Record<
   // No outline given, so the swatch draws DEFAULT_OUTLINE, which is the honest thing for this
   // column to show: `path` has no shape of its own until one is authored into it.
   path: { shape: { r: 0.8, depth: 0.4 }, rotation: [0.2, 0.3, 0.08] },
+  // Sized like the rest so the entry means something if this chart ever does draw it; see
+  // SWATCH_KINDS for why it does not.
+  model: { shape: { r: 0.8 }, rotation: [0.2, 0.3, 0.08] },
 };
+
+/**
+ * The kinds the chart actually draws: every kind but `model`.
+ *
+ * `model` is the one kind with no geometry of its own even as a default. `path` at least falls
+ * back to {@link DEFAULT_OUTLINE}, so its column shows a real silhouette; a `model` with no file
+ * draws the placeholder sphere, and a column of "sphere, again" says nothing about materials,
+ * which is the only thing this chart is for.
+ *
+ * A filter rather than a shorter table: {@link SWATCH} stays a full `Record<ShapeKind, …>`, so
+ * adding a kind still stops the build until someone decides how it is sized.
+ */
+const SWATCH_KINDS = SHAPE_KINDS.filter((kind) => kind !== "model");
 
 /**
  * The optics the transmissive rows share, so a row differs from its neighbour by ONE thing: the
@@ -1284,10 +1303,11 @@ const SWATCH_PATH: Partial<Record<ShapeKind, number>> = {
 };
 
 /**
- * Every material kind against every shape kind: seven rows, twelve columns, one swatch each.
+ * Every material kind against every drawable shape kind: seven rows, twelve columns, one swatch
+ * each.
  *
  * A legend rather than a composition, like {@link reactions}, and built by iterating
- * {@link MATERIAL_KINDS} and {@link SHAPE_KINDS} rather than by listing the pairs, so it cannot
+ * {@link MATERIAL_KINDS} and {@link SWATCH_KINDS} rather than by listing the pairs, so it cannot
  * fall out of date. Add a kind to either list and a row or column appears.
  *
  * The rows carry no `tint`: the transmissive kinds take the colour of whatever lamp sits behind
@@ -1298,12 +1318,12 @@ const SWATCH_PATH: Partial<Record<ShapeKind, number>> = {
  * the four above them change colour along their length.
  */
 export function materials(): SceneConfig {
-  const columns = SHAPE_KINDS.length;
+  const columns = SWATCH_KINDS.length;
   const rows = MATERIAL_KINDS.length;
   const items: ItemConfig[] = [];
 
   MATERIAL_KINDS.forEach((kind, row) => {
-    SHAPE_KINDS.forEach((shape, column) => {
+    SWATCH_KINDS.forEach((shape, column) => {
       const swatch = SWATCH[shape];
       const path = SWATCH_PATH[shape];
       items.push({
@@ -1379,132 +1399,120 @@ export function materials(): SceneConfig {
   };
 }
 
+// ---------------------------------------------------------------------- knot ---
+
 /**
- * One glass sphere over a mesh gradient, the scene `material.bend` exists for.
+ * A loaded `.glb` in glass, flanked by two primitives.
  *
- * A sphere is the shape that most exposes what `lens` cannot do. That term displaces the plate
- * sample by the view-space NORMAL, which at the centre of any convex solid points straight at the
- * camera, so the displacement there is exactly zero however far the knob is pushed. On a plate that
- * is right, the middle should be a window. On a ball it renders a flat disc of clear glass with a
- * hard edge where the rim weighting takes over, sitting inside the shape like a sticker.
+ * The `model` kind's preset, and the composition is the argument: the knot is not presented as a
+ * special object with a viewer of its own, it is one item in an `items` list beside a rod and a
+ * disc, taking the same lamps, the same optics and the same post stack. A mesh someone else
+ * authored is a shape kind here, not a mode.
  *
- * At `bend: 1` the view ray is refracted at the surface, walked the measured thickness, and its
- * exit projected, so the body shades continuously from edge to edge and reads as solid glass. Set
- * `bend` to 0 in the studio to see the disc come back; that comparison is the whole preset.
+ * A trefoil knot because it is the thing this feature exists for and the twelve primitives cannot
+ * reach: it passes through itself and it has a hole, and no lathe or extruded outline makes
+ * either. It also gives the glass something to do, since the parts of the frame it refracts
+ * include the rest of itself.
  *
- * WHAT IT DOES NOT DO is magnify. The exit POINT is projected, not the ray's eventual landing on
- * the plate, so displacement is bounded by the solid's own size, the same approximation the prism
- * tracer makes. Moving the plate further back does not turn this into a ball lens, which is worth
- * knowing before reaching for it expecting one.
+ * The optics came off a sphere, and that they carried over unchanged is the useful part: `path` is
+ * the only material field that ever depended on the shape, and for a model it is measured off the
+ * loaded mesh rather than guessed, so nothing here had to be retuned for arbitrary geometry.
  *
- * `measuredThickness` is on because that is where the thickness comes from; without it `bend` has
- * nothing to walk and quietly does nothing.
+ * One shape, which is the composition doing the same job the optics do: there is nothing beside it
+ * to explain it by, so what is on screen is a loaded mesh and the lamps behind it and nothing else.
+ *
+ * The mesh travels inside the config as a data URI; see {@link KNOT_GLB} for why, and why it is
+ * the last preset that should.
  */
-export function orb(): SceneConfig {
+export function knot(): SceneConfig {
   const base = createDefaultConfig();
+  const hero: MaterialConfig = {
+    ...createMaterial(),
+    kind: "glass",
+    density: 0.28,
+    ior: 1.5,
+    dispersion: 0.16,
+    lens: 0.75,
+    bend: 1,
+    magnify: 0.85,
+    rim: 1,
+    specular: 1,
+    saturation: 1.35,
+    emission: 0.04,
+    iridescence: 0.75,
+    filmNm: 430,
+    roughness: 0.22,
+    albedo: "#eef1f6",
+  };
   return {
     ...base,
-    background: "#080614",
+    background: "#0a0718",
     backgroundMode: "gradient",
     backgroundGradientType: "mesh",
-    // Eight wells with dark ones between the bright, because a sphere refracting a smooth wash
-    // returns a smooth wash, the gradient has to have somewhere to bend light FROM.
     backgroundMeshPoints: [
-      { x: 0.1, y: 0.14, color: "#ff1f5a" },
-      { x: 0.5, y: 0.02, color: "#2b0f4a" },
-      { x: 0.9, y: 0.16, color: "#ffb02e" },
-      { x: 0.98, y: 0.56, color: "#00e5a0" },
-      { x: 0.66, y: 0.96, color: "#1273ff" },
-      { x: 0.26, y: 0.98, color: "#6d28ff" },
-      { x: 0.02, y: 0.66, color: "#120a2e" },
-      { x: 0.46, y: 0.46, color: "#ff5ec4" },
+      { x: 0.12, y: 0.16, color: "#ff1f5a" },
+      { x: 0.52, y: 0.04, color: "#2b0f4a" },
+      { x: 0.9, y: 0.2, color: "#ffb02e" },
+      { x: 0.96, y: 0.6, color: "#00e5a0" },
+      { x: 0.62, y: 0.96, color: "#1273ff" },
+      { x: 0.22, y: 0.94, color: "#6d28ff" },
+      { x: 0.04, y: 0.62, color: "#120a2e" },
+      { x: 0.46, y: 0.48, color: "#ff5ec4" },
     ],
-    /**
-     * Bright, and that is load-bearing rather than a colour choice.
-     *
-     * A refracted ray near the centre of a big convex solid lands back inside that solid's own
-     * silhouette, and `bend` answers it from the glass-free plate, but everything the guard still
-     * rejects falls back to THIS. Left dark, it multiplies the whole interior down to nothing, and
-     * the orb reads as a hole rather than as glass. That mistake cost an afternoon.
-     */
+    // Bright, and load-bearing rather than a colour choice. A refracted ray inside a big solid
+    // often lands back within that solid's own silhouette, and whatever `bend` cannot answer from
+    // the glass-free plate falls back to THIS. Left dark it multiplies the interior down to
+    // nothing and the shape reads as a hole. A knot has more interior than a sphere, not less.
     clearGlass: "#ffd9ef",
-    // A rosette rather than a few key lights: the orb is one large curved surface, and what fills
-    // it is whatever the lamp field has to offer directly behind. Gaps between lamps read as gaps.
     lamps: [
-      { x: 0.8, y: 0.5, r: 0.17, color: "#ff2d6f", intensity: 1.35 },
-      { x: 0.65, y: 0.76, r: 0.17, color: "#ff6a2d", intensity: 1.35 },
-      { x: 0.35, y: 0.76, r: 0.17, color: "#ffc53d", intensity: 1.35 },
-      { x: 0.2, y: 0.5, r: 0.17, color: "#b6ff3d", intensity: 1.35 },
-      { x: 0.35, y: 0.24, r: 0.17, color: "#3dffa8", intensity: 1.35 },
-      { x: 0.65, y: 0.24, r: 0.17, color: "#3de0ff", intensity: 1.35 },
-      { x: 0.5, y: 0.5, r: 0.3, color: "#ffe9c7", intensity: 0.8 },
+      { x: 0.78, y: 0.5, r: 0.18, color: "#ff2d6f", intensity: 1.3 },
+      { x: 0.63, y: 0.78, r: 0.18, color: "#ff6a2d", intensity: 1.3 },
+      { x: 0.37, y: 0.78, r: 0.18, color: "#ffc53d", intensity: 1.3 },
+      { x: 0.22, y: 0.5, r: 0.18, color: "#b6ff3d", intensity: 1.3 },
+      { x: 0.37, y: 0.22, r: 0.18, color: "#3dffa8", intensity: 1.3 },
+      { x: 0.63, y: 0.22, r: 0.18, color: "#3de0ff", intensity: 1.3 },
+      { x: 0.5, y: 0.5, r: 0.32, color: "#ffe9c7", intensity: 0.8 },
     ],
     lampGain: 1.9,
     lampGate: { lo: 0.01, hi: 0.99 },
     backdropLamps: 0.1,
-    // Pushed well back, and with `magnify` on that is what sets the magnification: the refracted
-    // ray sweeps more of the plate the further away it is, so the lamps arrive as distinct lobes
-    // rather than one wash. `bend` alone is indifferent to this, it moves a sample around the
-    // frame, so the plate's distance never enters into it.
-    plate: { z: -14, scale: { x: 13, y: 9 }, offset: { x: 0.5, y: 0.5 } },
-    camera: { ...base.camera, fov: 15, distance: 21, lookAt: { x: 0, y: 0, z: 0 }, height: 0 },
+    // Pushed well back, which with `magnify` on is what sets the magnification: the refracted ray
+    // sweeps more of the plate the further away it is, so the lamps arrive as distinct lobes
+    // rather than one wash. Wide enough that the knot cannot sample past its edge, which renders
+    // as clear white glass; a shape this open has a lot of silhouette to keep inside it.
+    plate: { z: -14, scale: { x: 15, y: 10 }, offset: { x: 0.5, y: 0.5 } },
+    camera: { ...base.camera, fov: 15, distance: 24, lookAt: { x: 0, y: 0, z: 0 }, height: 0 },
     measuredThickness: true,
-    transmission: "cone",
     post: {
       ...base.post,
-      focus: 21,
+      focus: 24,
       range: 9,
-      aperture: 0.35,
-      bloom: 0.28,
+      aperture: 0.3,
+      bloom: 0.26,
       haze: 0.04,
       hazeTop: 0.03,
       hazeColor: "#f7f9fc",
-      vignette: 0.42,
+      vignette: 0.4,
       grain: 0.014,
     },
     scatter: undefined,
     items: [
       {
-        name: "orb",
-        shape: { ...createShape("sphere"), kind: "sphere", r: 1.8, sides: 96 },
+        name: "knot",
+        // `r` is the ONLY size control a model has, and it means the same thing it means for a
+        // `path`: the mesh is fitted until its longest half-extent is this. Whatever units the
+        // file was authored in have already been divided out.
+        shape: { ...createShape("model"), kind: "model", model: KNOT_GLB, r: 2.9 },
         position: { x: 0, y: 0, z: 0 },
         rotation: { x: 0, y: 0, z: 0 },
         scale: { x: 1, y: 1, z: 1 },
-        material: {
-          kind: "glass",
-          albedo: "#eef1f6",
-          // Half the radius, not the whole one. `defaultPath` hands a sphere its full radius, which
-          // at any useful density saturates the middle to black, the note in `defaultPath` says
-          // so, and this is the scene that would show it.
-          path: 0.75,
-          density: 0.28,
-          ior: 1.5,
-          dispersion: 0.16,
-          lens: 0.75,
-          bend: 1,
-          // Looking THROUGH the glass rather than displacing a sample of the frame, the ball-lens
-          // half of the pair. Just short of 1 so the bent plate still shows through a little and
-          // the body keeps some of the frame's own colour behind the lamps.
-          magnify: 0.85,
-          rim: 1.15,
-          specular: 1,
-          saturation: 1.35,
-          emission: 0.04,
-          iridescence: 0.75,
-          filmNm: 430,
-          roughness: 0.22,
-        },
-        motion: { kind: "none", axis: "y", rate: 0, amount: 0 },
+        material: hero,
+        // A spin, not a drift: this is the one shape here that is not a lathe, so turning it about
+        // Y actually changes its silhouette instead of leaving it visually stationary.
+        motion: { kind: "spin", axis: "y", rate: 0.16, amount: 1 },
         phase: 0,
       },
     ],
-    interaction: {
-      enabled: true,
-      bindings: [
-        { source: "pointerX", target: "cameraYaw", from: -4, to: 4, smoothing: 0.45 },
-        { source: "pointerY", target: "cameraPitch", from: -3, to: 3, smoothing: 0.45 },
-      ],
-    },
   };
 }
 
@@ -1516,7 +1524,7 @@ const PRESET_TABLE = {
   reactions,
   materials,
   prism,
-  orb,
+  knot,
 } satisfies Record<string, () => SceneConfig>;
 
 /** The name of a shipped preset. */
@@ -1530,7 +1538,7 @@ export function isPresetName(name: string): name is PresetName {
 /**
  * Every shipped preset by name.
  *
- * The known names are typed, so `PRESETS.orb` autocompletes and a typo fails to compile. The
+ * The known names are typed, so `PRESETS.knot` autocompletes and a typo fails to compile. The
  * string index is kept because the studio (and any UI that picks a preset from a URL or a list)
  * indexes it with a runtime string; guard such a string with {@link isPresetName} rather than
  * trusting the index type, which cannot say `undefined`.

@@ -10,12 +10,15 @@ function stripHtmlComments(): Plugin {
   };
 }
 
-// The embeddable @materials3d/core runtime is built separately by the core package's
-// `build:standalone` (see predev/prebuild). Pointing publicDir at that output serves it at
-// /materials3d.standalone.js, which the HTML exporter fetches and inlines into the downloaded file.
+// A real public dir, not the core package's build output, which is what this used to point at.
+// Vite allows exactly one, and the studio now serves two kinds of thing from it: the embeddable
+// @materials3d/core runtime, which `ensure-standalone` copies in (the HTML exporter fetches
+// /materials3d.standalone.js and inlines it into the downloaded file), and the demo meshes the
+// gallery's `model` scenes link to, which are committed. The copied bundle is gitignored; see
+// scripts/ensure-standalone.mjs.
 export default defineConfig({
   base: "/",
-  publicDir: "../../packages/core/dist/standalone",
+  publicDir: "public",
   plugins: [stripHtmlComments()],
   build: {
     target: "es2022",

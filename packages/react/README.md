@@ -30,16 +30,16 @@ motion and Save-Data, with three code-split out of the initial bundle.
 
 Precedence: the defaults, then `preset`, then the flat props, then `config`.
 
-| prop                                                                                          | notes                                                                                                                                                                                                               |
-| --------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `preset`                                                                                      | a name (`"skewer"`, `"assembly"`, `"staircase"`, `"slimes"`, `"reactions"`, `"materials"`, `"prism"`, `"orb"`) or a function returning a config. A name lazy-loads the presets chunk; a function is tree-shakeable. |
-| `config`                                                                                      | a full or partial config, applied last                                                                                                                                                                              |
-| `lamps`, `lampGain`, `background`, `transparentBackground`, `clearGlass`                      | the light field and the backdrop                                                                                                                                                                                    |
-| `post`, `motion`, `scatter`                                                                   | merged onto what the preset authored, so `scatter={{ count: 24 }}` re-scatters the reference scene; `motion` applies to every shape                                                                                 |
-| `orbit`, `quality`, `dprMax`, `paused`                                                        | live                                                                                                                                                                                                                |
-| `poster`, `posterFit`, `lazy`, `webgl`, `minSizeForWebGL`, `respectReducedMotion`, `renderer` | shell options, read at mount only. Changing one on a mounted component does nothing until it remounts.                                                                                                              |
-| `onReady(renderer)`, `onFallback(reason)`                                                     | callbacks; the latest ones are called without a remount                                                                                                                                                             |
-| `className`, `style`, `children`                                                              | the `<div>`                                                                                                                                                                                                         |
+| prop                                                                                          | notes                                                                                                                                                                                                                |
+| --------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `preset`                                                                                      | a name (`"skewer"`, `"assembly"`, `"staircase"`, `"slimes"`, `"reactions"`, `"materials"`, `"prism"`, `"knot"`) or a function returning a config. A name lazy-loads the presets chunk; a function is tree-shakeable. |
+| `config`                                                                                      | a full or partial config, applied last                                                                                                                                                                               |
+| `lamps`, `lampGain`, `background`, `transparentBackground`, `clearGlass`                      | the light field and the backdrop                                                                                                                                                                                     |
+| `post`, `motion`, `scatter`                                                                   | merged onto what the preset authored, so `scatter={{ count: 24 }}` re-scatters the reference scene; `motion` applies to every shape                                                                                  |
+| `orbit`, `quality`, `dprMax`, `paused`                                                        | live                                                                                                                                                                                                                 |
+| `poster`, `posterFit`, `lazy`, `webgl`, `minSizeForWebGL`, `respectReducedMotion`, `renderer` | shell options, read at mount only. Changing one on a mounted component does nothing until it remounts.                                                                                                               |
+| `onReady(renderer)`, `onFallback(reason)`                                                     | callbacks; the latest ones are called without a remount                                                                                                                                                              |
+| `className`, `style`, `children`                                                              | the `<div>`                                                                                                                                                                                                          |
 
 Config-shaped props update the live scene through the handle. A changed shape list or scatter
 rebuilds geometry; everything else pushes uniforms.
@@ -58,7 +58,7 @@ export function Hero() {
   const ref = useRef<MaterialHandle>(null);
   return (
     <>
-      <Materials3D ref={ref} preset="orb" poster="/orb.webp" style={{ height: 480 }} />
+      <Materials3D ref={ref} preset="knot" poster="/knot.webp" style={{ height: 480 }} />
       <button onClick={() => ref.current?.pause()}>Pause</button>
     </>
   );

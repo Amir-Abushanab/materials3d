@@ -21,3 +21,5 @@ export * as motions from "./motions";
 export { buildShape, defaultPath } from "./shapes";
 export { applyMotion, applyMotions, isAnimated } from "./motions";
 export { InteractionController, interactionActive } from "./interaction";
+export { parseGlb, loadMesh, cachedMesh, preloadMeshes, MAX_MESH_TRIANGLES } from "./glb";
+export type { MeshEntry } from "./glb";

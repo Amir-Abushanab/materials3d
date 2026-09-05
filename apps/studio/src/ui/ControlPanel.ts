@@ -173,6 +173,8 @@ export interface PanelHooks {
   onPickBackgroundMedia(kind: "image" | "video"): void;
   /** Open a file picker for a `.svg` and write its outline into this shape. */
   onPickOutline(shape: ShapeConfig): void;
+  /** Open a file picker for a `.glb` and point this shape at it. */
+  onPickModel(shape: ShapeConfig): void;
   /** Scroll-preview scrub: fix the scroll signal at 0..1. The studio page never actually
    *  scrolls, so this is how a scroll reaction is authored to an exact position. */
   onScrollPreview(value: number): void;
@@ -180,6 +182,10 @@ export interface PanelHooks {
    *  `scroll` / `scrollVelocity` reactions by actually scrolling (companion to the slider). */
   onOpenScrollTest(): void;
 }
+
+/** What the model field shows for a file picked off disk, whose data URI is megabytes of base64
+ *  and would freeze the pane in a text input. Never written back to the shape. */
+const PICKED_MODEL = "(file, not a link)";
 
 // ---- Interaction authoring ----
 
@@ -815,10 +821,18 @@ export class ControlPanel {
     shape: ShapeConfig,
   ): T {
     let wasPath = shape.kind === "path";
+    let wasModel = shape.kind === "model";
     binding.on("change", () => {
-      if (this.syncing || (shape.kind === "path") === wasPath) return;
-      wasPath = shape.kind === "path";
-      if (wasPath) shape.outline ??= DEFAULT_OUTLINE;
+      if (this.syncing) return;
+      const isPath = shape.kind === "path";
+      const isModel = shape.kind === "model";
+      if (isPath === wasPath && isModel === wasModel) return;
+      wasPath = isPath;
+      wasModel = isModel;
+      if (isPath) shape.outline ??= DEFAULT_OUTLINE;
+      // Nothing is seeded for `model`. There is no default `.glb` to fall back on the way there is
+      // a DEFAULT_OUTLINE, and the placeholder sphere the renderer draws is the honest version of
+      // the same idea: it holds the shape's place until a file is picked.
       this.rebuild();
     });
     return binding;
@@ -844,6 +858,36 @@ export class ControlPanel {
     // dropdown and switching to `path` first; it does that for you. A `d` field on a rod, by
     // contrast, is dead weight in the panel and in every export.
     f.addButton({ title: "⬈ Shape from SVG…" }).on("click", () => this.hooks.onPickOutline(shape));
+    this.addModel(f, shape);
+  }
+
+  /**
+   * The `.glb` field and its picker, the second escape hatch. See {@link addOutline}, which this
+   * mirrors down to the button being on every kind and the field on one.
+   *
+   * The field is editable rather than read-only even though a picked file lands here as a data
+   * URI thousands of characters long, and that is the point of showing it: it is where a hosted
+   * URL is typed. A scene that names `/hero.glb` travels in a share link and exports as code
+   * someone can ship; one carrying a picked file does not, and the difference should be visible
+   * rather than something you discover when the link comes back too long.
+   *
+   * Truncated in the panel through a proxy object, because Tweakpane binds to the value it is
+   * given and a megabyte of base64 in a text input freezes the pane on every keystroke.
+   */
+  private addModel(f: FolderApi, shape: ShapeConfig): void {
+    if (shape.kind === "model") {
+      const picked = shape.model?.startsWith("data:") ?? false;
+      const modelField = { model: picked ? PICKED_MODEL : (shape.model ?? "") };
+      const label = { label: "model (.glb url)" };
+      this.typedStructural(f.addBinding(modelField, "model", label)).on("change", () => {
+        if (this.syncing) return;
+        // A picked file stays picked until something is typed over it: the stand-in text is not a
+        // URL, and writing it back would break the shape the moment the field is focused.
+        if (modelField.model === PICKED_MODEL) return;
+        shape.model = modelField.model || undefined;
+      });
+    }
+    f.addButton({ title: "⬈ Shape from GLB…" }).on("click", () => this.hooks.onPickModel(shape));
   }
 
   /** Mark a binding as needing a geometry rebuild. */

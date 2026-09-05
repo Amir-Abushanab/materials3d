@@ -1,5 +1,12 @@
 # @materials3d/react
 
+## 0.3.0
+
+### Patch Changes
+
+- Updated dependencies [[`9308bca`](https://github.com/Amir-Abushanab/materials3d/commit/9308bcaa15ba1f907ddfe38cccae672b2eab8f64)]:
+  - @materials3d/core@0.3.0
+
 ## 0.2.0
 
 ### Patch Changes

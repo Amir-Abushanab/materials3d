@@ -200,6 +200,10 @@ const IX_SOURCE_OPTIONS: Record<string, string> = {
   Press: "press",
   "Scroll velocity": "scrollVelocity",
   Appear: "appear",
+  // Phone/tablet only, and inert in this editor: a desktop has no orientation sensor, so these two
+  // sit at their 0.5 rest here and only move on the published page.
+  "Tilt X": "tiltX",
+  "Tilt Y": "tiltY",
 };
 /** Item-scope sources: shapes additionally get `hoverSelf`: the cursor over THIS shape (the
  *  renderer raycasts), where plain Hover is presence over the whole scene. */
@@ -215,6 +219,10 @@ const IX_SOURCE_OPTIONS_ITEM: Record<string, string> = {
   "Press · this shape": "pressSelf",
   "Scroll velocity": "scrollVelocity",
   Appear: "appear",
+  // Phone/tablet only, and inert in this editor: a desktop has no orientation sensor, so these two
+  // sit at their 0.5 rest here and only move on the published page.
+  "Tilt X": "tiltX",
+  "Tilt Y": "tiltY",
 };
 /** Per-shape binding targets. */
 const IX_ITEM_TARGETS: Record<string, ItemInteractionTarget> = {

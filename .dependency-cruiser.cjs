@@ -31,6 +31,22 @@ module.exports = {
       to: { path: "^apps/" },
     },
     {
+      name: "interaction-runtime-stays-lazy",
+      severity: "error",
+      comment:
+        "The interactivity runtime (controller + applier tables + tilt sensor, ~3.7 KB gzipped) must " +
+        "be reachable ONLY through the dynamic import in each renderer's loadInteraction(). A static " +
+        "import folds it into every bundle, including the scenes that never bind anything. Need one " +
+        "of its config predicates synchronously? Those live in interactionGates.ts.",
+      from: { pathNot: "^packages/core/src/renderer/interaction\\.ts$" },
+      to: {
+        path: "^packages/core/src/renderer/interaction\\.ts$",
+        // `type-only` is `import type {...}`; `type-import` is `typeof import(...)`. Both are
+        // erased at build time, so neither pulls the chunk in — only a value import does.
+        dependencyTypesNot: ["dynamic-import", "type-only", "type-import"],
+      },
+    },
+    {
       name: "renderer-stays-below-shell",
       severity: "error",
       comment:

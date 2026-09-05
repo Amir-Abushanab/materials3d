@@ -10,6 +10,7 @@
  */
 import type * as THREE from "three";
 import type { ItemConfig, LampConfig, MotionConfig, PostConfig, SceneConfig } from "./config/model";
+import type { TiltStatus } from "./renderer/tilt";
 
 /**
  * The renderer-agnostic part of an item.
@@ -89,6 +90,12 @@ export interface Engine {
   viewDirection(out?: THREE.Vector3): THREE.Vector3;
 
   setInteractionInput(name: string, value: number): unknown;
+  /** Start the tilt sensor behind `tiltX` / `tiltY`. Must be called from a user gesture on iOS. */
+  enableTilt(): Promise<boolean>;
+  /** Where the tilt sensor stands; `"prompt"` means a tap-to-enable affordance would help. */
+  tiltStatus(): TiltStatus;
+  /** Re-take the neutral tilt pose from the next reading. */
+  recenterTilt(): unknown;
   setScrollPreview(value: number | null): unknown;
   setScrollTestProgress(value: number): unknown;
 }

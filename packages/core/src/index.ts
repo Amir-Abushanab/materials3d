@@ -33,3 +33,4 @@ export type {
 } from "./renderer/MaterialRenderer";
 export type { MaterialItem, FrameCallback } from "./renderer/item";
 export type { Engine, EngineItem, EngineOptions, EngineModule } from "./engine";
+export type { TiltStatus } from "./renderer/tilt";

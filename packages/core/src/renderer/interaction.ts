@@ -14,6 +14,8 @@
 
 import type * as THREE from "three";
 import { clamp01 } from "../util/math";
+import { tiltActive } from "./interactionGates";
+import { type TiltStatus, TiltSource } from "./tilt";
 import type {
   InteractionSource,
   ItemConfig,
@@ -33,6 +35,7 @@ const POINTER_SPEED_REF = 4.0; // NDC/s that normalizes pointerSpeed to 1.0
 const SCROLL_VELOCITY_REF = 2.0; // progress/s that normalizes scrollVelocity to 1.0
 const SCROLL_VELOCITY_TAU = 0.15; // scroll-velocity smoothing (seconds)
 const DEFAULT_POINTER_TAU = 0.12; // pointer-follow smoothing (seconds)
+const DEFAULT_TILT_TAU = 0.18; // device-tilt smoothing default (seconds); noisier than a cursor
 const DEFAULT_BINDING_TAU = 0.25; // per-binding source smoothing default (seconds)
 const PASSIVE = { passive: true } as const;
 
@@ -261,21 +264,6 @@ export const SCENE_APPLIERS = {
   },
 } satisfies Record<SceneInteractionTarget, SceneApplier>;
 
-// ---- Active-state predicate ------------------------------------------------------------------
-
-/** Whether the interaction layer should run at all: not disabled, and SOME binding list exists,
- *  on the scene, a shape (authored or scatter-generated), or a lamp. Keyed off config only, so
- *  input can never trigger it. */
-export function interactionActive(cfg: SceneConfig): boolean {
-  if (cfg.interaction?.enabled === false) return false;
-  if ((cfg.interaction?.bindings?.length ?? 0) > 0) return true;
-  if (cfg.lamps.some((lamp) => (lamp.bindings?.length ?? 0) > 0)) return true;
-  // Mirror resolveItems: a scatter REPLACES the item list, so its shared reaction list is what
-  // the generated shapes will carry, and `items` is the authored fallback.
-  if (cfg.scatter) return (cfg.scatter.interaction?.bindings?.length ?? 0) > 0;
-  return cfg.items.some((item) => (item.interaction?.bindings?.length ?? 0) > 0);
-}
-
 // ---- The controller --------------------------------------------------------------------------
 
 interface Vec2Like {
@@ -299,6 +287,9 @@ export class InteractionController {
   private readonly velNdc: Vec2Like = { x: 0, y: 0 };
   private presence = 0;
   private presenceTarget = 0;
+  /** Whether a REAL pointer is on the element. Tracked apart from `presenceTarget` because tilt can
+   *  raise presence too (tilt.pointer), and it must yield the moment a finger or cursor shows up. */
+  private pointerPresent = false;
   private press = 0;
   private pressTarget = 0;
   // The pointer that began the current press, so another pointer's release cannot end it.
@@ -324,6 +315,10 @@ export class InteractionController {
   // the next frame via pendingPress()/setPressItem().
   private pressPending: Vec2Like | null = null;
   private readonly pressNdc: Vec2Like = { x: 0, y: 0 };
+  /** The orientation sensor, built only for a scene that reads tilt (see {@link tiltActive}). */
+  private tilt: TiltSource | null = null;
+  private tiltX = 0.5; // smoothed 0..1 (0.5 = neutral pose), mirroring the pointer's own smoothing
+  private tiltY = 0.5;
   private readonly customInputs = new Map<string, number>();
   // Per-binding smoothing state, keyed by binding-object identity (covers scene + every item and
   // lamp list).
@@ -368,17 +363,20 @@ export class InteractionController {
 
   private onPointerEnter = (e: PointerEvent): void => {
     if (this.ignore(e)) return;
+    this.pointerPresent = true;
     this.presenceTarget = 1;
     this.setNdcTarget(e);
   };
   private onPointerMove = (e: PointerEvent): void => {
     if (this.ignore(e)) return;
     if (e.pointerType === "touch" && this.pressTarget < 0.5) return; // touch: only track while down
+    this.pointerPresent = true;
     this.presenceTarget = 1;
     this.setNdcTarget(e);
   };
   private onPointerLeave = (e: PointerEvent): void => {
     if (this.ignore(e)) return;
+    this.pointerPresent = false;
     this.presenceTarget = 0;
     this.ndcTarget.x = 0; // relax toward centre → pointerX/Y rest at 0.5
     this.ndcTarget.y = 0;
@@ -389,12 +387,14 @@ export class InteractionController {
   private onPointerCancel = (e: PointerEvent): void => {
     if (this.ignore(e)) return;
     this.release(e);
+    this.pointerPresent = false;
     this.presenceTarget = 0;
     this.ndcTarget.x = 0;
     this.ndcTarget.y = 0;
   };
   private onPointerDown = (e: PointerEvent): void => {
     if (this.ignore(e)) return;
+    this.pointerPresent = true;
     this.pressTarget = 1;
     this.presenceTarget = 1;
     this.setNdcTarget(e);
@@ -421,6 +421,7 @@ export class InteractionController {
     this.pressPointerId = -1;
     this.unwatchRelease();
     if (e.pointerType === "touch") {
+      this.pointerPresent = false;
       this.presenceTarget = 0; // touch has no hover, so presence ends with the touch
       this.ndcTarget.x = 0;
       this.ndcTarget.y = 0;
@@ -456,6 +457,10 @@ export class InteractionController {
     if (!cfg) return;
     const d = Math.max(dt, 0);
     const kPointer = alpha(DEFAULT_POINTER_TAU, d);
+
+    // Device tilt, BEFORE the pointer block: with `tilt.pointer` on it writes the same ndcTarget the
+    // cursor would, and everything downstream must see it in the frame it changed, not one late.
+    this.updateTilt(cfg, d);
 
     // Pointer position + presence + press.
     this.ndcPrev.x = this.ndc.x;
@@ -531,6 +536,70 @@ export class InteractionController {
     return this.bindingState.get(b)?.value ?? 0;
   }
 
+  /**
+   * Build or drop the tilt sensor as the config declares it, then advance the smoothed axes. The
+   * sensor is created lazily and only for a scene that reads it, so a cursor-only scene attaches no
+   * orientation listener at all — and a studio edit that adds or removes a tilt binding is picked
+   * up on the next frame, the same way the controller itself is.
+   */
+  private updateTilt(cfg: SceneConfig, dt: number): void {
+    if (!tiltActive(cfg)) {
+      if (this.tilt) {
+        this.tilt.dispose();
+        this.tilt = null;
+        this.tiltX = this.tiltY = 0.5;
+      }
+      return;
+    }
+    const src = this.ensureTilt();
+    if (!src) return;
+    const tiltCfg = cfg.interaction?.tilt;
+    const k = alpha(Math.max(tiltCfg?.smoothing ?? DEFAULT_TILT_TAU, 0), dt);
+    this.tiltX += (src.x - this.tiltX) * k;
+    this.tiltY += (src.y - this.tiltY) * k;
+
+    // Opt-in stand-in for the cursor: a phone has no pointer, so a scene whose lamp and optics
+    // bindings all read the cursor would sit at dead centre forever. Only while no real pointer is
+    // on the element — a finger beats the sensor the instant it lands. NDC y is +1 at the TOP and
+    // tiltY counts DOWN the page (the way a ball rolls), hence the negation.
+    if (tiltCfg?.pointer && src.live && !this.pointerPresent) {
+      this.ndcTarget.x = this.tiltX * 2 - 1;
+      this.ndcTarget.y = -(this.tiltY * 2 - 1);
+      this.presenceTarget = 1;
+    }
+  }
+
+  /** The sensor, built on first use. Null when the platform has none (every desktop browser). */
+  private ensureTilt(): TiltSource | null {
+    if (!this.tilt && TiltSource.supported()) {
+      this.tilt = new TiltSource(() => this.cfg()?.interaction?.tilt);
+    }
+    return this.tilt;
+  }
+
+  /**
+   * Ask for the orientation sensor, which on iOS 13+ MUST happen inside a user gesture (a tap
+   * handler — not a `setTimeout` or a promise chain that outlives the gesture). Resolves true once
+   * readings can flow. False means the platform has no sensor, the scene reads no tilt, or the
+   * reader refused. Everywhere that needs no permission, tilt is already live and this resolves true.
+   */
+  async enableTilt(): Promise<boolean> {
+    const cfg = this.cfg();
+    if (!cfg || !tiltActive(cfg)) return false;
+    return (await this.ensureTilt()?.enable()) ?? false;
+  }
+
+  /** Where the sensor stands — `"prompt"` is exactly when a tap-to-enable affordance would help. */
+  tiltStatus(): TiltStatus {
+    if (!TiltSource.supported()) return "unsupported";
+    return this.tilt?.status ?? "prompt";
+  }
+
+  /** Take the next reading as the neutral pose (the reader has changed grip). */
+  recenterTilt(): void {
+    this.tilt?.recenter();
+  }
+
   /** The current raw (un-per-binding-smoothed) 0..1 value of a source signal. */
   private rawSource(source: InteractionSource, itemIndex = -1): number {
     switch (source) {
@@ -560,6 +629,10 @@ export class InteractionController {
         return clamp01(this.scrollVel / SCROLL_VELOCITY_REF);
       case "appear":
         return this.appearLatched ? 1 : 0;
+      case "tiltX":
+        return this.tiltX;
+      case "tiltY":
+        return this.tiltY;
       default:
         // custom:<name>, fed by setInput(name, value).
         return this.customInputs.get(source.slice("custom:".length)) ?? 0;
@@ -633,8 +706,10 @@ export class InteractionController {
    */
   settle(): void {
     this.presence = this.presenceTarget = 0;
+    this.pointerPresent = false;
     this.press = this.pressTarget = 0;
     this.pointerSpeed = 0;
+    this.tiltX = this.tiltY = 0.5; // a settled frame is the neutral pose, like the centred cursor
     this.velNdc.x = this.velNdc.y = 0;
     this.ndc.x = this.ndc.y = 0;
     this.ndcTarget.x = this.ndcTarget.y = 0;
@@ -691,6 +766,8 @@ export class InteractionController {
     c.removeEventListener("pointerdown", this.onPointerDown);
     c.removeEventListener("pointerup", this.onPointerUp);
     this.unwatchRelease();
+    this.tilt?.dispose();
+    this.tilt = null;
     this.customInputs.clear();
     this.bindingState.clear();
   }

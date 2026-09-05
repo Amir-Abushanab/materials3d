@@ -1,0 +1,358 @@
+{
+  "background": "#eeeae2",
+  "transparentBackground": false,
+  "clearGlass": "#f3f3e9",
+  "lamps": [
+    {
+      "x": 0.28,
+      "y": 0.58,
+      "r": 0.24,
+      "color": "#69bcae",
+      "intensity": 1
+    },
+    {
+      "x": 0.72,
+      "y": 0.4,
+      "r": 0.22,
+      "color": "#edb66b",
+      "intensity": 1
+    },
+    {
+      "x": 0.5,
+      "y": 0.78,
+      "r": 0.16,
+      "color": "#d5e9e0",
+      "intensity": 0.65
+    }
+  ],
+  "studio": "gradient",
+  "environment": "analytic",
+  "transmission": "simple",
+  "studioGain": 1.1,
+  "lampGain": 1.05,
+  "lampGate": {
+    "lo": 0.04,
+    "hi": 0.96
+  },
+  "backdropLamps": 0.04,
+  "plate": {
+    "z": -5,
+    "scale": {
+      "x": 18,
+      "y": 12
+    },
+    "offset": {
+      "x": 0.5,
+      "y": 0.5
+    }
+  },
+  "camera": {
+    "fov": 20,
+    "distance": 25,
+    "lookAt": {
+      "x": 0,
+      "y": 0,
+      "z": 0
+    },
+    "height": 0,
+    "roll": 0,
+    "fit": "cover",
+    "minVisibleWidth": 0.52
+  },
+  "post": {
+    "focus": 25,
+    "range": 10,
+    "aperture": 0,
+    "bloom": 0.025,
+    "caustics": 0,
+    "haze": 0,
+    "hazeTop": 0.36,
+    "hazeColor": "#fcfaf6",
+    "vignette": 0.12,
+    "grain": 0.006,
+    "bloomRadius": 9,
+    "bloomThreshold": 0,
+    "toneMap": "neutral",
+    "bloomMode": "gather",
+    "bloomSpread": 0.5,
+    "innerLight": 0,
+    "innerLightDensity": 0.5,
+    "innerLightDecay": 0.94,
+    "innerLightX": 0.5,
+    "innerLightY": 0.15,
+    "dither": 0,
+    "ditherScale": 2,
+    "ditherSteps": 4,
+    "halftone": 0,
+    "halftoneCell": 6,
+    "halftoneAngle": 0.4,
+    "halftoneCmyk": 0,
+    "halftoneCmykCell": 6,
+    "paperTexture": 0,
+    "paperTextureScale": 2
+  },
+  "orbit": true,
+  "tracedRefraction": false,
+  "backGlassStrength": 0,
+  "measuredThickness": true,
+  "loopSeconds": 0,
+  "introRamp": true,
+  "mirrorH": false,
+  "mirrorV": false,
+  "backgroundMode": "gradient",
+  "backgroundPalette": [
+    {
+      "color": "#dce7e2",
+      "position": 0
+    },
+    {
+      "color": "#faf4e9",
+      "position": 1
+    }
+  ],
+  "backgroundGradientType": "linear",
+  "backgroundGradientAngle": 1.5707963267948966,
+  "backgroundMeshPoints": [
+    {
+      "x": 0.25,
+      "y": 0.3,
+      "color": "#f3d9e8"
+    },
+    {
+      "x": 0.75,
+      "y": 0.35,
+      "color": "#d7e0f6"
+    },
+    {
+      "x": 0.5,
+      "y": 0.8,
+      "color": "#f7f0e4"
+    }
+  ],
+  "backgroundMeshSoftness": 0.55,
+  "backgroundImageFit": "cover",
+  "backgroundImageZoom": 1,
+  "backgroundImagePosition": {
+    "x": 0.5,
+    "y": 0.5
+  },
+  "items": [
+    {
+      "shape": {
+        "kind": "ring",
+        "r": 3.25,
+        "len": 8,
+        "thickness": 0.72,
+        "fillet": 0,
+        "bevel": 0,
+        "sides": 128,
+        "hole": 2.58,
+        "shaft": 0.35,
+        "head": 1,
+        "depth": 0.5,
+        "seed": 1,
+        "bump": 0.5
+      },
+      "position": {
+        "x": -0.2,
+        "y": 0.15,
+        "z": -0.6
+      },
+      "rotation": {
+        "x": 0.86,
+        "y": 0.2,
+        "z": -0.32
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "name": "Jade outer lens",
+      "material": {
+        "density": 1.1,
+        "ior": 1.46,
+        "dispersion": 0.006,
+        "lens": 0.012,
+        "rim": 0.3,
+        "specular": 0.5,
+        "saturation": 1,
+        "emission": 0,
+        "tint": "#5dafa0",
+        "kind": "glass"
+      },
+      "motion": {
+        "kind": "drift",
+        "axis": "y",
+        "rate": 0.22,
+        "amount": 0.06
+      },
+      "phase": 0
+    },
+    {
+      "shape": {
+        "kind": "ring",
+        "r": 2.42,
+        "len": 8,
+        "thickness": 0.62,
+        "fillet": 0,
+        "bevel": 0,
+        "sides": 128,
+        "hole": 1.88,
+        "shaft": 0.35,
+        "head": 1,
+        "depth": 0.5,
+        "seed": 1,
+        "bump": 0.5
+      },
+      "position": {
+        "x": 0.12,
+        "y": 0.08,
+        "z": 0.2
+      },
+      "rotation": {
+        "x": 2.22,
+        "y": -0.25,
+        "z": -0.35
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "name": "Opal middle lens",
+      "material": {
+        "density": 0.6,
+        "ior": 1.46,
+        "dispersion": 0.006,
+        "lens": 0.012,
+        "rim": 0.3,
+        "specular": 0.5,
+        "saturation": 1,
+        "emission": 0,
+        "iridescence": 0.12,
+        "filmNm": 420,
+        "tint": "#c4e6df",
+        "kind": "glass"
+      },
+      "motion": {
+        "kind": "drift",
+        "axis": "y",
+        "rate": 0.22,
+        "amount": 0.06
+      },
+      "phase": 1.35
+    },
+    {
+      "shape": {
+        "kind": "ring",
+        "r": 1.58,
+        "len": 8,
+        "thickness": 0.48,
+        "fillet": 0,
+        "bevel": 0,
+        "sides": 128,
+        "hole": 1.2,
+        "shaft": 0.35,
+        "head": 1,
+        "depth": 0.5,
+        "seed": 1,
+        "bump": 0.5
+      },
+      "position": {
+        "x": 0.33,
+        "y": -0.02,
+        "z": 0.65
+      },
+      "rotation": {
+        "x": 1.1,
+        "y": 0.1,
+        "z": -0.48
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "name": "Amber inner lens",
+      "material": {
+        "density": 0.9,
+        "ior": 1.46,
+        "dispersion": 0.006,
+        "lens": 0.012,
+        "rim": 0.3,
+        "specular": 0.5,
+        "saturation": 1,
+        "emission": 0,
+        "tint": "#e8b974",
+        "kind": "glass"
+      },
+      "motion": {
+        "kind": "drift",
+        "axis": "y",
+        "rate": 0.22,
+        "amount": 0.06
+      },
+      "phase": 2.7
+    },
+    {
+      "shape": {
+        "kind": "sphere",
+        "r": 0.68,
+        "len": 8,
+        "thickness": 0.5,
+        "fillet": 0,
+        "bevel": 0,
+        "sides": 96,
+        "hole": 1,
+        "shaft": 0.35,
+        "head": 1,
+        "depth": 0.5,
+        "seed": 1,
+        "bump": 0.5
+      },
+      "position": {
+        "x": 0.42,
+        "y": 0,
+        "z": 1
+      },
+      "rotation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "scale": {
+        "x": 1,
+        "y": 1,
+        "z": 1
+      },
+      "name": "Brass core",
+      "material": {
+        "density": 1.7,
+        "ior": 1.5,
+        "dispersion": 0,
+        "lens": 0,
+        "rim": 0.28,
+        "specular": 0.65,
+        "saturation": 1.12,
+        "emission": 0,
+        "roughness": 0.32,
+        "tint": "",
+        "albedo": "#e0ba78",
+        "kind": "metal"
+      },
+      "motion": {
+        "kind": "drift",
+        "axis": "y",
+        "rate": 0.22,
+        "amount": 0.06
+      },
+      "phase": 4.050000000000001
+    }
+  ],
+  "groups": [],
+  "quality": 1,
+  "dprMax": 1.75,
+  "paused": false,
+  "timeOffset": 0
+}

@@ -547,7 +547,7 @@ await run(async (defer) => {
       // vignette and the tone map. Grain is excluded because it keys off a time uniform, and a
       // hash of it is not a meaningful parity target.
       const post = await import(base + "dist/renderer/nodes/post.js");
-      const POST_CONST = { far: 60, dofTaps: 8, causticTaps: 6 };
+      const POST_CONST = { far: model.FAR, dofTaps: 8, causticTaps: 6 };
       /** The post pass's full argument set; the variants below switch parts of it off. */
       const postArgs = (overrides = {}) => ({
         // Plain textures here: nothing in this harness is blit-written, so no row inversion.
@@ -579,65 +579,11 @@ await run(async (defer) => {
         ...overrides,
       });
       cases.post = {
-        glsl: `
-      #define DOF_TAPS 8
-      #define CAUSTIC_TAPS 6
-      uniform sampler2D tColor, tDepth, tBloom;
-      uniform vec2 uRes, uMirror; uniform vec3 uHazeCol;
-      uniform float uFocus, uRange, uAperture, uBloom, uCaustics, uHaze, uHazeTop, uVignette;
-      uniform float uScale, uTransparent, uBloomRadius, uBloomThresh, uToneMap, uBloomMode;
-      const float FAR = 60.0;
-      const float TAPS = float(DOF_TAPS);
-      const float GOLDEN_ANGLE = 2.39996323;
-      float dec(vec2 e){ return e.x + e.y / 255.0; }
-      float sat(vec3 c){ return max(max(c.r, c.g), c.b) - min(min(c.r, c.g), c.b); }
-      ${TONEMAP_NEUTRAL}
-      ${TONEMAP_ACES}
-      void main(){
-        vec2 vUv = mix(vUvIn, vec2(1.0) - vUvIn, step(0.5, uMirror));
-        float dC = dec(texture2D(tDepth, vUv).rg) * FAR;
-        float r0 = pow(clamp(abs(dC - uFocus) / uRange, 0.0, 1.0), 1.2) * uAperture * uScale;
-        vec4 sum = texture2D(tColor, vUv);
-        float wsum = 1.0;
-        vec3 glow = vec3(0.0);
-        for (int k = 0; k < DOF_TAPS; k++){
-          float fi = float(k) + 1.0;
-          float a = fi * GOLDEN_ANGLE;
-          vec2 dir = vec2(cos(a), sin(a));
-          float rad = sqrt(fi / TAPS) * r0;
-          vec2 uv2 = vUv + dir * rad / uRes;
-          float d2 = dec(texture2D(tDepth, uv2).rg) * FAR;
-          float r2 = clamp(abs(d2 - uFocus) / uRange, 0.0, 1.0) * uAperture * uScale;
-          float w = (d2 < dC - 0.4) ? smoothstep(0.0, rad + 0.001, r2) : 1.0;
-          sum += texture2D(tColor, uv2) * w;
-          wsum += w;
-          vec3 g = texture2D(tColor, vUv + dir * (sqrt(fi / TAPS) * uBloomRadius * uScale) / uRes).rgb;
-          glow += g * max(sat(g) - uBloomThresh, 0.0);
-        }
-        vec4 acc = sum / wsum;
-        float alphaIn = acc.a;
-        vec3 straight = acc.rgb / max(alphaIn, 1e-4);
-        vec3 bloom = uBloomMode > 0.5 ? texture2D(tBloom, vUv).rgb * uBloom : (glow / TAPS) * uBloom;
-        vec3 col = straight + bloom;
-        float alpha = min(1.0, alphaIn + max(max(bloom.r, bloom.g), bloom.b));
-        vec3 caus = vec3(0.0);
-        for (int k = 0; k < CAUSTIC_TAPS; k++){
-          float o = (float(k) + 1.0) / float(CAUSTIC_TAPS);
-          vec3 c = texture2D(tColor, vUv + vec2(sin(o * 9.0) * 0.012, o * 0.20)).rgb;
-          caus += c * sat(c) * (1.0 - o);
-        }
-        vec3 pool = (caus / float(CAUSTIC_TAPS)) * smoothstep(0.46, 0.0, vUv.y) * uCaustics * 3.2;
-        col += pool;
-        alpha = min(1.0, alpha + max(max(pool.r, pool.g), pool.b));
-        float haze = smoothstep(uHazeTop, -0.02, vUv.y) * uHaze;
-        col = mix(col, uHazeCol, haze);
-        alpha *= 1.0 - haze * uTransparent;
-        vec2 q = vUv - 0.5;
-        col *= 1.0 - dot(q, q) * uVignette;
-        if (uToneMap > 1.5) col = tonemapAces(col);
-        else if (uToneMap > 0.5) col = tonemapNeutral(col);
-        gl_FragColor = vec4(col * alpha, alpha);
-      }`,
+        // Compare the shipped shader, including its prefiltered circle of confusion and skips.
+        // The harness supplies vUvIn, so remove only that duplicate declaration.
+        glsl:
+          `#define DOF_TAPS ${POST_CONST.dofTaps}\n#define CAUSTIC_TAPS ${POST_CONST.causticTaps}\n` +
+          shaders.POST_FRAG.replace("varying vec2 vUvIn;", ""),
         glslUniforms: {
           tColor: { value: glTex },
           tDepth: { value: glDepth },
@@ -645,6 +591,8 @@ await run(async (defer) => {
           uRes: { value: new GL.Vector2(SIZE, SIZE) },
           uMirror: { value: new GL.Vector2(0, 0) },
           uHazeCol: { value: new GL.Vector3(0.7, 0.75, 0.85) },
+          uGrain: { value: 0 },
+          uTime: { value: 0 },
           uFocus: { value: 12 },
           uRange: { value: 9 },
           uAperture: { value: 1.4 },
@@ -711,6 +659,34 @@ await run(async (defer) => {
           ),
       };
 
+      // Use uniforms rather than constants so the compiler must retain the runtime branches.
+      for (const [name, aperture, bloom, mode, caustics] of [
+        ["postBloomOnly", 0, 0.6, 0, 0],
+        ["postPyramid", 0, 0.6, 1, 0],
+        ["postEffectsOff", 0, 0, 1, 0],
+        ["postCausticCutoff", 0, 0, 0, 0.001],
+      ]) {
+        cases[name] = {
+          glsl: cases.post.glsl,
+          glslUniforms: {
+            ...cases.post.glslUniforms,
+            uAperture: { value: aperture },
+            uBloom: { value: bloom },
+            uBloomMode: { value: mode },
+            uCaustics: { value: caustics },
+          },
+          tsl: () =>
+            post.postPass(
+              postArgs({
+                aperture: TSL.uniform(aperture),
+                bloomAmount: TSL.uniform(bloom),
+                bloomMode: TSL.uniform(mode),
+                caustics: TSL.uniform(caustics),
+              }),
+            ),
+        };
+      }
+
       // Rebuild the post pass's opening in-line, one step at a time, to find where it goes to zero.
       const mirror = TSL.vec2(0, 0);
       const probes = {
@@ -737,7 +713,7 @@ await run(async (defer) => {
               : name === "probeSample"
                 ? `void main(){ gl_FragColor = texture2D(tSrc, vUvIn); }`
                 : `void main(){ gl_FragColor = vec4(vec3(texture2D(tSrc, vUvIn).a), 1.0); }`,
-          tsl: build,
+          tsl: () => TSL.Fn(build)(),
         };
       }
 
@@ -769,7 +745,7 @@ await run(async (defer) => {
         if (cases[name]) continue;
         cases[name] = {
           glsl: `void main(){ gl_FragColor = vec4(texture2D(tSrc, vUvIn).rgb, 1.0); }`,
-          tsl: build,
+          tsl: () => TSL.Fn(build)(),
         };
       }
 

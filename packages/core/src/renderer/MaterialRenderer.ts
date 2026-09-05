@@ -60,16 +60,21 @@ import {
 export { expandScatter, resolveItems, bakeScatter, frameFov } from "./shared";
 import { parseHex } from "../util/color";
 import type { FrameCallback, MaterialItem } from "./item";
-import {
+// Gates only — the interactivity RUNTIME (controller, applier tables, tilt sensor) is reached
+// through a dynamic import in loadInteraction(), so a scene with no bindings never fetches it.
+// Anything added here that pulls ./interaction statically undoes that; see interactionGates.ts.
+import { interactionActive } from "./interactionGates";
+import type {
   InteractionController,
-  interactionActive,
-  ITEM_APPLIERS,
-  LAMP_APPLIERS,
-  SCENE_APPLIERS,
-  type ItemApplyArgs,
-  type LampApplyArgs,
-  type SceneApplyArgs,
+  ItemApplyArgs,
+  LampApplyArgs,
+  SceneApplyArgs,
 } from "./interaction";
+import type { TiltStatus } from "./tilt";
+
+/** The lazily-fetched interactivity runtime. Held alongside the controller so the per-frame binding
+ *  writes can reach the applier tables without importing them eagerly. */
+type InteractionModule = typeof import("./interaction");
 import { applyMotions, loopFrequency } from "./motions";
 import {
   BACKDROP_FRAG,
@@ -383,6 +388,15 @@ export class MaterialRenderer implements Engine {
   // ---- Interaction layer (optional; created only when some binding list exists) ----
   /** Created by syncInteraction() when interaction turns on, disposed when it turns off. */
   private interaction?: InteractionController;
+  /** The interactivity runtime chunk, kept for the applier tables. Set and cleared with
+   *  `interaction`; both stay undefined for the frames between the config turning the layer on and
+   *  the chunk arriving. */
+  private interactionModule?: InteractionModule;
+  /** A fetch already in flight, so a per-frame refresh can't start a second one. */
+  private interactionLoading = false;
+  /** setInteractionInput() calls made while the chunk was in flight, replayed once it lands. */
+  private stagedInputs?: Map<string, number>;
+
   /** Delta a `timeOffset` binding adds on top of the clock (0 at rest). */
   private interactionTime = 0;
   /** Multiplier a `cameraZoom` binding applies to the camera distance (1 at rest). */
@@ -921,9 +935,36 @@ export class MaterialRenderer implements Engine {
   private syncInteraction(): void {
     const active = interactionActive(this.config);
     if (active && !this.interaction) {
+      void this.loadInteraction();
+    } else if (!active && this.interaction) {
+      this.interaction.dispose();
+      this.interaction = undefined;
+      this.interactionModule = undefined;
+      this.interactionTime = 0;
+      this.interactionZoom = 1;
+    }
+  }
+
+  /**
+   * Fetch the interactivity runtime and attach it. Deliberately a DYNAMIC import: the controller,
+   * its listeners, the applier tables and the tilt sensor are ~3.7 KB gzipped that a scene with no
+   * bindings never runs, and a static import would put all of it in every bundle. The cost is that
+   * interaction goes live a chunk-fetch after the first frame instead of on it — invisible in
+   * practice, since there is nothing to react to until a reader moves.
+   *
+   * A failed fetch is not fatal: the scene renders exactly as an unbound one does.
+   */
+  private async loadInteraction(): Promise<void> {
+    if (this.interactionLoading) return;
+    this.interactionLoading = true;
+    try {
+      const mod = await import("./interaction");
+      // The renderer may have been disposed, or the config edited back to inert, in flight.
+      if (this.disposed || this.interaction || !interactionActive(this.config)) return;
+      this.interactionModule = mod;
       // The resolved-list accessor keeps the controller iterating the SAME ItemConfig objects the
       // meshes were built from, so scatter-generated shapes smooth and hit-test like authored ones.
-      this.interaction = new InteractionController(
+      this.interaction = new mod.InteractionController(
         this.container,
         () => this.config,
         () => this.resolvedItems,
@@ -931,11 +972,14 @@ export class MaterialRenderer implements Engine {
       // Re-apply an active studio scrub, so adding the FIRST scroll binding responds to the
       // preview slider immediately instead of waiting for the next drag.
       this.interaction.scrollOverride = this.scrollPreview;
-    } else if (!active && this.interaction) {
-      this.interaction.dispose();
-      this.interaction = undefined;
-      this.interactionTime = 0;
-      this.interactionZoom = 1;
+      if (this.stagedInputs) {
+        for (const [name, value] of this.stagedInputs) this.interaction.setInput(name, value);
+        this.stagedInputs = undefined;
+      }
+    } catch {
+      // Chunk unavailable (offline, a stale deploy): stay inert rather than throwing into the loop.
+    } finally {
+      this.interactionLoading = false;
     }
   }
 
@@ -957,21 +1001,22 @@ export class MaterialRenderer implements Engine {
    *  scene with no interaction layer would otherwise be driven by stale values. */
   private applyInteraction(): void {
     this.seedInteractionOut();
-    if (!this.interaction) return;
+    const mod = this.interactionModule;
+    if (!this.interaction || !mod) return; // set together, so this is "before the chunk landed"
     // While capturing, every bound param is written at its authored base: merely skipping the
     // write would freeze whatever live hover/scroll state the previous frame left in the
     // uniforms, so exports wouldn't be deterministic. Live controller state is left untouched, so
     // the frame after a capture resumes mid-gesture.
-    this.writeBindings(this.capturing ? null : this.interaction);
+    this.writeBindings(this.capturing ? null : this.interaction, mod);
   }
 
   /** Evaluate every binding through the applier tables and write the results. With a controller,
    *  value = mix(from ?? base, to, smoothedSource); without one, every value is its base. Scene
    *  bindings drive shared params; each shape's and lamp's bindings drive their own. */
-  private writeBindings(ic: InteractionController | null): void {
+  private writeBindings(ic: InteractionController | null, mod: InteractionModule): void {
     const c = this.config;
     for (const b of c.interaction?.bindings ?? []) {
-      const applier = SCENE_APPLIERS[b.target];
+      const applier = mod.SCENE_APPLIERS[b.target];
       applier.apply(this.bindingValue(ic, b, applier.base(c)), this.sceneArgs);
     }
     const lampCount = Math.min(c.lamps.length, MAX_LAMPS);
@@ -980,7 +1025,7 @@ export class MaterialRenderer implements Engine {
       if (!bindings || bindings.length === 0) continue;
       this.lampArgs.vec = this.lampPositions[i];
       for (const b of bindings) {
-        const applier = LAMP_APPLIERS[b.target];
+        const applier = mod.LAMP_APPLIERS[b.target];
         applier.apply(this.bindingValue(ic, b, applier.base(c.lamps[i])), this.lampArgs);
       }
     }
@@ -993,7 +1038,7 @@ export class MaterialRenderer implements Engine {
       this.itemArgs.mesh = item.mesh;
       this.itemArgs.home = item.home;
       for (const b of bindings) {
-        const applier = ITEM_APPLIERS[b.target];
+        const applier = mod.ITEM_APPLIERS[b.target];
         applier.apply(this.bindingValue(ic, b, applier.base(base, item.home)), this.itemArgs);
       }
     }
@@ -1062,9 +1107,56 @@ export class MaterialRenderer implements Engine {
   }
 
   /** Feed a `custom:<name>` interaction input (developer API, drive any binding from your own
-   *  signal each frame). No-op while the interaction layer is off. */
+   *  signal each frame). No-op while the interaction layer is off. Values fed before the interaction
+   *  chunk lands are STAGED (last one per name wins) and replayed when it does — otherwise a
+   *  one-shot input sent right after `onReady` would vanish into the fetch window. */
   setInteractionInput(name: string, value: number): this {
-    this.interaction?.setInput(name, value);
+    if (this.interaction) {
+      this.interaction.setInput(name, value);
+      return this;
+    }
+    if (typeof name !== "string" || !Number.isFinite(value)) return this;
+    if (!interactionActive(this.config)) return this; // nothing will ever consume it
+    (this.stagedInputs ??= new Map()).set(name, value);
+    return this;
+  }
+
+  /**
+   * Explicitly ask for the device-orientation sensor. OPTIONAL, and on iOS it opens a modal
+   * permission dialog — so this belongs to a page where tilt is the point, not to a decorative
+   * background, which should simply go without tilt there. Nothing calls this for you.
+   *
+   * CALL IT FROM A USER GESTURE: iOS 13+ only grants the sensor from inside a tap handler, and
+   * awaiting anything before it (a fetch, a timeout) spends the gesture. Resolves true once
+   * readings can flow — false when
+   * the platform has no sensor, the scene reads no tilt, or the reader refused. Where no permission
+   * is required the sensor is already live and this resolves true.
+   */
+  enableTilt(): Promise<boolean> {
+    // NOT awaited before the permission call: iOS only grants the sensor to a synchronous chain
+    // from the gesture, so this hands straight to the controller. In the window before the
+    // interaction chunk lands there is nothing to hand to — start the fetch and report false, and
+    // the reader's next tap works. (That window is the first frames after mount: any tilt binding
+    // makes the layer active, so the fetch begins on the first refresh, long before a tap.)
+    if (!this.interaction) {
+      if (interactionActive(this.config)) void this.loadInteraction();
+      return Promise.resolve(false);
+    }
+    return this.interaction.enableTilt();
+  }
+
+  /** Where the tilt sensor stands. `"prompt"` is exactly when a tap-to-enable affordance helps. */
+  tiltStatus(): TiltStatus {
+    if (this.interaction) return this.interaction.tiltStatus();
+    // Before the chunk lands there is no sensor to ask, but the platform check needs no chunk.
+    const supported =
+      typeof window !== "undefined" && typeof window.DeviceOrientationEvent !== "undefined";
+    return supported ? "prompt" : "unsupported";
+  }
+
+  /** Take the next orientation reading as the neutral pose — for when the reader changed grip. */
+  recenterTilt(): this {
+    this.interaction?.recenterTilt();
     return this;
   }
 
@@ -2274,7 +2366,9 @@ export class MaterialRenderer implements Engine {
     const composite = this.bloomComposite;
     const down = this.bloomDown;
     if (!levels || !extract || !blurs || !composite || !down) return;
-    const wantBloom = this.config.post.bloomMode === "pyramid";
+    // Read the resolved uniform: an interaction can turn bloom on or off without a refresh.
+    const wantBloom =
+      this.config.post.bloomMode === "pyramid" && this.postMaterial.uniforms.uBloom.value > 0;
     const wantDust = this.dustMesh !== undefined;
     if (!wantBloom && !wantDust) return;
 
@@ -2716,10 +2810,14 @@ export class MaterialRenderer implements Engine {
     // the prism's Z would hand every pixel it covers a false near depth.
     if (this.beamMesh) this.beamMesh.visible = false;
     if (this.causticMesh) this.causticMesh.visible = false;
-    renderer.setRenderTarget(this.depthRT);
-    renderer.setClearColor(this.depthClearColor, 1);
-    renderer.clear();
-    renderer.render(this.scene, this.camera);
+    // Only post reads front depth. Keep the diagnostic available even with a closed aperture.
+    // Use the live uniform so aperture bindings can enable the pass on the very same frame.
+    if (this.postMaterial.uniforms.uAperture.value > 0 || this.probeName === "front") {
+      renderer.setRenderTarget(this.depthRT);
+      renderer.setClearColor(this.depthClearColor, 1);
+      renderer.clear();
+      renderer.render(this.scene, this.camera);
+    }
 
     // 1b. Back faces, the exit surface, encoded exactly like the depth pass. Subtracting this
     //     from the front depth gives each fragment its real optical path, which is what the glass

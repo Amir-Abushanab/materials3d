@@ -10,6 +10,7 @@ const PRESET_LABELS: Record<string, string> = {
   materials: "Materials",
   prism: "Prism",
   knot: "Knot",
+  aperture: "Aperture",
 };
 
 export function presetLabel(name: string): string {

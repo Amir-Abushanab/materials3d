@@ -29,11 +29,11 @@ const ElementBase: typeof HTMLElement =
  * playback. These are LIVE: a change after mount is pushed to the running scene. A `src` is
  * fetched once per URL and a `preset` resolved once per name, so an update re-reads neither.
  *
- * Shell options: `poster`, `poster-fit` (`fill` | `cover` | `contain`), `lazy`, `webgl`
- * (`auto` | `force` | `off`), `min-size` (CSS px) and `renderer` (`webgl`, the default, or
- * `webgpu` for the experimental node engine, a separate bundle). Read once at mount; changing one
- * on a live element does nothing until it is re-connected (the same contract as the React
- * wrapper's mount-time props).
+ * Shell options: `poster`, `poster-fit` (`fill` | `cover` | `contain`), `fade-ms` (poster→canvas
+ * crossfade, default 300; `0` swaps instantly), `lazy`, `webgl` (`auto` | `force` | `off`),
+ * `min-size` (CSS px) and `renderer` (`webgl`, the default, or `webgpu` for the experimental node
+ * engine, a separate bundle). Read once at mount; changing one on a live element does nothing
+ * until it is re-connected (the same contract as the React wrapper's mount-time props).
  *
  * Also a `config` property and a read-only `handle` getter. Emits `materials3d-ready` (detail =
  * renderer) and `materials3d-fallback` (detail = reason).
@@ -121,6 +121,7 @@ export class Materials3DElement extends ElementBase {
     const options: MaterialOptions<RendererKind> = {
       poster: this.getAttribute("poster") ?? undefined,
       posterFit: (this.getAttribute("poster-fit") as MaterialOptions["posterFit"]) ?? undefined,
+      fadeMs: this.#numAttr("fade-ms"),
       lazy: this.#boolAttr("lazy"),
       webgl: (this.getAttribute("webgl") as MaterialOptions["webgl"]) ?? undefined,
       minSizeForWebGL: Number.isFinite(minSize) && minSize > 0 ? minSize : undefined,
@@ -186,6 +187,20 @@ export class Materials3DElement extends ElementBase {
     const config = await this.#buildConfig();
     if (this.#handle !== handle) return; // destroyed or remounted while the config resolved
     handle.set(config);
+  }
+
+  /**
+   * A non-negative number attribute, or undefined for the shell default.
+   *
+   * Not the inline `Number(getAttribute(...))` that `min-size` uses: that leans on `Number(null)`
+   * being 0 and rejects 0 as "absent", which is fine for a size and wrong for a duration.
+   * `fade-ms="0"` means swap with no crossfade at all, so it must not share an encoding with
+   * "not set". Unparseable and negative still fall through to the default.
+   */
+  #numAttr(name: string): number | undefined {
+    if (!this.hasAttribute(name)) return undefined;
+    const value = Number(this.getAttribute(name));
+    return Number.isFinite(value) && value >= 0 ? value : undefined;
   }
 
   /** Presence = true; `"false"`/`"0"` = false; absent = undefined (shell default). */

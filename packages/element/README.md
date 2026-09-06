@@ -35,13 +35,15 @@ registers the class under another tag name.
 | `transparent`               | drop the backdrop, so the scene composites over the page                    |
 | `paused`                    | live; toggles playback                                                      |
 | `poster`, `poster-fit`      | `poster-fit` is `fill` (default, matches the canvas), `cover` or `contain`  |
+| `fade-ms`                   | poster→canvas crossfade in ms; default `300`, `0` swaps instantly           |
 | `lazy`, `webgl`, `min-size` | shell options                                                               |
 | `renderer`                  | `webgpu` selects the experimental WebGPU/TSL engine; anything else is WebGL |
 
 Boolean attributes: present means true, `"false"` or `"0"` means false, absent means the shell
 default.
 
-`poster`, `poster-fit`, `lazy`, `webgl`, `min-size` and `renderer` are read once at mount.
+`poster`, `poster-fit`, `fade-ms`, `lazy`, `webgl`, `min-size` and `renderer` are read once at
+mount.
 Changing one on a connected element does nothing until it is disconnected and reconnected.
 `config`, `src`, `preset`, `transparent` and `paused` are live.
 
@@ -64,6 +66,31 @@ if (el) {
   });
 }
 ```
+
+### Capture a poster at the pixel ratio it will be shown at
+
+`snapshot()` returns the canvas at its **backing-store** size: the element's CSS size times the
+device pixel ratio, capped by `dprMax`. If posters are generated in a headless browser, that
+browser's `deviceScaleFactor` is what decides their resolution — and it defaults to `1`.
+
+A poster captured that way is half the resolution the same canvas renders at on a 2x display. The
+browser stretches it to fill the element while the live canvas behind it does not, so the crossfade
+lands on a visible sharpening: edges tighten, and because soft edges bloom outward the poster reads
+as slightly _heavier_ than the live scene rather than merely blurrier.
+
+```js
+const page = await browser.newPage({
+  viewport: { width: 1440, height: 820 },
+  deviceScaleFactor: 2,
+});
+```
+
+Two things go with it. Keep the encoder quality high enough not to ring the high-contrast edges — a
+lossy poster shows up as thin outlines tracing every rim. And remember a fixed-aspect poster is
+stretched by `poster-fit` while the canvas re-frames itself from `camera.fit`, so capture at the
+aspect the element is widest at. Where the two policies disagree — `minVisibleWidth` widens the
+camera but never the poster — expect a mismatch at narrow sizes; `fade-ms="0"` at least stops it
+being a dissolve.
 
 Peer dependency: `three >= 0.180 < 1`. `@types/three` is an optional peer.
 

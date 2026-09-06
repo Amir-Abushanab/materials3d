@@ -1,5 +1,11 @@
 # @materials3d/core
 
+## 0.4.1
+
+### Patch Changes
+
+- [`cc2daab`](https://github.com/Amir-Abushanab/materials3d/commit/cc2daab9ceebc298dc54facda8b660de663cc66a) Thanks [@Amir-Abushanab](https://github.com/Amir-Abushanab)! - Add pointer tilt, gentle hover zoom, and hover highlights to the Aperture preset. Glass rings gain iridescence and brighter reflections on hover, while the brass core brightens. Interactions ease back to their defaults when the pointer leaves.
+
 ## 0.4.0
 
 ### Minor Changes

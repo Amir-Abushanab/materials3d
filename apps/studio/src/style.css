@@ -328,6 +328,37 @@ button:hover {
   overflow-y: auto;
 }
 
+/* Studio credit, pinned under the scrolling controls as the panel's closing line. --ink-2 rather
+   than the quieter --ink-3 of the .panel-head subtitle: the mark's outline is pure black, and at
+   --ink-3 the drawing shouted over its own words. */
+.ps-credit {
+  flex: none;
+  padding: 10px 14px 11px;
+  border-top: 1px solid var(--hair);
+  color: var(--ink-2);
+  font-size: 11px;
+  line-height: 1;
+  letter-spacing: -0.005em;
+  text-decoration: none;
+}
+
+.ps-credit:hover {
+  color: var(--ink);
+}
+
+/* The mark is a LETTER in that sentence, not an icon beside it: it sits ON the baseline (which is
+   what `baseline` does to a replaced element — bottom edge on the baseline), and `margin-right` is
+   the sliver of sidebearing the drawing does not carry. 1.3em is the 1.85x cap-height the lockup
+   runs at on principlestash.com — the mascot is a drop cap, not a letter matched to the x-height.
+   Measured, not guessed: at 11px text the cap is 7.75px and the mark 14.3px. */
+.ps-credit-mark {
+  display: inline-block;
+  width: auto;
+  height: 1.3em;
+  margin-right: 0.06em;
+  vertical-align: baseline;
+}
+
 /* Tweakpane's default dark theme fights a near-white studio; recolour it to the panel. */
 #pane .tp-dfwv {
   width: 100%;

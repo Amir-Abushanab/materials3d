@@ -2,7 +2,7 @@ import { mergeSceneConfig, type SceneConfig } from "../config/model";
 import type { MaterialRenderer, MaterialRendererOptions } from "../renderer/MaterialRenderer";
 import type { NodeMaterialRenderer } from "../renderer/NodeMaterialRenderer";
 import type { TiltStatus } from "../renderer/tilt";
-import { hasWebGL, minSide, prefersReducedData, prefersReducedMotion } from "./probe";
+import { probeWebGL, minSide, prefersReducedData, prefersReducedMotion } from "./probe";
 import { ensurePositioned, setupPoster, type Poster, type PosterFit } from "./poster";
 
 export type { PosterFit } from "./poster";
@@ -10,6 +10,10 @@ export type { PosterFit } from "./poster";
 /** Why the shell showed the poster instead of live glass. */
 export type FallbackReason =
   | "no-webgl"
+  /** WebGL exists, but it is a software rasterizer — the poster is the better answer. Distinct from
+   *  `"no-webgl"` on purpose: a page that wants to say "your browser cannot do this" and one that
+   *  wants to say "this machine has no GPU" are different messages. */
+  | "software-renderer"
   | "reduced-motion"
   | "save-data"
   | "small-viewport"
@@ -58,8 +62,16 @@ export interface MaterialOptions<R extends RendererKind = "webgl"> {
   lazy?: boolean;
   /** IntersectionObserver margin for the lazy trigger. Default "200px". */
   rootMargin?: string;
-  /** "auto" probes WebGL (with failIfMajorPerformanceCaveat); "force" skips the probe; "off"
-   *  stays a poster. */
+  /**
+   * - `"auto"` (default) — probe, and upgrade only onto a GPU. A software rasterizer (SwiftShader,
+   *   llvmpipe) keeps the poster and reports `"software-renderer"`: four passes per frame on the
+   *   CPU costs seconds of blocked main thread, which is worse for the page than the still it
+   *   already has.
+   * - `"force"` — skip the probe entirely and upgrade regardless. The escape hatch if you genuinely
+   *   want the live render on a software renderer.
+   * - `"off"` — stay a poster. THIS is how you decline the upgrade; `paused` does not, it keeps the
+   *   whole renderer and only stops the frames.
+   */
   webgl?: "auto" | "force" | "off";
   /** Forward prefers-reduced-motion to the renderer (freezes to a static frame). Default true. */
   respectReducedMotion?: boolean;
@@ -76,7 +88,14 @@ export interface MaterialOptions<R extends RendererKind = "webgl"> {
   minSizeForWebGL?: number;
   /** Poster→canvas crossfade duration (ms). Default 300. */
   fadeMs?: number;
-  /** Start paused. */
+  /**
+   * Start paused.
+   *
+   * This stops FRAMES; it does not decline the upgrade. The engine is still fetched, the renderer
+   * still builds, ready still fires, state still reaches `"running"` and the poster is still
+   * swapped out for a (static) canvas. If what you want is "keep the still and do nothing", that is
+   * `webgl: "off"`.
+   */
   paused?: boolean;
   onReady?(renderer: EngineFor<R>): void;
   onFallback?(reason: FallbackReason): void;
@@ -267,9 +286,13 @@ export function createMaterialsImpl<R extends RendererKind = "webgl">(
 
   function probeAndUpgrade(): void {
     if (aborted) return;
-    if (webgl === "auto" && !hasWebGL()) {
-      fallback("no-webgl");
-      return;
+    if (webgl === "auto") {
+      // One probe, two outcomes. Software is NOT folded into "no-webgl": the consumer asked to be
+      // told why, and "this machine has no GPU" is a different thing to say than "your browser
+      // cannot do this".
+      const probe = probeWebGL();
+      if (probe === "none") return fallback("no-webgl");
+      if (probe === "software") return fallback("software-renderer");
     }
     void upgrade();
   }

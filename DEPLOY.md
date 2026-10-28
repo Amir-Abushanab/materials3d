@@ -5,13 +5,23 @@ CI lives in [`.github/workflows`](.github/workflows):
 - **`ci.yml`**: on every push and pull request to `main`, `pnpm build` then `pnpm check` (format,
   lint, typecheck, tests, depcruise, knip, license notices, agent skill, gallery validate). On a push to `main` it deploys the
   studio to Cloudflare Pages if the Cloudflare secrets are set.
-- **`release.yml`**: on a push to `main` that touches `packages/**` or `.changeset/**`,
-  [Changesets](https://github.com/changesets/changesets) opens a "Version Packages" PR from any
-  pending changesets; merging that PR publishes the bumped `@materials3d/*` packages to npm over
-  OIDC / Trusted Publishing.
+- **`version.yml`**: on a push to `main` that touches `packages/**` or `.changeset/**` (or itself),
+  [Changesets](https://github.com/changesets/changesets) opens or updates a "Version Packages" PR
+  from any pending changesets. It never publishes. `scripts/version-pr-guard.sh` skips a run whose
+  checkout is stale because main has since moved under packages or changesets, and closes a
+  Version PR that bumps nothing main lacks.
+- **`release.yml`**: on a push to `main` that changes a `packages/**/CHANGELOG.md` (in practice,
+  merging the Version PR), publishes the bumped `@materials3d/*` packages to npm over OIDC /
+  Trusted Publishing. It never versions.
 
-Both need one-time account setup, below. Until then CI stays green: it skips the deploy, and the
-release workflow manages Version PRs without attempting to publish.
+The two workflows have separate concurrency groups (`version` and `release`), and neither cancels
+a run in progress. GitHub keeps only the newest pending run per group and cancels the one before
+it, so when versioning and publishing shared a group, a feature push carrying changesets could
+cancel a waiting publish and then publish nothing itself. Now only Version PR merges queue for
+`release`.
+
+Both need one-time account setup, below. Until then CI stays green: it skips the deploy,
+`version.yml` still manages Version PRs, and `release.yml` skips publishing.
 
 ## 0. The public repo
 
@@ -84,13 +94,15 @@ pnpm release            # builds and publishes @materials3d/{core,react,element}
 After that, changesets as normal: each merged changeset feeds the next Version Packages PR.
 
 Until 0.1.0 is on npm, `release.yml`'s preflight gate sees `@materials3d/core` absent from the
-registry and manages Version PRs only, so earlier runs stay green.
+registry and publishes nothing, so earlier runs stay green. `version.yml` keeps managing Version
+PRs meanwhile.
 
 ### Enable tokenless CI releases (one-time, right after the first publish)
 
 On each package's npm page: Settings, Trusted Publisher, add provider **GitHub Actions**,
 repository **`Amir-Abushanab/materials3d`**, workflow **`release.yml`** (leave Environment blank).
 CI then publishes over OIDC with no `NPM_TOKEN`, and every release carries provenance.
+`release.yml` is still the publisher; `version.yml` never publishes and needs no Trusted Publisher.
 
 ### Adding a new package
 
@@ -104,9 +116,11 @@ that exists CI will try to publish the newcomer, and fails on it until you boots
 ### Ongoing releases (automated)
 
 1. Merge PRs that include changesets into `main`.
-2. Changesets opens or updates a **"Version Packages"** PR (bumps the shared version, writes
+2. `version.yml` opens or updates a **"Version Packages"** PR (bumps the shared version, writes
    `CHANGELOG.md`, and syncs the agent skill's `library_version`).
-3. Merge that PR. CI publishes the new version, tags it and cuts a GitHub Release.
+3. Merge that PR. `release.yml` publishes the new version, tags it and cuts a GitHub Release.
+   A changeset that landed after the PR was last versioned is removed from the publish run's
+   checkout so the merged versions go out; `version.yml` versions it into the next PR.
 
 `pnpm release` runs [`scripts/publish-if-needed.mjs`](scripts/publish-if-needed.mjs) rather than
 `changeset publish`. The script publishes only the versions the registry confirms are missing,
@@ -117,13 +131,13 @@ and crashes on the E403 after the packages have reached npm, leaving a red run w
 also restores a tag that a past run published but never pushed. Pass `--dry-run` to preview what
 it would publish.
 
-> **Benign red run:** merging the Version PR while an older Release run is still in flight can
-> fail that older run with "The pull request cannot be reopened". The run for the Version PR's own
-> merge commit does the real work. The workflow's self-heal step reports the real API status rather
-> than the bare `HttpError` the action surfaces.
+> **Benign red run:** merging the Version PR while an older Version run is still in flight can
+> fail that older run with "The pull request cannot be reopened". The `release.yml` run for the
+> Version PR's merge does the publishing. The version workflow's self-heal step reports the real
+> API status rather than the bare `HttpError` the action surfaces.
 
 > **Fallback:** if OIDC publishing 404s, create a granular `NPM_TOKEN` (scoped to `@materials3d`,
-> read-write, no IP allowlist) and add it as `NODE_AUTH_TOKEN` in `release.yml`'s changesets step.
+> read-write, no IP allowlist) and add it as `NODE_AUTH_TOKEN` in the `env` of `release.yml`'s Publish step.
 
 ## The pre-commit hook
 

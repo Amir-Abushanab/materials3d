@@ -70,6 +70,11 @@ function modelShapes(config: SceneConfig): ShapeConfig[] {
 const INLINE_LIMIT = 2048;
 const REF_PREFIX = "m3d-media#";
 
+/** Whether a shape's `model` is a payload worth holding out of line. */
+function bigModel(shape: ShapeConfig): boolean {
+  return typeof shape.model === "string" && shape.model.length >= INLINE_LIMIT;
+}
+
 /**
  * Out-of-line storage for a backdrop or a `.glb` picked from disk.
  *
@@ -112,15 +117,13 @@ class MediaStore {
       if (typeof value !== "string" || value.length < INLINE_LIMIT) continue;
       out[key] = this.ref(value);
     }
-    const big = (shape: ShapeConfig): boolean =>
-      typeof shape.model === "string" && shape.model.length >= INLINE_LIMIT;
-    if (modelShapes(config).some(big)) {
+    if (modelShapes(config).some(bigModel)) {
       out.items = config.items.map((item) =>
-        big(item.shape)
+        bigModel(item.shape)
           ? { ...item, shape: { ...item.shape, model: this.ref(item.shape.model as string) } }
           : item,
       );
-      if (config.scatter && big(config.scatter.shape)) {
+      if (config.scatter && bigModel(config.scatter.shape)) {
         out.scatter = {
           ...config.scatter,
           shape: { ...config.scatter.shape, model: this.ref(config.scatter.shape.model as string) },

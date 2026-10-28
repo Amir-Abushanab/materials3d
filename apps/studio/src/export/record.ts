@@ -36,10 +36,10 @@ export function startRecording(
     if (event.data.size > 0) chunks.push(event.data);
   });
 
+  const release = (): void => {
+    for (const track of stream.getTracks()) track.stop();
+  };
   const done = new Promise<VideoFormat>((resolve, reject) => {
-    const release = (): void => {
-      for (const track of stream.getTracks()) track.stop();
-    };
     recorder.addEventListener(
       "stop",
       () => {

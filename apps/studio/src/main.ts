@@ -1160,6 +1160,12 @@ function bindFileInput(): void {
   });
 }
 
+/** Flush a pending edit when a drag releases. The microtask defers past Tweakpane's own pointerup
+ *  handling, so we snapshot the value it settles on. */
+function flushOnRelease(): void {
+  if (history.isDirty()) queueMicrotask(() => history.flush());
+}
+
 function bindShortcuts(): void {
   // Undo/redo. Registered separately from the plain shortcuts below because it is the one binding
   // that WANTS the modifier, and it must not fire while the user is typing in a field: the
@@ -1177,11 +1183,7 @@ function bindShortcuts(): void {
   });
 
   // End-of-gesture commit: flush a pending edit when a drag releases, so one gesture is one entry
-  // rather than one per frame. The microtask defers past Tweakpane's own pointerup handling, so we
-  // snapshot the value it settles on.
-  const flushOnRelease = (): void => {
-    if (history.isDirty()) queueMicrotask(() => history.flush());
-  };
+  // rather than one per frame.
   on(window, "pointerup", flushOnRelease);
   on(window, "pointercancel", flushOnRelease);
 
@@ -1269,6 +1271,22 @@ function needsRebuild(path: string): boolean {
   );
 }
 
+/** The object holding a dotted config path's last key, and that key, for the dev bridge. */
+function walkConfigPath(path: string, create: boolean): [Record<string, unknown>, string] {
+  const keys = path.split(".");
+  let node = config() as unknown as Record<string, unknown>;
+  for (const key of keys.slice(0, -1)) {
+    const next = (node as Record<string, unknown>)[key];
+    if (next === undefined || next === null || typeof next !== "object") {
+      throw new Error(`no such config path: ${path}`);
+    }
+    node = next as Record<string, unknown>;
+  }
+  const last = keys[keys.length - 1];
+  if (!create && !(last in node)) throw new Error(`no such config path: ${path}`);
+  return [node, last];
+}
+
 /**
  * A handle on the running studio, for driving it from outside the page.
  *
@@ -1292,29 +1310,15 @@ function needsRebuild(path: string): boolean {
  */
 function exposeDevBridge(): void {
   if (!import.meta.env.DEV) return;
-  const walk = (path: string, create: boolean): [Record<string, unknown>, string] => {
-    const keys = path.split(".");
-    let node = config() as unknown as Record<string, unknown>;
-    for (const key of keys.slice(0, -1)) {
-      const next = (node as Record<string, unknown>)[key];
-      if (next === undefined || next === null || typeof next !== "object") {
-        throw new Error(`no such config path: ${path}`);
-      }
-      node = next as Record<string, unknown>;
-    }
-    const last = keys[keys.length - 1];
-    if (!create && !(last in node)) throw new Error(`no such config path: ${path}`);
-    return [node, last];
-  };
   (globalThis as Record<string, unknown>).m3d = {
     config: () => config(),
     get: (path: string) => {
-      const [node, last] = walk(path, false);
+      const [node, last] = walkConfigPath(path, false);
       return node[last];
     },
     patch: (changes: Record<string, unknown>, structural?: boolean) => {
       for (const [path, value] of Object.entries(changes)) {
-        const [node, last] = walk(path, false);
+        const [node, last] = walkConfigPath(path, false);
         node[last] = value;
       }
       applyChange(structural ?? Object.keys(changes).some(needsRebuild));
@@ -1332,7 +1336,7 @@ function exposeDevBridge(): void {
      */
     set: (changes: Record<string, unknown>, structural?: boolean) => {
       for (const [path, value] of Object.entries(changes)) {
-        const [node, last] = walk(path, true);
+        const [node, last] = walkConfigPath(path, true);
         node[last] = value;
       }
       applyChange(structural ?? Object.keys(changes).some(needsRebuild));

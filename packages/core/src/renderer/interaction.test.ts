@@ -286,13 +286,13 @@ describe("InteractionController sources", () => {
   });
 });
 
+function pressScene() {
+  const binding: SceneInteractionBinding = { source: "press", target: "bloom", to: 1 };
+  return { binding, config: sceneWith([binding]) };
+}
+
 describe("press release", () => {
   afterEach(() => vi.unstubAllGlobals());
-
-  function pressScene() {
-    const binding: SceneInteractionBinding = { source: "press", target: "bloom", to: 1 };
-    return { binding, config: sceneWith([binding]) };
-  }
 
   it("ends a press released outside the container", () => {
     // The container's listeners stop at its edge, so a press that starts inside and ends outside

@@ -3,7 +3,7 @@
 ## Prerequisites
 
 - Node 20.19 or newer (CI runs on 24)
-- pnpm 11 (`packageManager` in `package.json` pins the version; `corepack enable` picks it up)
+- pnpm 12 (`packageManager` in `package.json` pins the version; `corepack enable` picks it up)
 - `pnpm install`
 - `pnpm exec playwright install chromium`, for the scripts that render headlessly: `render`,
   `sweep` and the `tsl:*` harnesses

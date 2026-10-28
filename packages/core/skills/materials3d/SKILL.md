@@ -163,11 +163,21 @@ cursor over this shape), `pointerX`, `pointerY`, `pointerSpeed`, `press`, `press
   cursor behind the glass is the natural hero interaction:
 
 ```ts
-lamps: [{ x: 0.35, y: 0.4, r: 0.2, color: "#f0803a", intensity: 1,
-  bindings: [
-    { source: "pointerX", target: "x", from: 0.1, to: 0.9 },
-    { source: "pointerY", target: "y", from: 0.1, to: 0.9 },
-  ] }],
+createMaterials(el, {
+  lamps: [
+    {
+      x: 0.35,
+      y: 0.4,
+      r: 0.2,
+      color: "#f0803a",
+      intensity: 1,
+      bindings: [
+        { source: "pointerX", target: "x", from: 0.1, to: 0.9 },
+        { source: "pointerY", target: "y", from: 0.1, to: 0.9 },
+      ],
+    },
+  ],
+});
 ```
 
 Touch is ignored unless `interaction: { touch: true }`. Reduced motion, pauses and captures settle

@@ -164,9 +164,19 @@ jobs:
           if git ls-remote --exit-code --heads origin "$branch" >/dev/null; then
             git fetch --no-tags --quiet origin main "$branch"
             ahead=$(git rev-list --count "origin/main..origin/$branch")
-            # Two-dot, against main's tree: non-empty only when the branch carries a version that
-            # main does not have.
-            bump=$(git diff --name-only origin/main "origin/$branch" -- 'packages/*/package.json')
+            # Non-empty only when the branch carries a `version` that main does not have. Compare
+            # that field alone: a plain diff of packages/*/package.json also counts dependency
+            # edits, so once a version PR was squash-merged and a deps PR landed after it, the
+            # leftover branch (same versions, older ranges) read as a pending bump and this step
+            # opened a version PR that would have reverted the deps (orb3d #12).
+            bump=""
+            for f in $(git ls-tree -r --name-only "origin/$branch" -- packages | grep -E '^packages/[^/]+/package\.json$'); do
+              new=$(git show "origin/$branch:$f" | jq -r '.version // empty')
+              old=$( (git show "origin/main:$f" 2>/dev/null || echo '{}') | jq -r '.version // empty')
+              if [ -n "$new" ] && [ "$new" != "$old" ]; then
+                bump="$bump$(git show "origin/$branch:$f" | jq -r .name) ${old:-(new)} -> $new"$'\n'
+              fi
+            done
             tip=$(git log -1 --format=%ct "origin/$branch")
           fi
           pushed_here=no

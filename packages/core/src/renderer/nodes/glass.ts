@@ -102,7 +102,12 @@ export const prismExit = (planes: Vec, count: Vec) =>
 
 /** As above, but also reporting the outward normal of the face the ray leaves by. */
 export const prismExitNormal = (planes: Vec, count: Vec) =>
-  Fn(([ro, rd]: [Vec, Vec]) => {
+  Fn(([rayOrigin, rayDir]: [Vec, Vec]) => {
+    // Pinned, because every slot's `If` reads the ray. three r186 (#34251) assigns an unpinned
+    // value inside the first block that builds it, and every later slot then reads it unassigned.
+    // See `shadeOpaque`.
+    const ro = rayOrigin.toVar();
+    const rd = rayDir.toVar();
     const nearest = float(1e9).toVar();
     const normal = vec3(0, 0, 1).toVar();
     // UNROLLED IN JAVASCRIPT, not a `Loop`. The back-glass walk calls this from inside an `If`, and

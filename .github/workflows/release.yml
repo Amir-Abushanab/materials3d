@@ -1,8 +1,8 @@
 name: Release
 
-# Changesets-driven publishing. On every push to main:
-#   * pending changesets: opens/updates a "Version Packages" PR (bumps versions + changelogs)
-#   * that PR merged: publishes the bumped @materials3d/* packages to npm, tags, GitHub Release
+# Changesets-driven publishing: when a "Version Packages" PR is merged, publishes the bumped
+# @materials3d/* packages to npm, tags them and cuts GitHub Releases. Opening and updating that PR is
+# version.yml's job; this workflow never versions.
 #
 # Auth is OIDC / Trusted Publishing (`id-token: write` + NPM_CONFIG_PROVENANCE), so there is no
 # stored token.
@@ -45,27 +45,29 @@ name: Release
 on:
   push:
     branches: [main]
-    # Only when something publishable changes. A studio-only / docs / CI push has nothing to
-    # publish, so skip the whole workflow rather than attempt a (crash-prone) no-op re-publish.
+    # Only the pushes that merge a Version PR. `changeset version` is the only thing that writes a
+    # package CHANGELOG, so this is the one path filter that picks out those pushes, and it keeps
+    # every other push out of this workflow's concurrency group (see below).
     paths:
-      - "packages/**"
-      - ".changeset/**"
+      - "packages/**/CHANGELOG.md"
+  # Manual catch-up. It publishes whatever version npm lacks from the dispatched ref's CURRENT
+  # tree, which may already hold changes meant for the next version; to redo a cancelled or
+  # failed publish, re-run that run instead (a re-run keeps its original commit).
   workflow_dispatch: {}
 
-# One release run at a time, and never cancel one in progress: a run cancelled mid-publish can
-# leave packages on npm without their tags or GitHub releases. cancel-in-progress cannot tell a
-# versioning run from a publishing one, so it is not the answer to a run that starts after main
-# moved on; scripts/version-pr-guard.sh is (see the "Check main has not moved on" step).
-# GitHub keeps only the newest PENDING run per group and cancels the older one. That newer run is
-# at a newer commit, so it covers the versioning; but if it is in version mode (it carries new
-# changesets) it publishes nothing, and a cancelled pending publish waits for the next publish run.
+# One publish at a time, and never cancel one in progress: a run cancelled mid-publish can leave
+# packages on npm without their tags or GitHub releases. GitHub keeps only the NEWEST pending run
+# per group and cancels the one before it, which is why versioning lives in version.yml: when
+# both shared a group, a feature push could cancel a pending publish and then, carrying new
+# changesets, publish nothing itself. Only Version PR merges queue here now, so a pending publish
+# can only be replaced by a later Version PR merge's, which publishes main's newer versions (an
+# intermediate version is skipped only if three Version PRs merge within one publish run).
 concurrency:
   group: release
   cancel-in-progress: false
 
 permissions:
-  contents: write # version PR, tags, GitHub releases
-  pull-requests: write # the Version Packages PR
+  contents: write # tags, GitHub releases
   id-token: write # OIDC trusted publishing + provenance
 
 jobs:
@@ -80,18 +82,14 @@ jobs:
           if npm view @materials3d/core version >/dev/null 2>&1; then
             echo "publish=pnpm release" >> "$GITHUB_OUTPUT"
           else
-            echo "::notice::@materials3d/* not on npm yet; managing Version PRs only. Publish 0.1.0 from a laptop, then enable Trusted Publishing."
+            echo "::notice::@materials3d/* not on npm yet; nothing to publish here. Publish 0.1.0 from a laptop, then enable Trusted Publishing."
           fi
 
   release:
-    name: Version or publish
+    name: Publish
     needs: preflight
     runs-on: ubuntu-latest
     steps:
-      # Taken before anything else, so that "newer than this" in the guard step means "made by
-      # this run": the previous run's branch push and PR update are minutes older at the least.
-      - id: started
-        run: echo "at=$(date -u +%s)" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
@@ -102,9 +100,9 @@ jobs:
           cache: pnpm
           registry-url: https://registry.npmjs.org
       - run: pnpm install --frozen-lockfile
-      # Gate both the version PR and the publish on the packages being sound. ci.yml runs on these
-      # same pushes but is a SEPARATE workflow with no dependency here, so without this a red suite
-      # could still publish to npm, the one thing this pipeline does that can't be taken back.
+      # Gate the publish on the packages being sound. ci.yml runs on these same pushes but is a
+      # SEPARATE workflow with no dependency here, so without this a red suite could still publish
+      # to npm, the one thing this pipeline does that can't be taken back.
       # Scoped to @materials3d/*: a studio-only lint or test failure must not block a package
       # release, but a package that does not typecheck must.
       - run: pnpm -r --filter "@materials3d/*" typecheck
@@ -112,65 +110,24 @@ jobs:
       # Trusted publishing needs npm >= 11.5.1; Node 24 may ship an older npm. Pinned to the major
       # so a new npm cannot change what a release run does.
       - run: npm install -g npm@11
-      # Versioning reads the commit this run checked out, but a run can start long after its push
-      # (it waits for the run ahead of it in the concurrency group), and main may have moved
-      # on by then. orb3d #16: the run for 71db24e versioned it after #15 had put 0.3.1 on main,
-      # and opened a Version PR bumping nothing. If main has since changed under packages/ or
-      # .changeset/, the release run for that push is queued behind this one and versions from it,
-      # so this one skips the action. Never skips a publish (a checkout with no changesets).
-      - name: Check main has not moved on
-        id: fresh
-        run: bash scripts/version-pr-guard.sh precheck
-      - name: Version Packages PR / publish
+      # A Version PR merge can still carry changesets: one merged after the PR was last versioned,
+      # whose version run had not updated it yet. changesets/action would then go to version mode
+      # and publish nothing, leaving the merged versions unpublished. The files only drive
+      # versioning (version.yml versions them into the next PR) and are not in any package, so
+      # drop them from this checkout and publish the tree the Version PR merged.
+      - name: Set aside changesets for the next Version PR
+        run: |
+          set -euo pipefail
+          for f in .changeset/*.md; do
+            [ -e "$f" ] && [ "$(basename "$f")" != README.md ] || continue
+            echo "::notice::$f arrived with this merge; version.yml versions it into the next Version PR"
+            rm "$f"
+          done
+      - name: Publish
         id: changesets
-        if: steps.fresh.outputs.skip != 'true'
-        # Soft-fail on purpose. This action manages BOTH the version PR and the publish, and it
-        # reports PR-API problems as a bare `HttpError`: an Octokit RequestError whose message is
-        # empty, so `Error.toString()` degrades to just the name. That tells you nothing and kills
-        # the run. The guard step below decides the real outcome and prints the actual API error.
-        continue-on-error: true
         uses: changesets/action@ae32849d5ba541f9ae29e40e22a623bc13562f51 # v2.1.2
         with:
-          # `pnpm run version`, NOT `pnpm version`: the latter is a pnpm BUILTIN that bumps
-          # package.json and tags, which is not what the release flow wants; it has to be the
-          # repo's own `version` script (`changeset version`).
-          version-script: pnpm run version
-          # Empty until the packages exist on npm (see preflight): PR-only, no publish attempt.
+          # Empty until the packages exist on npm (see preflight): then this does nothing.
           publish-script: ${{ needs.preflight.outputs.publish }}
-          commit-message: "chore: version packages"
-          pr-title: "chore: version packages"
         env:
           NPM_CONFIG_PROVENANCE: "true"
-          # For the VERSION-SCRIPT, not for the action. v2 takes its own credential from the
-          # github-token input, which already defaults to this workflow's token — but the script
-          # it spawns runs `changeset version`, and @changesets/changelog-github resolves every
-          # commit to a PR and author through the GitHub API to write the changelog. That reads
-          # process.env.GITHUB_TOKEN and nothing else, and without it `changeset version` exits 1
-          # with "Please create a GitHub personal access token", having applied nothing.
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      # Decide the run's real outcome, and self-heal the failure the action cannot report on.
-      # Two flakes observed in the sibling repo, both leaving the version branch pushed but no PR:
-      #   * create path: empty-body HttpError, nothing opened
-      #   * update path: "State cannot be changed. The pull request cannot be reopened.", when the
-      #     PR it listed as open gets merged mid-run (a race with a human merge)
-      # `gh` prints the real status, so a genuine block (the account-level "Allow GitHub Actions to
-      # create and approve pull requests" toggle, say) surfaces as a message, not "HttpError".
-      #
-      # Two things this must NOT do: pass a run whose `changeset version` crashed just because an
-      # older PR happens to be open (that PR is stale, it lacks this run's changesets), and open a
-      # PR for a branch whose bump main already has (a squash- or rebase-merged version PR leaves
-      # its commit off main, so the branch stays "ahead" for good).
-      #
-      # scripts/version-pr-guard.sh ensure compares the version branch against main fetched fresh at
-      # this point, not this run's checkout, and acts only on a `version` newer than main's
-      # (dependency edits on a leftover branch are not a release, orb3d #12). An open Version PR
-      # that bumps nothing main lacks is closed with a comment and its branch deleted: it was
-      # versioned from a commit main has since released past, or main moved during the action.
-      - name: Ensure Version Packages PR
-        if: steps.fresh.outcome == 'success'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          OUTCOME: ${{ steps.changesets.outcome }}
-          STARTED: ${{ steps.started.outputs.at }}
-        run: bash scripts/version-pr-guard.sh ensure

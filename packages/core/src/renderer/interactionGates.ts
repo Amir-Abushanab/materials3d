@@ -64,3 +64,38 @@ export function tiltActive(cfg: SceneConfig): boolean {
   }
   return false;
 }
+
+/** A position to write and the authored home it rests at: a shape's mesh and `home`, structurally,
+ *  so this module keeps its promise not to import three. */
+interface Vec2Like {
+  x: number;
+  y: number;
+}
+
+/**
+ * Hold a shape's BOUND position axes at its authored home: what the `positionX` / `positionY`
+ * appliers write at rest, done without them.
+ *
+ * For the frames between the config turning the layer on and the chunk landing. Every OTHER
+ * binding rests at a value the unbound frame already shows (a uniform at its authored base), but a
+ * position binding runs after the motions and WINS over a drift on the same axis, so at rest it
+ * pins that axis to home. Skipping the write before the chunk left the drift on, and the scene
+ * opened in a pose it never shows again, snapping once the chunk arrived. A capture taken in that
+ * window exported the drifted pose, so the same config rendered differently depending on how fast
+ * one dynamic import resolved. `staircase`, whose twenty treads all drift on Y and bind `positionY`
+ * to scroll, was the scene that showed it.
+ *
+ * Mirrors `ITEM_APPLIERS.positionX/positionY` (interaction.ts); a test holds the two together.
+ */
+export function pinBoundAxes(
+  bindings: readonly ItemInteractionBinding[] | undefined,
+  position: Vec2Like,
+  home: Readonly<Vec2Like>,
+): void {
+  if (!bindings) return;
+  for (let i = 0; i < bindings.length; i++) {
+    const target = bindings[i].target;
+    if (target === "positionX") position.x = home.x;
+    else if (target === "positionY") position.y = home.y;
+  }
+}

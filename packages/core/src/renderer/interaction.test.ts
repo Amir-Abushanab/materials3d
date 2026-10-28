@@ -9,7 +9,7 @@ import {
   type SceneInteractionBinding,
 } from "../config/model";
 import { InteractionController, ITEM_APPLIERS, SCENE_APPLIERS } from "./interaction";
-import { interactionActive, tiltActive } from "./interactionGates";
+import { interactionActive, pinBoundAxes, tiltActive } from "./interactionGates";
 import { expandScatter } from "./shared";
 
 /**
@@ -417,6 +417,34 @@ describe("applier tables", () => {
     expect(ITEM_APPLIERS.ripple.base(resolved)).toBe(0.6);
     expect(ITEM_APPLIERS.positionX.base(resolved, home)).toBe(1.5);
     expect(ITEM_APPLIERS.positionY.base(resolved, home)).toBe(-2);
+  });
+
+  /**
+   * Before the interaction chunk lands the renderers cannot reach these appliers, so they pin bound
+   * position axes with `pinBoundAxes` instead. The two must leave a drifted mesh in the same pose,
+   * or the frames before the chunk differ from every frame after it and a capture in that window
+   * exports a pose the scene never shows. Every item target is driven at rest so a NEW pose target
+   * added to the table without teaching pinBoundAxes about it fails here.
+   */
+  it("pins bound position axes exactly as the appliers do at rest", () => {
+    const home = { x: 1.5, y: -2, z: 0.25 };
+    const drift = { x: 1.62, y: -1.9, z: 0.31 };
+    const material = {} as never;
+    const targets = Object.keys(ITEM_APPLIERS) as (keyof typeof ITEM_APPLIERS)[];
+    for (const target of targets) {
+      const bindings: ItemInteractionBinding[] = [{ source: "scroll", target, to: 9 }];
+      const viaApplier = { ...drift };
+      const applier = ITEM_APPLIERS[target];
+      const uniforms = new Proxy({}, { get: () => ({ value: 0 }) });
+      applier.apply(applier.base(material, home as never), {
+        u: uniforms,
+        mesh: { position: viaApplier } as never,
+        home: home as never,
+      });
+      const viaPin = { ...drift };
+      pinBoundAxes(bindings, viaPin, home);
+      expect(viaPin, target).toEqual(viaApplier);
+    }
   });
 
   it("keeps cameraZoom a pure multiplier with a rest value of 1", () => {

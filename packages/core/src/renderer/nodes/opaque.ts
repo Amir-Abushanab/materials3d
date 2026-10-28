@@ -50,19 +50,26 @@ export interface OpaqueUniforms {
  */
 export const shadeOpaque = (u: OpaqueUniforms) =>
   Fn(([normal, view, ndv]: [Vec, Vec, Vec]) => {
+    // Every intermediate below that more than one branch reads, of these `select`s or of the
+    // room's own `If`, is pinned with `.toVar()` at Fn scope. three r186 (mrdoob/three.js#34251,
+    // fixed by #34531 after 0.186.1) stopped isolating a branch's node cache, so an unpinned value
+    // first generated inside one branch was assigned THERE and then read, unassigned, from the
+    // sibling branch and after the conditional. That zeroed `f0` and `NoV` on the conductor path,
+    // so the metal's direct highlight vanished, and `R` inside the room. Pinning puts the
+    // assignment ahead of every branch on any three version. See "ASSIGNMENT" in ./common.
     const L = normalize(vec3(...OPAQUE_KEY));
     const H = normalize(view.add(L));
-    const NoV = ndv.max(1e-4);
-    const NoL = normal.dot(L).max(0);
+    const NoV = ndv.max(1e-4).toVar();
+    const NoL = normal.dot(L).max(0).toVar();
     const NoH = normal.dot(H).max(0);
-    const LoH = L.dot(H).max(0);
-    const a = u.roughness.mul(u.roughness);
+    const LoH = L.dot(H).max(0).toVar();
+    const a = u.roughness.mul(u.roughness).toVar();
 
-    const metal = u.kind.lessThan(METAL + 0.5);
-    const f0 = select(metal, u.albedo, vec3(0.04));
+    const metal = u.kind.lessThan(METAL + 0.5).toVar();
+    const f0 = select(metal, u.albedo, vec3(0.04)).toVar();
     // Only conductors get the F82 treatment: it corrects Schlick's conductor error, and a
     // dielectric's four per cent is already well inside Schlick's accurate range.
-    const edged = metal.and(u.useEdge.greaterThan(0.5));
+    const edged = metal.and(u.useEdge.greaterThan(0.5)).toVar();
 
     // D_GGX is a normalized distribution, so its peak goes as 1/alpha², into the hundreds for a
     // polished surface. A physical renderer balances that against the light's radiance and then
@@ -73,18 +80,18 @@ export const shadeOpaque = (u: OpaqueUniforms) =>
     const Vis = visibilitySmith(NoV, NoL, a);
     const F = select(edged, fresnelF82(f0, u.edgeTint, LoH), fresnelSchlick(f0, LoH));
     const direct0 = D.mul(Vis).mul(F).mul(NoL);
-    const direct = direct0.div(vec3(1).add(direct0));
+    const direct = direct0.div(vec3(1).add(direct0)).toVar();
 
-    const R = reflect(view.negate(), normal);
+    const R = reflect(view.negate(), normal).toVar();
     const env = u.plate(R);
     const behind = u.plate(normal.negate());
-    const fill = mix(vec3(0.92), behind.rgb, behind.a.mul(0.6));
+    const fill = mix(vec3(0.92), behind.rgb, behind.a.mul(0.6)).toVar();
     // Roughness used to fade the whole reflection toward a flat fill, a rough metal reflected
     // LESS room rather than a blurred one, which reads as chalk. Where a prefiltered chain exists
     // the blur is real, so the fade drops to a token amount.
     const coneFade = select(u.envOn.greaterThan(0.5), u.roughness.mul(0.18), u.roughness.mul(0.75));
-    const envCol = mix(mix(u.room(R, u.roughness), env.rgb, env.a), fill, coneFade);
-    const Fenv = select(edged, fresnelF82(f0, u.edgeTint, NoV), fresnelSchlick(f0, NoV));
+    const envCol = mix(mix(u.room(R, u.roughness), env.rgb, env.a), fill, coneFade).toVar();
+    const Fenv = select(edged, fresnelF82(f0, u.edgeTint, NoV), fresnelSchlick(f0, NoV)).toVar();
 
     // CERAMIC keeps a wrapped diffuse term. Not Lambert and not physical, it stands in for
     // subsurface scattering, which is most of why unglazed clay reads as clay: light bleeds past

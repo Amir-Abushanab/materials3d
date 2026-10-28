@@ -1,0 +1,18 @@
+# npm-check-updates config, read by `pnpm dlx npm-check-updates`. YAML, not .ncurc.cjs, so knip
+# does not report it as an unused file.
+
+# Never propose a version published less than 7 days ago. Compromised releases are typically yanked
+# within hours-to-days, so a week's lag lets the ecosystem find the bad ones first, at the cost of
+# adopting genuine fixes a week late. With target `latest`, a package whose newest release falls
+# inside the window drops back to the newest release OLDER than the window rather than being
+# skipped, so updates keep flowing. Only governs what ncu PROPOSES for direct deps; it is not an
+# install-time gate (pnpm's own `minimumReleaseAge` in pnpm-workspace.yaml is that, and covers
+# transitive deps too).
+cooldown: 7
+target: latest
+
+# TypeScript stays on 6.x by hand: tsdown warns that TS 7.0 "does not yet have a stable API and is
+# experimental", not a risk worth taking for packages whose published .d.ts is part of the contract.
+# Drop this once tsdown supports 7 without the caveat.
+reject:
+  - typescript

@@ -63,7 +63,7 @@ import type { FrameCallback, MaterialItem } from "./item";
 // Gates only — the interactivity RUNTIME (controller, applier tables, tilt sensor) is reached
 // through a dynamic import in loadInteraction(), so a scene with no bindings never fetches it.
 // Anything added here that pulls ./interaction statically undoes that; see interactionGates.ts.
-import { interactionActive } from "./interactionGates";
+import { interactionActive, pinBoundAxes } from "./interactionGates";
 import type {
   InteractionController,
   ItemApplyArgs,
@@ -392,8 +392,9 @@ export class MaterialRenderer implements Engine {
    *  `interaction`; both stay undefined for the frames between the config turning the layer on and
    *  the chunk arriving. */
   private interactionModule?: InteractionModule;
-  /** A fetch already in flight, so a per-frame refresh can't start a second one. */
-  private interactionLoading = false;
+  /** The fetch in flight, so a per-frame refresh can't start a second one, and so a caller that
+   *  needs the layer live awaits THIS load rather than returning before it lands. */
+  private interactionLoad?: Promise<void>;
   /** setInteractionInput() calls made while the chunk was in flight, replayed once it lands. */
   private stagedInputs?: Map<string, number>;
 
@@ -954,9 +955,17 @@ export class MaterialRenderer implements Engine {
    *
    * A failed fetch is not fatal: the scene renders exactly as an unbound one does.
    */
-  private async loadInteraction(): Promise<void> {
-    if (this.interactionLoading) return;
-    this.interactionLoading = true;
+  private loadInteraction(): Promise<void> {
+    // Shared, not a boolean guard: a guard returned a RESOLVED promise to a second caller while the
+    // first fetch was still in flight, so `await loadInteraction()` could not mean "the layer is
+    // live", and anything awaiting it raced the chunk.
+    this.interactionLoad ??= this.attachInteraction().finally(() => {
+      this.interactionLoad = undefined;
+    });
+    return this.interactionLoad;
+  }
+
+  private async attachInteraction(): Promise<void> {
     try {
       const mod = await import("./interaction");
       // The renderer may have been disposed, or the config edited back to inert, in flight.
@@ -978,8 +987,6 @@ export class MaterialRenderer implements Engine {
       }
     } catch {
       // Chunk unavailable (offline, a stale deploy): stay inert rather than throwing into the loop.
-    } finally {
-      this.interactionLoading = false;
     }
   }
 
@@ -1002,7 +1009,19 @@ export class MaterialRenderer implements Engine {
   private applyInteraction(): void {
     this.seedInteractionOut();
     const mod = this.interactionModule;
-    if (!this.interaction || !mod) return; // set together, so this is "before the chunk landed"
+    if (!this.interaction || !mod) {
+      // Set together, so this is "before the chunk landed". Still the REST pose, not the unbound
+      // one: a bound position axis rests at home rather than wherever a drift put it. See
+      // pinBoundAxes.
+      // Only while the chunk is in flight for a live layer: a layer switched off ignores its
+      // bindings, and a failed fetch leaves the scene unbound, so both keep the drift.
+      if (this.interactionLoad && interactionActive(this.config)) {
+        for (const item of this.items) {
+          pinBoundAxes(item.config?.interaction?.bindings, item.mesh.position, item.home);
+        }
+      }
+      return;
+    }
     // While capturing, every bound param is written at its authored base: merely skipping the
     // write would freeze whatever live hover/scroll state the previous frame left in the
     // uniforms, so exports wouldn't be deterministic. Live controller state is left untouched, so

@@ -33,6 +33,12 @@ await run(async (defer) => {
       });
       try {
         renderer.setOutputSize({ width: 480, height: 320 });
+        // The controller lives in a lazily fetched chunk, and the constructor only STARTS that
+        // fetch. Nothing below would otherwise wait for it, so `interaction.settle()` raced the
+        // chunk and threw on `undefined` about half the time. Await the very load the renderer
+        // started (shared, not restarted) so the layer is live before it is driven.
+        await renderer.loadInteraction();
+        if (!renderer.interaction) throw new Error(`${engine}: interaction layer did not attach`);
         await renderer.captureImage("image/png", 1, 0);
         // Node rendering is asynchronous. Await its active draw without capturing, because capture
         // deliberately resets interaction and could never test what a live binding displays.

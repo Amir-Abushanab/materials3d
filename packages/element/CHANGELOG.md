@@ -1,5 +1,12 @@
 # @materials3d/element
 
+## 0.6.1
+
+### Patch Changes
+
+- Updated dependencies [[`5ad796c`](https://github.com/Amir-Abushanab/materials3d/commit/5ad796c78b1d2f528762afafc73e581d2113323f)]:
+  - @materials3d/core@0.6.1
+
 ## 0.6.0
 
 ### Patch Changes
